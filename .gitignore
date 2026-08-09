@@ -3,10 +3,12 @@
 **/*.rs.bk
 
 # --- Datos externos (no se versionan) ---
-# /data/ = GTFS de Rodalies generado por scripts/prep_gtfs.sh
-# /raw/  = feed GTFS nacional y fuentes crudas de terceros
+# /data/   = GTFS de Rodalies generado por scripts/prep_gtfs.sh
+# /raw/    = feed GTFS nacional y fuentes crudas de terceros
+# /report/ = dashboard HTML generado por el simulador
 /data/
 /raw/
+/report/
 
 # IDE / SO
 .idea/

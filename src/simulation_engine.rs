@@ -159,9 +159,26 @@ pub struct Sample {
     pub delayed: usize,
 }
 
+/// Evento estructurado del log tipo CTC (para consumo por el dashboard HTML).
+#[derive(Debug, Clone)]
+pub struct CtcEvent {
+    pub time: u32,
+    pub train: String,
+    pub line: String,
+    /// "ARRIBA", "SURT" o "INCIDÈNCIA".
+    pub kind: String,
+    pub station: String,
+    pub track: String,
+    pub delay: i64,
+}
+
 pub struct SimResult {
     pub timeline: Vec<Sample>,
     pub log: Vec<String>,
+    /// Declaraciones de incidencias inyectadas (texto).
+    pub incidents: Vec<String>,
+    /// Eventos CTC estructurados (para el dashboard).
+    pub events: Vec<CtcEvent>,
     pub trains_run: usize,
     pub total_arrivals: usize,
     pub held_events: usize,
@@ -338,6 +355,8 @@ impl<'a> Simulator<'a> {
 
         // --- Métrica de estabilidad ---
         let mut timeline: Vec<Sample> = Vec::new();
+        let incidents: Vec<String> = incident_log.clone();
+        let mut events: Vec<CtcEvent> = Vec::new();
         let mut log: Vec<String> = incident_log;
         let mut total_arrivals = 0usize;
         let mut held_events = 0usize;
@@ -443,6 +462,21 @@ impl<'a> Simulator<'a> {
                                     extra / 60,
                                     net.graph[node].stop_name
                                 ));
+                                events.push(CtcEvent {
+                                    time: ev.time,
+                                    train: svc.train_number.clone(),
+                                    line: svc.route_short_name.clone(),
+                                    kind: "INCIDÈNCIA".into(),
+                                    station: format!(
+                                        "[{}] Tren {} rep +{} min a {}",
+                                        fmt_hms(ev.time),
+                                        svc.train_number,
+                                        extra / 60,
+                                        net.graph[node].stop_name
+                                    ),
+                                    track: String::new(),
+                                    delay: 0,
+                                });
                             }
                         }
                         arrival_delay = t.delay;
@@ -459,6 +493,15 @@ impl<'a> Simulator<'a> {
                             track + 1,
                             arrival_delay
                         ));
+                        events.push(CtcEvent {
+                            time: ev.time,
+                            train: svc.train_number.clone(),
+                            line: svc.route_short_name.clone(),
+                            kind: "ARRIBA".into(),
+                            station: net.graph[node].stop_name.clone(),
+                            track: (track + 1).to_string(),
+                            delay: arrival_delay,
+                        });
                     }
 
                     // Cálculo de dwell con el modelo de pasajeros (determinista o estocástico).
@@ -564,6 +607,15 @@ impl<'a> Simulator<'a> {
                             track.map(|t| t + 1).unwrap_or(0),
                             d
                         ));
+                        events.push(CtcEvent {
+                            time: ev.time,
+                            train: svc.train_number.clone(),
+                            line: svc.route_short_name.clone(),
+                            kind: "SURT".into(),
+                            station: net.graph[na].stop_name.clone(),
+                            track: track.map(|t| t + 1).unwrap_or(0).to_string(),
+                            delay: d,
+                        });
                     }
 
                     if let Some(t) = trains.get_mut(&ev.trip_idx) {
@@ -613,6 +665,8 @@ impl<'a> Simulator<'a> {
         SimResult {
             timeline,
             log,
+            incidents,
+            events,
             trains_run: participants.len(),
             total_arrivals,
             held_events,

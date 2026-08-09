@@ -54,6 +54,8 @@ src/
   gtfs_loader.rs         # Parser GTFS -> grafo petgraph + servicios (carga dinámica)
   passenger_model.rs     # Dwell time en función de pasajeros y retraso
   simulation_engine.rs   # Motor de eventos discretos + señalización + incidencias
+  report.rs              # Genera el dashboard HTML autocontenido
+run.bat                  # Lanzador de doble clic (Windows): compila, ejecuta y abre la UI
 scripts/
   prep_gtfs.sh           # Filtra un feed GTFS nacional a Rodalies de Catalunya
 data/gtfs/               # GTFS de Rodalies que lee el simulador (generado, no versionado)
@@ -89,11 +91,25 @@ empieza por `R`) y escribe los cuatro archivos en `./data/gtfs`.
 
 ## Ejecución
 
+La forma más fácil en Windows: **doble clic en `run.bat`**. Compila, ejecuta la simulación
+y **abre automáticamente un dashboard HTML** en el navegador.
+
+Por línea de comandos:
+
 ```bash
-cargo run --release
+cargo run --release              # ejecuta y abre el dashboard
+cargo run --release -- --no-open # no abre el navegador (útil para CI)
 ```
 
-Salida (resumida):
+### Dashboard (UI)
+
+Cada ejecución genera un **`report/dashboard.html` autocontenido** (sin dependencias
+externas, funciona sin conexión) con: KPIs de la red, servicios por línea, métricas de
+estabilidad, un **gráfico SVG** del retraso acumulado, el **log CTC coloreado**
+(llegadas/salidas y retrasos), la tabla de resiliencia y la ruta de ejemplo. Se abre solo;
+si no, ábrelo manualmente con doble clic.
+
+Salida por consola (resumida):
 
 1. Comprobación de `./data/gtfs` y **tiempo de carga en ms**.
 2. **Resumen de la red**: nodos (vías/andenes), cantones, servicios, líneas y ejemplos de

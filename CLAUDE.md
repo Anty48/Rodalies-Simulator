@@ -14,7 +14,8 @@ $env:Path = "$env:USERPROFILE\.cargo\bin;$env:Path"; & cargo <cmd>
 ## Commands
 
 - Build / typecheck: `cargo check` (must stay warning-free) · `cargo build --release`
-- Run the simulator: `cargo run --release`
+- Run the simulator: `cargo run --release` (writes and opens `report/dashboard.html`).
+  Use `-- --no-open` to skip opening the browser (CI/tests). `run.bat` is the double-click launcher.
 - Tests: `cargo test` · single test: `cargo test dwell_grows_with_delay`
   (unit tests live in `#[cfg(test)]` modules inside `src/passenger_model.rs`)
 
@@ -63,7 +64,13 @@ runtime — there is no hardcoded map. Data flows in one direction: GTFS → `Ne
   network summary + a detailed example route (train `25412` if present, else an equivalent),
   runs a 2h CTC simulation (07:00–09:00) with injected incidents, then a **rayon** parallel
   resilience sweep (varying block duration, stochastic passengers) — this is why `rayon`,
-  `rand` and `tokio` are dependencies.
+  `rand` and `tokio` are dependencies. Each `print_*`/`run_*` helper both prints to console
+  AND returns a `report::*View` struct.
+
+- **`report.rs`** — renders a self-contained HTML dashboard (inline CSS + Rust-generated SVG
+  chart; no external assets/JS, works offline) from the `*View` structs and writes it to
+  `report/dashboard.html`, which `main` opens in the browser. `SimView` reuses the engine's
+  `CtcEvent`. If you add a field to a `*View`, render it (otherwise dead-code warning).
 
 ## Conventions
 

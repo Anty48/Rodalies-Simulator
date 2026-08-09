@@ -3,15 +3,17 @@
 
 mod gtfs_loader;
 mod passenger_model;
+mod report;
 mod simulation_engine;
 
 use std::path::Path;
-use std::time::Instant;
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use rayon::prelude::*;
 
 use gtfs_loader::{fmt_hms, Network, TrainService};
 use passenger_model::PassengerModel;
+use report::{ExampleView, ResRow, ResView, SimView, StopRow, SummaryView};
 use simulation_engine::{key_station_names, Incident, SimConfig, Simulator};
 
 const GTFS_DIR: &str = "./data/gtfs";
@@ -52,70 +54,153 @@ async fn main() {
     println!("✓ Càrrega completada en {:.1} ms\n", load_ms);
 
     // 3. Resum de la xarxa.
-    print_network_summary(&net);
-    print_example_route(&net, EXAMPLE_TRAIN);
+    let summary = network_summary(&net, load_ms);
+    let example = example_route(&net, EXAMPLE_TRAIN);
 
     // 4. Simulació de prova de 2 hores (07:00–09:00) amb incidències.
-    run_simulation(&net);
+    let sim = run_simulation(&net);
 
     // 5. Anàlisi de resiliència en paral·lel (rayon + rand).
-    run_resilience_sweep(&net);
+    let res = run_resilience_sweep(&net);
+
+    // 6. Generar i obrir el dashboard HTML.
+    generate_dashboard(&summary, &example, &sim, &res);
+}
+
+/// Escribe el dashboard HTML autocontenido y lo abre en el navegador.
+fn generate_dashboard(
+    summary: &SummaryView,
+    example: &Option<ExampleView>,
+    sim: &SimView,
+    res: &ResView,
+) {
+    let html = report::render_html(summary, example, sim, res, &now_utc_string());
+    let dir = Path::new("report");
+    if let Err(e) = std::fs::create_dir_all(dir) {
+        eprintln!("✗ No puc crear la carpeta report/: {e}");
+        return;
+    }
+    let path = dir.join("dashboard.html");
+    if let Err(e) = std::fs::write(&path, html) {
+        eprintln!("✗ No puc escriure el dashboard: {e}");
+        return;
+    }
+    let abs = std::fs::canonicalize(&path).unwrap_or(path);
+    let abs_str = abs.to_string_lossy().replace(r"\\?\", ""); // limpia prefijo UNC de Windows
+    println!("\n🖥  Dashboard generat: {}", abs_str);
+
+    if std::env::args().any(|a| a == "--no-open") {
+        println!("   (obre'l manualment; --no-open actiu)");
+        return;
+    }
+    println!("   Obrint al navegador…");
+    let _ = open_in_browser(&abs_str);
+}
+
+#[cfg(target_os = "windows")]
+fn open_in_browser(path: &str) -> std::io::Result<()> {
+    std::process::Command::new("cmd")
+        .args(["/C", "start", "", path])
+        .spawn()
+        .map(|_| ())
+}
+
+#[cfg(not(target_os = "windows"))]
+fn open_in_browser(path: &str) -> std::io::Result<()> {
+    let opener = if cfg!(target_os = "macos") { "open" } else { "xdg-open" };
+    std::process::Command::new(opener).arg(path).spawn().map(|_| ())
+}
+
+/// Fecha/hora UTC actual como texto (sin dependencias externas).
+fn now_utc_string() -> String {
+    let secs = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let days = (secs / 86400) as i64;
+    let tod = secs % 86400;
+    let (y, m, d) = civil_from_days(days);
+    format!(
+        "{:04}-{:02}-{:02} {:02}:{:02} UTC",
+        y,
+        m,
+        d,
+        tod / 3600,
+        (tod % 3600) / 60
+    )
+}
+
+/// Algoritmo de Howard Hinnant: días desde epoch → (año, mes, día) civil.
+fn civil_from_days(z: i64) -> (i64, u32, u32) {
+    let z = z + 719468;
+    let era = if z >= 0 { z } else { z - 146096 } / 146097;
+    let doe = z - era * 146097;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = (doy - (153 * mp + 2) / 5 + 1) as u32;
+    let m = (if mp < 10 { mp + 3 } else { mp - 9 }) as u32;
+    (if m <= 2 { y + 1 } else { y }, m, d)
 }
 
 // --------------------------------------------------------------------------
 
-fn print_network_summary(net: &Network) {
+fn network_summary(net: &Network, load_ms: f64) -> SummaryView {
     let n_stops = net.graph.node_count();
     let n_edges = net.graph.edge_count();
     let n_services = net.services.len();
-
-    println!("┌─ RESUM DE LA XARXA CARREGADA ─────────────────────────────────────┐");
+    let n_routes = net.routes.len();
     let with_parent = net
         .graph
         .node_weights()
         .filter(|n| n.parent_station.is_some())
         .count();
 
-    println!("  Vies/andanes mapejats (nodes) .... {}", n_stops);
-    println!("  ├ amb parent_station definida ..... {}", with_parent);
-    println!("  Cantons/seccions (arestes) ....... {}", n_edges);
-    println!("  Serveis de tren carregats ........ {}", n_services);
-    println!("  Línies (routes) .................. {}", net.routes.len());
-
-    // Cantó d'exemple: mostra pes (temps de marxa) i capacitat de secció.
-    if let Some(e) = net.graph.edge_weights().min_by_key(|e| e.nominal_run_secs) {
-        println!(
-            "  Cantó més ràpid .................. {} → {}  ({}s, capacitat {} tren/secció)",
-            net.stop_name(&e.from_stop),
-            net.stop_name(&e.to_stop),
+    let fastest_edge = net.graph.edge_weights().min_by_key(|e| e.nominal_run_secs).map(|e| {
+        (
+            net.stop_name(&e.from_stop).to_string(),
+            net.stop_name(&e.to_stop).to_string(),
             e.nominal_run_secs,
-            e.capacity
-        );
-    }
+        )
+    });
 
     // Servicios por línea (short_name).
     let mut by_route: std::collections::BTreeMap<&str, usize> = std::collections::BTreeMap::new();
     for s in &net.services {
         *by_route.entry(s.route_short_name.as_str()).or_insert(0) += 1;
     }
-    let mut linia: Vec<_> = by_route.into_iter().collect();
+    let mut linia: Vec<(String, usize)> =
+        by_route.into_iter().map(|(k, v)| (k.to_string(), v)).collect();
     linia.sort_by(|a, b| b.1.cmp(&a.1));
-    let top: Vec<String> = linia
-        .iter()
-        .take(10)
-        .map(|(r, c)| format!("{}={}", r, c))
-        .collect();
-    println!("  Serveis per línia (top) .......... {}", top.join("  "));
+    let per_line: Vec<(String, usize)> = linia.into_iter().take(10).collect();
 
-    // Muestra de números oficiales de Renfe.
-    let sample: Vec<&str> = net
-        .services
-        .iter()
-        .take(6)
-        .map(|s| s.train_number.as_str())
-        .collect();
+    // --- Consola ---
+    println!("┌─ RESUM DE LA XARXA CARREGADA ─────────────────────────────────────┐");
+    println!("  Vies/andanes mapejats (nodes) .... {}", n_stops);
+    println!("  ├ amb parent_station definida ..... {}", with_parent);
+    println!("  Cantons/seccions (arestes) ....... {}", n_edges);
+    println!("  Serveis de tren carregats ........ {}", n_services);
+    println!("  Línies (routes) .................. {}", n_routes);
+    if let Some((a, b, s)) = &fastest_edge {
+        println!("  Cantó més ràpid .................. {} → {}  ({}s)", a, b, s);
+    }
+    let top: Vec<String> = per_line.iter().map(|(r, c)| format!("{}={}", r, c)).collect();
+    println!("  Serveis per línia (top) .......... {}", top.join("  "));
+    let sample: Vec<&str> = net.services.iter().take(6).map(|s| s.train_number.as_str()).collect();
     println!("  Exemples de nº de circulació ..... {}", sample.join(", "));
     println!("└───────────────────────────────────────────────────────────────────┘\n");
+
+    SummaryView {
+        load_ms,
+        n_stops,
+        n_edges,
+        n_services,
+        n_routes,
+        with_parent,
+        per_line,
+        fastest_edge,
+    }
 }
 
 /// Elige el servicio de ejemplo: el número exacto si existe; si no, el más largo
@@ -136,37 +221,19 @@ fn pick_example<'a>(net: &'a Network, wanted: &str) -> Option<&'a TrainService> 
     clot.or_else(|| net.services.iter().max_by_key(|s| s.schedule.len()))
 }
 
-fn print_example_route(net: &Network, wanted: &str) {
-    let Some(svc) = pick_example(net, wanted) else {
-        println!("(No hi ha serveis per mostrar)\n");
-        return;
+fn example_route(net: &Network, wanted: &str) -> Option<ExampleView> {
+    let svc = match pick_example(net, wanted) {
+        Some(s) => s,
+        None => {
+            println!("(No hi ha serveis per mostrar)\n");
+            return None;
+        }
     };
-
-    if svc.train_number == wanted {
-        println!("┌─ RUTA DETALLADA DEL TREN {} ─────────────────────────────────┐", wanted);
-    } else {
-        println!(
-            "┌─ TREN {} no trobat; mostro el servei d'exemple {} ({}) ─┐",
-            wanted, svc.train_number, svc.route_short_name
-        );
-    }
-    println!(
-        "  Línia {} (route_id {})  ·  trip_id {}  ·  {} parades  ·  {}",
-        svc.route_short_name,
-        svc.route_id,
-        svc.trip_id,
-        svc.schedule.len(),
-        svc.headsign.clone().unwrap_or_else(|| "—".into())
-    );
-    println!(
-        "  {:<4} {:<30} {:>8} {:>8} {:>8}  {:<4}",
-        "seq", "Estació", "arribada", "sortida", "marxa", "via"
-    );
-    println!("  {}", "─".repeat(70));
-
+    let found = svc.train_number == wanted;
     let cap = 2; // capacidad de andenes usada en el resumen estático
+
+    let mut stops: Vec<StopRow> = Vec::new();
     for (i, st) in svc.schedule.iter().enumerate() {
-        let name = net.stop_name(&st.stop_id);
         let run = if i + 1 < svc.schedule.len() {
             let nx = &svc.schedule[i + 1];
             net.edge_between(&st.stop_id, &nx.stop_id)
@@ -175,55 +242,81 @@ fn print_example_route(net: &Network, wanted: &str) {
         } else {
             0
         };
-        let run_txt = if run > 0 {
-            format!("{}m{:02}s", run / 60, run % 60)
+        stops.push(StopRow {
+            seq: st.seq,
+            name: net.stop_name(&st.stop_id).to_string(),
+            arr: st.arrival_sec,
+            dep: st.departure_sec,
+            run_secs: run,
+            track: net.assigned_track(&st.stop_id, st.seq, cap),
+        });
+    }
+
+    // --- Consola ---
+    if found {
+        println!("┌─ RUTA DETALLADA DEL TREN {} ─────────────────────────────────┐", wanted);
+    } else {
+        println!(
+            "┌─ TREN {} no trobat; mostro el servei d'exemple {} ({}) ─┐",
+            wanted, svc.train_number, svc.route_short_name
+        );
+    }
+    println!(
+        "  Línia {} (route_id {})  ·  trip_id {}  ·  {} parades",
+        svc.route_short_name, svc.route_id, svc.trip_id, svc.schedule.len()
+    );
+    println!("  {:<4} {:<30} {:>8} {:>8} {:>8}  {:<4}", "seq", "Estació", "arribada", "sortida", "marxa", "via");
+    println!("  {}", "─".repeat(70));
+    for s in &stops {
+        let run_txt = if s.run_secs > 0 {
+            format!("{}m{:02}s", s.run_secs / 60, s.run_secs % 60)
         } else {
             "—".into()
         };
-        let track = net.assigned_track(&st.stop_id, st.seq, cap);
         println!(
             "  {:<4} {:<30} {:>8} {:>8} {:>8}  {:<4}",
-            st.seq,
-            trunc(name, 30),
-            fmt_hms(st.arrival_sec),
-            fmt_hms(st.departure_sec),
-            run_txt,
-            track
+            s.seq, trunc(&s.name, 30), fmt_hms(s.arr), fmt_hms(s.dep), run_txt, s.track
         );
     }
     println!("└───────────────────────────────────────────────────────────────────┘\n");
+
+    Some(ExampleView {
+        found,
+        wanted: wanted.to_string(),
+        train_number: svc.train_number.clone(),
+        route_short: svc.route_short_name.clone(),
+        route_id: svc.route_id.clone(),
+        trip_id: svc.trip_id.clone(),
+        headsign: svc.headsign.clone().unwrap_or_default(),
+        stops,
+    })
 }
 
-fn run_simulation(net: &Network) {
-    let service_id = match net.dominant_service() {
-        Some(s) => s,
-        None => {
-            println!("(Cap servei per simular)\n");
-            return;
-        }
-    };
-
+fn run_simulation(net: &Network) -> SimView {
+    let service_id = net.dominant_service().unwrap_or_default();
     let cfg = SimConfig::default();
-    println!("┌─ SIMULACIÓ CTC · {}–{} (service_id dominant: {}) ─┐",
-        fmt_hms(cfg.start_sec), fmt_hms(cfg.end_sec), service_id);
+    let (start, end) = (cfg.start_sec, cfg.end_sec);
+    let window = format!("{}–{}", fmt_hms(start), fmt_hms(end));
+
+    println!("┌─ SIMULACIÓ CTC · {} (service_id dominant: {}) ─┐", window, service_id);
 
     let present = key_station_names(net, &cfg.key_stations);
-    let mut present_v: Vec<_> = present.into_iter().collect();
-    present_v.sort();
-    println!("  Estacions clau monitoritzades: {}", present_v.join(", "));
+    let mut key_stations: Vec<String> = present.into_iter().collect();
+    key_stations.sort();
+    println!("  Estacions clau monitoritzades: {}", key_stations.join(", "));
+
+    let busiest = net.busiest_segment(&service_id, start, end).map(|(from, to, cnt)| {
+        (net.stop_name(&from).to_string(), net.stop_name(&to).to_string(), cnt)
+    });
+    if let Some((a, b, cnt)) = &busiest {
+        println!("  (cantó més carregat: {} → {}, {} circulacions/finestra)", a, b, cnt);
+    }
     println!("└───────────────────────────────────────────────────────────────────┘\n");
 
-    let (start, end) = (cfg.start_sec, cfg.end_sec);
     let mut sim = Simulator::new(net, cfg);
 
     // Incidència 1: bloqueig del cantó MÉS transitat de la finestra (impacte garantit).
-    if let Some((from, to, cnt)) = net.busiest_segment(&service_id, start, end) {
-        println!(
-            "  (cantó més carregat: {} → {}, {} circulacions/finestra)\n",
-            net.stop_name(&from),
-            net.stop_name(&to),
-            cnt
-        );
+    if let Some((from, to, _)) = net.busiest_segment(&service_id, start, end) {
         // S'injecta per NOM d'estació (com a l'exemple de l'enunciat).
         sim.add_incident(Incident::BlockSegment {
             from_stop_name: net.stop_name(&from).to_string(),
@@ -270,12 +363,11 @@ fn run_simulation(net: &Network) {
             pk.mean_active, pk.active
         );
     }
-    match res.recovery_time {
-        Some(t) => println!(
-            "  Retorn a l'equilibri (<120 s) ...... {}  ({} min després del pic)",
-            fmt_hms(t),
-            (t.saturating_sub(res.peak_time)) / 60
-        ),
+    let recovery = res.recovery_time.map(|t| {
+        format!("{} (+{} min del pic)", fmt_hms(t), (t.saturating_sub(res.peak_time)) / 60)
+    });
+    match &recovery {
+        Some(txt) => println!("  Retorn a l'equilibri (<120 s) ...... {}", txt),
         None => println!("  Retorn a l'equilibri ............... NO assolit dins la finestra"),
     }
 
@@ -294,19 +386,51 @@ fn run_simulation(net: &Network) {
         );
     }
     println!();
+
+    let peak_mean = res
+        .timeline
+        .iter()
+        .find(|s| s.time == res.peak_time)
+        .map(|s| s.mean_active)
+        .unwrap_or(0.0);
+
+    SimView {
+        window,
+        service_id,
+        key_stations,
+        busiest,
+        incidents: res.incidents.clone(),
+        events: res.events.clone(),
+        trains_run: res.trains_run,
+        arrivals: res.total_arrivals,
+        held: res.held_events,
+        peak_total: res.peak_total_delay,
+        peak_time: fmt_hms(res.peak_time),
+        peak_delayed: res.peak_delayed,
+        peak_mean,
+        recovery,
+        timeline: res.timeline.clone(),
+    }
 }
 
 /// Barrido de resiliencia en paralelo: varias severidades de incidencia a la vez.
-fn run_resilience_sweep(net: &Network) {
+fn run_resilience_sweep(net: &Network) -> ResView {
+    let empty = ResView { segment: "—".into(), rows: Vec::new() };
     let Some(service_id) = net.dominant_service() else {
-        return;
+        return empty;
     };
 
     let cfg0 = SimConfig::default();
     let (start, end) = (cfg0.start_sec, cfg0.end_sec);
     let Some((from, to, _)) = net.busiest_segment(&service_id, start, end) else {
-        return;
+        return empty;
     };
+    let segment = format!(
+        "{} → {} a les {}",
+        net.stop_name(&from),
+        net.stop_name(&to),
+        fmt_hms(start + 20 * 60)
+    );
 
     // Cada escenario bloquea el cantón más transitado durante una duración creciente.
     let durations: Vec<u32> = vec![0, 3, 6, 9, 12, 18]; // minuts de bloqueig
@@ -348,6 +472,7 @@ fn run_resilience_sweep(net: &Network) {
     println!("  {:<12} {:>14} {:>12} {:>16} {:>12}",
         "bloqueig", "pic acumulat", "trens ret.", "recuperació", "retencions");
     println!("  {}", "─".repeat(70));
+    let mut rows: Vec<ResRow> = Vec::new();
     for (mins, peak, delayed, recov, held) in results {
         let recov_txt = match recov {
             Some(m) => format!("{} min", m),
@@ -361,8 +486,11 @@ fn run_resilience_sweep(net: &Network) {
             recov_txt,
             held
         );
+        rows.push(ResRow { mins, peak, delayed, recovery: recov, held });
     }
     println!("└───────────────────────────────────────────────────────────────────┘");
+
+    ResView { segment, rows }
 }
 
 // --------------------------------------------------------------------------
