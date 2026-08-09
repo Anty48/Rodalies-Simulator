@@ -14,10 +14,13 @@ $env:Path = "$env:USERPROFILE\.cargo\bin;$env:Path"; & cargo <cmd>
 ## Commands
 
 - Build / typecheck: `cargo check` (must stay warning-free) · `cargo build --release`
-- Run the simulator: `cargo run --release` (writes and opens `report/dashboard.html`).
-  Use `-- --no-open` to skip opening the browser (CI/tests). `run.bat` is the double-click launcher.
+- Run: `cargo run --release` prints a console summary, writes `report/dashboard.html`, and
+  starts an interactive web server on http://127.0.0.1:8080 (blocks until Ctrl+C).
+  `-- --static` = write+open the offline HTML and exit; `-- --no-open` = don't open a browser
+  (use for CI/tests). `run.bat` is the double-click launcher.
 - Tests: `cargo test` · single test: `cargo test dwell_grows_with_delay`
   (unit tests live in `#[cfg(test)]` modules inside `src/passenger_model.rs`)
+- Manual server check: run with `--no-open`, then `curl http://127.0.0.1:8080/api/render?block=12&delay=8`
 
 ## Data prerequisite
 
@@ -60,17 +63,27 @@ runtime — there is no hardcoded map. Data flows in one direction: GTFS → `Ne
   - **Stability metric**: samples network total/mean delay each minute (`Sample`), reports
     peak accumulated delay and the recovery time back below the equilibrium threshold.
 
-- **`main.rs`** — `#[tokio::main]`. Checks `./data/gtfs`, loads (timed in ms), prints the
-  network summary + a detailed example route (train `25412` if present, else an equivalent),
-  runs a 2h CTC simulation (07:00–09:00) with injected incidents, then a **rayon** parallel
-  resilience sweep (varying block duration, stochastic passengers) — this is why `rayon`,
-  `rand` and `tokio` are dependencies. Each `print_*`/`run_*` helper both prints to console
-  AND returns a `report::*View` struct.
+- **`scenario.rs`** — the single source of truth for turning parameters (`SimParams`:
+  window, line filter, block/delay minutes, platform capacity, min block headway, stochastic
+  toggle) into `report::*View` structs, with **no console output**. Used by both `main` (console
+  + static dashboard) and `server` (per-request). `res_view` runs the resilience sweep with
+  **rayon**. Also holds `now_utc_string` (date without external crates).
 
-- **`report.rs`** — renders a self-contained HTML dashboard (inline CSS + Rust-generated SVG
-  chart; no external assets/JS, works offline) from the `*View` structs and writes it to
-  `report/dashboard.html`, which `main` opens in the browser. `SimView` reuses the engine's
-  `CtcEvent`. If you add a field to a `*View`, render it (otherwise dead-code warning).
+- **`report.rs`** — renders the dashboard from `*View` structs. `render_body` = the sections
+  (inline CSS + Rust-generated **SVG** chart; no external assets). `render_html` wraps it for
+  the offline file; `render_interactive_page` adds the controls form + a small vanilla-JS
+  `<script>` that `fetch`es `/api/render` and swaps `#dashboard`. CSS/JS live in `const`s so
+  `format!` never has to brace-escape them. `SimView` reuses the engine's `CtcEvent`. If you
+  add a field to a `*View`, render it (otherwise dead-code warning).
+
+- **`server.rs`** — minimal tokio HTTP/1.1 server (GET only, `Connection: close`, localhost).
+  Routes: `/` (interactive page), `/api/render?…` (dashboard fragment for query params),
+  `/health`. Query params are parsed into `SimParams` (see `params_from_query`).
+
+- **`main.rs`** — `#[tokio::main]`. Checks `./data/gtfs`, loads (timed in ms), builds the
+  default `*View`s via `scenario`, prints them, writes the static dashboard, then either
+  exits (`--static`) or serves the interactive UI. This is why `rayon`, `rand` and `tokio`
+  are all real dependencies.
 
 ## Conventions
 

@@ -163,19 +163,25 @@ impl Network {
     }
 
     /// Segmento (par de paradas consecutivas) más transitado por los servicios de
-    /// `service_id` que arrancan dentro de la ventana [start, end]. Útil para
-    /// inyectar una incidencia de bloqueo con impacto garantizado.
+    /// `service_id` que arrancan en [start, end], opcionalmente restringido a una
+    /// línea. Útil para inyectar un bloqueo con impacto garantizado.
     /// Devuelve `(from_stop_id, to_stop_id, nº de circulaciones)`.
-    pub fn busiest_segment(
+    pub fn busiest_segment_filtered(
         &self,
         service_id: &str,
         start: u32,
         end: u32,
+        line: Option<&str>,
     ) -> Option<(String, String, usize)> {
         let mut counts: HashMap<(&str, &str), usize> = HashMap::new();
         for svc in &self.services {
             if svc.service_id != service_id {
                 continue;
+            }
+            if let Some(l) = line {
+                if svc.route_short_name != l {
+                    continue;
+                }
             }
             match svc.first_time() {
                 Some(t) if t >= start && t <= end => {}

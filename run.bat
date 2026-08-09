@@ -17,7 +17,9 @@ if errorlevel 1 (
   exit /b 1
 )
 
-echo Compilant i executant rodalies-sim (release)...
+echo Compilant i arrencant rodalies-sim (release)...
+echo El navegador s'obrira amb la UI interactiva a http://127.0.0.1:8080
+echo Prem Ctrl+C en aquesta finestra per aturar el servidor.
 echo.
 cargo run --release
 if errorlevel 1 (
@@ -26,8 +28,4 @@ if errorlevel 1 (
   pause
   exit /b 1
 )
-
-echo.
-echo Fet. El dashboard s'hauria d'haver obert al navegador.
-echo (si no, obre  report\dashboard.html)
 pause

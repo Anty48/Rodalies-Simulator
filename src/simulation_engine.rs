@@ -40,6 +40,8 @@ pub struct SimConfig {
     /// Si es `Some`, la generación de pasajeros es estocástica con esta semilla
     /// (usa `PassengerModel::dwell_time_random`). `None` → dwell determinista.
     pub seed: Option<u64>,
+    /// Si es `Some`, solo se simulan los servicios de esa línea (route_short_name).
+    pub line_filter: Option<String>,
 }
 
 impl Default for SimConfig {
@@ -59,6 +61,7 @@ impl Default for SimConfig {
                 "Arc de Triomf".into(),
             ],
             seed: None,
+            line_filter: None,
         }
     }
 }
@@ -70,13 +73,6 @@ pub enum Incident {
         train_number: String,
         at_stop_name: String,
         extra_secs: u32,
-    },
-    /// Bloqueo de un cantón entre dos estaciones (por nombre) durante una ventana.
-    BlockSegment {
-        from_stop_name: String,
-        to_stop_name: String,
-        from_sec: u32,
-        dur_secs: u32,
     },
     /// Bloqueo de un cantón identificado por `stop_id` (resolución exacta).
     BlockSegmentById {
@@ -153,8 +149,6 @@ pub struct Sample {
     pub total_delay: i64,
     /// Retraso medio entre los trenes activos (segundos).
     pub mean_active: f64,
-    /// Trenes activos (en circulación) en ese instante.
-    pub active: usize,
     /// Trenes con retraso apreciable (> 30 s).
     pub delayed: usize,
 }
@@ -174,7 +168,6 @@ pub struct CtcEvent {
 
 pub struct SimResult {
     pub timeline: Vec<Sample>,
-    pub log: Vec<String>,
     /// Declaraciones de incidencias inyectadas (texto).
     pub incidents: Vec<String>,
     /// Eventos CTC estructurados (para el dashboard).
@@ -234,6 +227,11 @@ impl<'a> Simulator<'a> {
             if svc.service_id != service_id {
                 continue;
             }
+            if let Some(lf) = &cfg.line_filter {
+                if &svc.route_short_name != lf {
+                    continue;
+                }
+            }
             match svc.first_time() {
                 Some(t) if t >= cfg.start_sec && t <= cfg.end_sec => participants.push(idx),
                 _ => {}
@@ -282,33 +280,6 @@ impl<'a> Simulator<'a> {
         let mut incident_log: Vec<String> = Vec::new();
         for inc in &self.incidents {
             match inc {
-                Incident::BlockSegment {
-                    from_stop_name,
-                    to_stop_name,
-                    from_sec,
-                    dur_secs,
-                } => {
-                    let a = net.find_stop_by_name(from_stop_name);
-                    let b = net.find_stop_by_name(to_stop_name);
-                    match (a, b) {
-                        (Some(a), Some(b)) => {
-                            let na = net.node_of_stop[&a.stop_id];
-                            let nb = net.node_of_stop[&b.stop_id];
-                            blocked.insert((na, nb), (*from_sec, from_sec + dur_secs));
-                            incident_log.push(format!(
-                                "  ⛔ INCIDÈNCIA: bloqueig del cantó {} → {} de {} a {}",
-                                a.stop_name,
-                                b.stop_name,
-                                fmt_hms(*from_sec),
-                                fmt_hms(from_sec + dur_secs)
-                            ));
-                        }
-                        _ => incident_log.push(format!(
-                            "  ⚠ Incidència de bloqueig ignorada: no trobo {} → {}",
-                            from_stop_name, to_stop_name
-                        )),
-                    }
-                }
                 Incident::BlockSegmentById {
                     from_stop_id,
                     to_stop_id,
@@ -355,9 +326,8 @@ impl<'a> Simulator<'a> {
 
         // --- Métrica de estabilidad ---
         let mut timeline: Vec<Sample> = Vec::new();
-        let incidents: Vec<String> = incident_log.clone();
+        let incidents: Vec<String> = incident_log;
         let mut events: Vec<CtcEvent> = Vec::new();
-        let mut log: Vec<String> = incident_log;
         let mut total_arrivals = 0usize;
         let mut held_events = 0usize;
         let mut next_sample = cfg.start_sec;
@@ -381,7 +351,6 @@ impl<'a> Simulator<'a> {
                 time,
                 total_delay: total,
                 mean_active: mean,
-                active: n,
                 delayed,
             });
         };
@@ -455,13 +424,6 @@ impl<'a> Simulator<'a> {
                             {
                                 t.delay += extra as i64;
                                 t.delay_incident_done = true;
-                                log.push(format!(
-                                    "[{}] CTC · ⛔ Tren {} rep +{} min d'incidència a {}",
-                                    fmt_hms(ev.time),
-                                    svc.train_number,
-                                    extra / 60,
-                                    net.graph[node].stop_name
-                                ));
                                 events.push(CtcEvent {
                                     time: ev.time,
                                     train: svc.train_number.clone(),
@@ -484,15 +446,6 @@ impl<'a> Simulator<'a> {
                     total_arrivals += 1;
 
                     if self.is_key_station(node) {
-                        log.push(format!(
-                            "[{}] CTC · Tren {:>8} ({:<3}) ARRIBA {:<32} via {}  (retard {:+} s)",
-                            fmt_hms(ev.time),
-                            svc.train_number,
-                            svc.route_short_name,
-                            net.graph[node].stop_name,
-                            track + 1,
-                            arrival_delay
-                        ));
                         events.push(CtcEvent {
                             time: ev.time,
                             train: svc.train_number.clone(),
@@ -598,15 +551,6 @@ impl<'a> Simulator<'a> {
 
                     if self.is_key_station(na) {
                         let d = trains.get(&ev.trip_idx).map(|t| t.delay).unwrap_or(0);
-                        log.push(format!(
-                            "[{}] CTC · Tren {:>8} ({:<3}) SURT   {:<32} via {}  (retard {:+} s)",
-                            fmt_hms(ev.time),
-                            svc.train_number,
-                            svc.route_short_name,
-                            net.graph[na].stop_name,
-                            track.map(|t| t + 1).unwrap_or(0),
-                            d
-                        ));
                         events.push(CtcEvent {
                             time: ev.time,
                             train: svc.train_number.clone(),
@@ -664,7 +608,6 @@ impl<'a> Simulator<'a> {
 
         SimResult {
             timeline,
-            log,
             incidents,
             events,
             trains_run: participants.len(),

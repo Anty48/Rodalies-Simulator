@@ -188,7 +188,197 @@ fn timeline_svg(timeline: &[Sample]) -> String {
 // Render principal
 // --------------------------------------------------------------------------
 
+/// Estado de los controles de la UI (valores actuales de los sliders/selects).
+pub struct Controls {
+    pub start_h: u32,
+    pub dur_h: u32,
+    pub line: Option<String>,
+    pub block: u32,
+    pub delay: u32,
+    pub cap: u32,
+    pub headway: u32,
+    pub random: bool,
+}
+
+const STYLE: &str = r#"<style>
+:root {
+  --bg:#0e1116; --panel:#161b22; --panel2:#1c232d; --border:#2a333f;
+  --text:#e6edf3; --muted:#8b98a5; --accent:#e2231a; --accent2:#f5a623;
+  --arr:#3fb950; --dep:#58a6ff; --late:#f85149; --warn:#f5a623;
+}
+* { box-sizing:border-box; }
+body { margin:0; background:var(--bg); color:var(--text);
+  font-family:'Segoe UI',system-ui,-apple-system,sans-serif; line-height:1.5; }
+.mono { font-family:'Cascadia Code',Consolas,'Courier New',monospace; }
+.muted { color:var(--muted); font-size:.9em; }
+code { background:var(--panel2); padding:1px 5px; border-radius:5px; font-size:.85em; }
+.wrap { max-width:1200px; margin:0 auto; padding:24px 20px 60px; }
+header.top { display:flex; align-items:center; gap:16px; padding:8px 0 20px; border-bottom:1px solid var(--border); margin-bottom:24px; }
+.logo { width:46px; height:46px; border-radius:12px; background:linear-gradient(135deg,var(--accent),var(--accent2));
+  display:flex; align-items:center; justify-content:center; font-size:26px; flex:0 0 auto; box-shadow:0 4px 18px rgba(226,35,26,.35); }
+h1 { font-size:1.5rem; margin:0; }
+h2 { font-size:1.05rem; margin:0 0 14px; letter-spacing:.02em; text-transform:uppercase; color:var(--muted); }
+h3 { margin:0 0 4px; font-size:1.05rem; }
+.sub { color:var(--muted); font-size:.85rem; }
+.grid-kpi { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:14px; margin-bottom:26px; }
+.kpi { background:var(--panel); border:1px solid var(--border); border-radius:14px; padding:16px 18px; }
+.kpi-val { font-size:1.7rem; font-weight:700; }
+.kpi-label { font-size:.9rem; margin-top:2px; }
+.kpi-sub { color:var(--muted); font-size:.75rem; }
+.card { background:var(--panel); border:1px solid var(--border); border-radius:16px; padding:22px; margin-bottom:22px; }
+.cols { display:grid; grid-template-columns:1fr 1fr; gap:22px; }
+@media (max-width:820px) { .cols { grid-template-columns:1fr; } }
+.scroll { overflow-x:auto; }
+table { width:100%; border-collapse:collapse; font-size:.9rem; }
+th,td { text-align:left; padding:7px 10px; border-bottom:1px solid var(--border); white-space:nowrap; }
+th { color:var(--muted); font-weight:600; font-size:.78rem; text-transform:uppercase; letter-spacing:.03em; }
+td.num { text-align:right; }
+.pill { background:var(--panel2); border:1px solid var(--border); border-radius:20px; padding:1px 9px; font-size:.8rem; }
+.chart { width:100%; height:auto; display:block; }
+.grid { stroke:var(--border); stroke-width:1; }
+.axis { fill:var(--muted); font-size:12px; font-family:monospace; }
+.bar-row { display:flex; align-items:center; gap:10px; margin:6px 0; font-size:.85rem; }
+.bar-name { width:52px; color:var(--muted); }
+.bar-val { width:52px; text-align:right; }
+.bar-track { flex:1; height:10px; background:var(--panel2); border-radius:6px; overflow:hidden; }
+.bar-track.sm { height:8px; }
+.bar-fill { display:block; height:100%; background:linear-gradient(90deg,var(--accent2),var(--accent)); border-radius:6px; }
+.metrics { display:grid; grid-template-columns:1fr 1fr; gap:10px 22px; }
+.metric { display:flex; justify-content:space-between; border-bottom:1px dashed var(--border); padding:6px 0; font-size:.9rem; }
+.metric-label { color:var(--muted); }
+.metric-val { font-weight:600; }
+.chips { display:flex; flex-wrap:wrap; gap:6px; margin-top:6px; }
+.chip { background:var(--panel2); border:1px solid var(--border); border-radius:20px; padding:2px 10px; font-size:.78rem; color:var(--muted); }
+.inc { list-style:none; padding:0; margin:0; }
+.inc li { background:rgba(226,35,26,.08); border-left:3px solid var(--accent); padding:8px 12px; border-radius:6px; margin-bottom:8px; font-size:.88rem; }
+.log { max-height:520px; overflow:auto; border:1px solid var(--border); border-radius:10px; background:var(--bg); }
+.ev { display:grid; grid-template-columns:64px 22px 58px 1fr 1.4fr 62px 66px; align-items:center; gap:8px; padding:4px 12px; font-size:.82rem; border-bottom:1px solid rgba(42,51,63,.5); }
+.ev-inc { grid-template-columns:22px 1fr; background:rgba(226,35,26,.10); color:var(--accent2); font-weight:600; }
+.ev-badge { text-align:center; }
+.ev-arr .ev-badge { color:var(--arr); }
+.ev-dep .ev-badge { color:var(--dep); }
+.ev-kind { color:var(--muted); font-size:.75rem; }
+.ev-train em { color:var(--accent2); font-style:normal; font-size:.78rem; }
+.ev-sta { color:var(--text); }
+.ev-track,.ev-delay { text-align:right; color:var(--muted); }
+.ev.warn .ev-delay { color:var(--warn); }
+.ev.late .ev-delay { color:var(--late); font-weight:700; }
+footer { color:var(--muted); font-size:.8rem; text-align:center; padding-top:20px; border-top:1px solid var(--border); }
+.controls { background:var(--panel); border:1px solid var(--border); border-radius:16px; padding:18px 22px; margin-bottom:22px; }
+.controls-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(155px,1fr)); gap:16px 20px; align-items:end; }
+.field { display:flex; flex-direction:column; gap:5px; font-size:.78rem; color:var(--muted); }
+.field label b { color:var(--accent2); }
+.field input[type=range] { width:100%; accent-color:var(--accent); }
+.field select { background:var(--panel2); color:var(--text); border:1px solid var(--border); border-radius:8px; padding:7px 8px; }
+.field .chk { display:flex; align-items:center; gap:7px; color:var(--text); font-size:.9rem; }
+.btn { background:linear-gradient(135deg,var(--accent),var(--accent2)); color:#fff; border:none; border-radius:10px;
+  padding:11px 22px; font-size:.95rem; font-weight:700; cursor:pointer; box-shadow:0 3px 12px rgba(226,35,26,.3); }
+.btn:disabled { opacity:.6; cursor:progress; }
+#dashboard { transition:opacity .15s; }
+</style>"#;
+
+const HEADER: &str = r#"<header class="top">
+    <div class="logo">🚆</div>
+    <div>
+      <h1>rodalies-sim <span class="sub">· dashboard</span></h1>
+      <div class="sub">Simulació de tràfic ferroviari i incidències · Rodalies de Barcelona · construït des de GTFS</div>
+    </div>
+  </header>"#;
+
+const SCRIPT: &str = r#"<script>
+const $=id=>document.getElementById(id);
+function qs(){
+  const p=new URLSearchParams();
+  p.set('start_h',$('c_start').value); p.set('dur_h',$('c_dur').value);
+  p.set('line',$('c_line').value); p.set('block',$('c_block').value);
+  p.set('delay',$('c_delay').value); p.set('cap',$('c_cap').value);
+  p.set('headway',$('c_headway').value); p.set('random',$('c_random').checked?'1':'0');
+  return p.toString();
+}
+async function simulate(){
+  const b=$('c_run'); b.disabled=true; const t=b.textContent; b.textContent='Simulant…';
+  const d=$('dashboard'); d.style.opacity=.4;
+  try{ const r=await fetch('/api/render?'+qs()); d.innerHTML=await r.text(); }
+  catch(e){ d.innerHTML='<div class="card">Error: '+e+'</div>'; }
+  d.style.opacity=1; b.disabled=false; b.textContent=t;
+}
+document.addEventListener('input',e=>{ const o=e.target.dataset&&e.target.dataset.out; if(o)$(o).textContent=e.target.value; });
+$('c_run').addEventListener('click',simulate);
+</script>"#;
+
+fn controls_html(lines: &[String], c: &Controls) -> String {
+    let mut opts = String::from("<option value=\"\">Totes les línies</option>");
+    for l in lines {
+        let sel = if c.line.as_deref() == Some(l.as_str()) { " selected" } else { "" };
+        opts.push_str(&format!("<option value=\"{0}\"{1}>{0}</option>", esc(l), sel));
+    }
+    let chk = if c.random { " checked" } else { "" };
+    format!(
+        r#"<div class="controls">
+    <div class="controls-grid">
+      <div class="field"><label>Hora inici <b id="o_start">{start}</b>h</label>
+        <input type="range" id="c_start" min="5" max="21" step="1" value="{start}" data-out="o_start"></div>
+      <div class="field"><label>Durada <b id="o_dur">{dur}</b>h</label>
+        <input type="range" id="c_dur" min="1" max="4" step="1" value="{dur}" data-out="o_dur"></div>
+      <div class="field"><label>Línia</label>
+        <select id="c_line">{opts}</select></div>
+      <div class="field"><label>Bloqueig cantó <b id="o_block">{block}</b> min</label>
+        <input type="range" id="c_block" min="0" max="20" step="1" value="{block}" data-out="o_block"></div>
+      <div class="field"><label>Retard tren <b id="o_delay">{delay}</b> min</label>
+        <input type="range" id="c_delay" min="0" max="15" step="1" value="{delay}" data-out="o_delay"></div>
+      <div class="field"><label>Vies/andana <b id="o_cap">{cap}</b></label>
+        <input type="range" id="c_cap" min="1" max="8" step="1" value="{cap}" data-out="o_cap"></div>
+      <div class="field"><label>Sep. mín. bloc <b id="o_headway">{headway}</b> s</label>
+        <input type="range" id="c_headway" min="60" max="300" step="30" value="{headway}" data-out="o_headway"></div>
+      <div class="field"><label class="chk"><input type="checkbox" id="c_random"{chk}> Passatgers estocàstics</label></div>
+      <div class="field"><button class="btn" id="c_run">▶ Simular</button></div>
+    </div>
+  </div>"#,
+        start = c.start_h,
+        dur = c.dur_h,
+        opts = opts,
+        block = c.block,
+        delay = c.delay,
+        cap = c.cap,
+        headway = c.headway,
+        chk = chk,
+    )
+}
+
+/// Página estática (offline): estilos + cabecera + cuerpo, sin controles.
 pub fn render_html(
+    summary: &SummaryView,
+    example: &Option<ExampleView>,
+    sim: &SimView,
+    res: &ResView,
+    generated_at: &str,
+) -> String {
+    let body = render_body(summary, example, sim, res, generated_at);
+    format!(
+        "<title>rodalies-sim · dashboard</title>\n{STYLE}\n<div class=\"wrap\">\n  {HEADER}\n{body}\n</div>\n"
+    )
+}
+
+/// Página interactiva (servida por el servidor web): cabecera + controles +
+/// contenedor `#dashboard` con el cuerpo inicial + JS que hace fetch a `/api/render`.
+pub fn render_interactive_page(
+    summary: &SummaryView,
+    example: &Option<ExampleView>,
+    sim: &SimView,
+    res: &ResView,
+    lines: &[String],
+    controls: &Controls,
+    generated_at: &str,
+) -> String {
+    let body = render_body(summary, example, sim, res, generated_at);
+    let ctrls = controls_html(lines, controls);
+    format!(
+        "<title>rodalies-sim · dashboard interactiu</title>\n{STYLE}\n<div class=\"wrap\">\n  {HEADER}\n  {ctrls}\n  <div id=\"dashboard\">\n{body}\n  </div>\n</div>\n{SCRIPT}\n"
+    )
+}
+
+/// Cuerpo del dashboard (secciones), sin `<title>`, estilos ni cabecera.
+pub fn render_body(
     summary: &SummaryView,
     example: &Option<ExampleView>,
     sim: &SimView,
@@ -341,82 +531,7 @@ pub fn render_html(
         .join("");
 
     format!(
-        r##"<title>rodalies-sim · dashboard</title>
-<style>
-:root {{
-  --bg:#0e1116; --panel:#161b22; --panel2:#1c232d; --border:#2a333f;
-  --text:#e6edf3; --muted:#8b98a5; --accent:#e2231a; --accent2:#f5a623;
-  --arr:#3fb950; --dep:#58a6ff; --late:#f85149; --warn:#f5a623;
-}}
-* {{ box-sizing:border-box; }}
-body {{ margin:0; background:var(--bg); color:var(--text);
-  font-family:'Segoe UI',system-ui,-apple-system,sans-serif; line-height:1.5; }}
-.mono {{ font-family:'Cascadia Code',Consolas,'Courier New',monospace; }}
-.muted {{ color:var(--muted); font-size:.9em; }}
-.wrap {{ max-width:1200px; margin:0 auto; padding:24px 20px 60px; }}
-header.top {{ display:flex; align-items:center; gap:16px; padding:8px 0 20px; border-bottom:1px solid var(--border); margin-bottom:24px; }}
-.logo {{ width:46px; height:46px; border-radius:12px; background:linear-gradient(135deg,var(--accent),var(--accent2));
-  display:flex; align-items:center; justify-content:center; font-size:26px; flex:0 0 auto; box-shadow:0 4px 18px rgba(226,35,26,.35); }}
-h1 {{ font-size:1.5rem; margin:0; }}
-h2 {{ font-size:1.05rem; margin:0 0 14px; letter-spacing:.02em; text-transform:uppercase; color:var(--muted); }}
-h3 {{ margin:0 0 4px; font-size:1.05rem; }}
-.sub {{ color:var(--muted); font-size:.85rem; }}
-.grid-kpi {{ display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:14px; margin-bottom:26px; }}
-.kpi {{ background:var(--panel); border:1px solid var(--border); border-radius:14px; padding:16px 18px; }}
-.kpi-val {{ font-size:1.7rem; font-weight:700; }}
-.kpi-label {{ font-size:.9rem; margin-top:2px; }}
-.kpi-sub {{ color:var(--muted); font-size:.75rem; }}
-.card {{ background:var(--panel); border:1px solid var(--border); border-radius:16px; padding:22px; margin-bottom:22px; }}
-.cols {{ display:grid; grid-template-columns:1fr 1fr; gap:22px; }}
-@media (max-width:820px) {{ .cols {{ grid-template-columns:1fr; }} }}
-.scroll {{ overflow-x:auto; }}
-table {{ width:100%; border-collapse:collapse; font-size:.9rem; }}
-th,td {{ text-align:left; padding:7px 10px; border-bottom:1px solid var(--border); white-space:nowrap; }}
-th {{ color:var(--muted); font-weight:600; font-size:.78rem; text-transform:uppercase; letter-spacing:.03em; }}
-td.num {{ text-align:right; }}
-.pill {{ background:var(--panel2); border:1px solid var(--border); border-radius:20px; padding:1px 9px; font-size:.8rem; }}
-.chart {{ width:100%; height:auto; display:block; }}
-.grid {{ stroke:var(--border); stroke-width:1; }}
-.axis {{ fill:var(--muted); font-size:12px; font-family:monospace; }}
-.bar-row {{ display:flex; align-items:center; gap:10px; margin:6px 0; font-size:.85rem; }}
-.bar-name {{ width:52px; color:var(--muted); }}
-.bar-val {{ width:52px; text-align:right; }}
-.bar-track {{ flex:1; height:10px; background:var(--panel2); border-radius:6px; overflow:hidden; }}
-.bar-track.sm {{ height:8px; }}
-.bar-fill {{ display:block; height:100%; background:linear-gradient(90deg,var(--accent2),var(--accent)); border-radius:6px; }}
-.metrics {{ display:grid; grid-template-columns:1fr 1fr; gap:10px 22px; }}
-.metric {{ display:flex; justify-content:space-between; border-bottom:1px dashed var(--border); padding:6px 0; font-size:.9rem; }}
-.metric-label {{ color:var(--muted); }}
-.metric-val {{ font-weight:600; }}
-.chips {{ display:flex; flex-wrap:wrap; gap:6px; margin-top:6px; }}
-.chip {{ background:var(--panel2); border:1px solid var(--border); border-radius:20px; padding:2px 10px; font-size:.78rem; color:var(--muted); }}
-.inc {{ list-style:none; padding:0; margin:0; }}
-.inc li {{ background:rgba(226,35,26,.08); border-left:3px solid var(--accent); padding:8px 12px; border-radius:6px; margin-bottom:8px; font-size:.88rem; }}
-.log {{ max-height:520px; overflow:auto; border:1px solid var(--border); border-radius:10px; background:var(--bg); }}
-.ev {{ display:grid; grid-template-columns:64px 22px 58px 1fr 1.4fr 62px 66px; align-items:center; gap:8px; padding:4px 12px; font-size:.82rem; border-bottom:1px solid rgba(42,51,63,.5); }}
-.ev-inc {{ grid-template-columns:22px 1fr; background:rgba(226,35,26,.10); color:var(--accent2); font-weight:600; }}
-.ev-badge {{ text-align:center; }}
-.ev-arr .ev-badge {{ color:var(--arr); }}
-.ev-dep .ev-badge {{ color:var(--dep); }}
-.ev-kind {{ color:var(--muted); font-size:.75rem; }}
-.ev-train em {{ color:var(--accent2); font-style:normal; font-size:.78rem; }}
-.ev-sta {{ color:var(--text); }}
-.ev-track,.ev-delay {{ text-align:right; color:var(--muted); }}
-.ev.warn .ev-delay {{ color:var(--warn); }}
-.ev.late .ev-delay {{ color:var(--late); font-weight:700; }}
-footer {{ color:var(--muted); font-size:.8rem; text-align:center; padding-top:20px; border-top:1px solid var(--border); }}
-</style>
-
-<div class="wrap">
-  <header class="top">
-    <div class="logo">🚆</div>
-    <div>
-      <h1>rodalies-sim <span class="sub">· dashboard</span></h1>
-      <div class="sub">Simulació de tràfic ferroviari i incidències · Rodalies de Barcelona · construït des de GTFS</div>
-    </div>
-  </header>
-
-  <div class="grid-kpi">{kpi_html}</div>
+        r##"<div class="grid-kpi">{kpi_html}</div>
 
   <div class="cols">
     <section class="card">
@@ -458,7 +573,6 @@ footer {{ color:var(--muted); font-size:.8rem; text-align:center; padding-top:20
   </section>
 
   <footer>Generat el {generated_at} · rodalies-sim · dades GTFS Rodalies/Cercanías</footer>
-</div>
 "##,
         kpi_html = kpi_html,
         lines_html = lines_html,

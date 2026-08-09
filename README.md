@@ -54,7 +54,9 @@ src/
   gtfs_loader.rs         # Parser GTFS -> grafo petgraph + servicios (carga dinámica)
   passenger_model.rs     # Dwell time en función de pasajeros y retraso
   simulation_engine.rs   # Motor de eventos discretos + señalización + incidencias
-  report.rs              # Genera el dashboard HTML autocontenido
+  scenario.rs            # Constructores de "vistas" parametrizados (consola y web)
+  report.rs              # Renderiza el dashboard HTML (estático e interactivo)
+  server.rs              # Servidor web local (tokio) para la UI interactiva
 run.bat                  # Lanzador de doble clic (Windows): compila, ejecuta y abre la UI
 scripts/
   prep_gtfs.sh           # Filtra un feed GTFS nacional a Rodalies de Catalunya
@@ -92,22 +94,31 @@ empieza por `R`) y escribe los cuatro archivos en `./data/gtfs`.
 ## Ejecución
 
 La forma más fácil en Windows: **doble clic en `run.bat`**. Compila, ejecuta la simulación
-y **abre automáticamente un dashboard HTML** en el navegador.
+y **abre un dashboard web interactivo** en el navegador.
 
 Por línea de comandos:
 
 ```bash
-cargo run --release              # ejecuta y abre el dashboard
-cargo run --release -- --no-open # no abre el navegador (útil para CI)
+cargo run --release              # imprime resumen, escribe report/dashboard.html y arranca el servidor web
+cargo run --release -- --static  # solo genera y abre el dashboard HTML (offline, sin servidor)
+cargo run --release -- --no-open # no abre el navegador automáticamente
 ```
 
-### Dashboard (UI)
+### UI interactiva (servidor web)
 
-Cada ejecución genera un **`report/dashboard.html` autocontenido** (sin dependencias
-externas, funciona sin conexión) con: KPIs de la red, servicios por línea, métricas de
-estabilidad, un **gráfico SVG** del retraso acumulado, el **log CTC coloreado**
-(llegadas/salidas y retrasos), la tabla de resiliencia y la ruta de ejemplo. Se abre solo;
-si no, ábrelo manualmente con doble clic.
+Por defecto arranca un pequeño **servidor web local** (tokio) en
+`http://127.0.0.1:8080` con **controles interactivos**: franja horaria (hora de inicio y
+duración), línea, duración del bloqueo de cantón, retraso inyectado, vías por andén,
+separación mínima de bloque y pasajeros estocásticos. Al pulsar **Simular** vuelve a
+correr la simulación en el servidor y actualiza el dashboard (gráfico SVG del retraso, log
+CTC coloreado, métricas de estabilidad y tabla de resiliencia) sin recompilar. Ctrl+C para
+parar el servidor.
+
+### Dashboard estático (offline)
+
+`--static` (o cada ejecución, como copia) genera un **`report/dashboard.html`
+autocontenido** —sin dependencias externas ni conexión— con los mismos paneles. Se puede
+abrir con doble clic.
 
 Salida por consola (resumida):
 
