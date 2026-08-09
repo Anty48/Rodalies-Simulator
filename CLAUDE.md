@@ -75,13 +75,16 @@ runtime — there is no hardcoded map. Data flows in one direction: GTFS → `Ne
   (canton occupied) = the engine holds the train. The engine calls it when `strict_signaling`
   is on (capacity 1 per canton and platform).
 
-- **`optimizer/`** — timetable optimization. `potential.rs`: `V(H)` = regularity (peak-weighted
-  headway std) + passenger-weighted delay (timeline integral) + conflict penalty (`held_events`).
-  `search.rs`: `optimize_line` runs simulated annealing over per-trip departure offsets (±5 min);
-  each candidate is scored by the mean `V` over a FIXED set of Monte-Carlo incidents evaluated in
-  parallel with rayon, using the engine in `strict_signaling` + `line_filter` + `offsets` mode.
-  `mod.rs::optimize_lines` parallelizes across lines. Conflicts count distinct red stops (a
-  `waiting` flag on `TrainRt`), not every 10s retry.
+- **`optimizer/`** — timetable optimization. `potential.rs`: `V(H)` components (regularity,
+  passenger-weighted delay, conflict). **`system.rs` is the main mode**: `optimize_system`
+  coordinates the WHOLE network (all lines) over a full weekday (05:00–00:00) by simulated
+  annealing over a **per-line phase offset** (±5 min); each candidate is scored by the mean `V`
+  over a FIXED set of Monte-Carlo scenarios (each with several incidents spread across the day),
+  evaluated in parallel with rayon. `V = w_delay·passenger_weighted_delay + w_conflict·held`.
+  Physics: block-model cantons + single-track token + real platform counts + buses excluded.
+  `search.rs::optimize_line` is the legacy per-line mode (`optimize-line` CLI). Conflicts count
+  distinct red stops (a `waiting` flag on `TrainRt`), not every 10s retry. Engine canton capacity
+  is always the block model now; hard exclusion comes from the single-track token + platforms.
 
 - **`exporter.rs`** — writes `report/optimized/<LINE>_optimized.csv`, a per-line **PDF**
   timetable (`<LINE>_horari.pdf`, printpdf; stations×trains grid, paginated), and the console
@@ -107,11 +110,12 @@ runtime — there is no hardcoded map. Data flows in one direction: GTFS → `Ne
   add a field to a `*View`, render it (otherwise dead-code warning).
 
 - **`server.rs`** — minimal tokio HTTP/1.1 server (GET only, `Connection: close`, localhost).
-  Routes: `/`, `/api/render?…`, `/health`, plus the optimizer: `/api/optimize/start?line=` (spawns
-  a std::thread running `optimize_line_cb`, progress written to `Arc<Mutex<OptJob>>`),
-  `/api/optimize/status` (live JSON: iter/total, base_v, best_v, history…), and
+  Routes: `/`, `/api/render?…`, `/health`, plus the optimizer: `/api/optimize/start` (spawns a
+  std::thread running `optimize_system`, progress written to `Arc<Mutex<OptJob>>`),
+  `/api/optimize/status` (live JSON: iter/total, base_v, best_v, history, per-line `files`…), and
   `/report/optimized/<file>` (serves generated CSV/PDF; response body is `Vec<u8>` for binaries).
-  The web `OPT_SCRIPT` polls status and draws the descending V(H) curve on a canvas.
+  The web `OPT_SCRIPT` polls status, draws the descending V(H) curve on a canvas, and on finish
+  shows the metrics + a per-line download table.
 
 - **`main.rs`** — `#[tokio::main]`. Checks `./data/gtfs`, loads (timed in ms), builds the
   default `*View`s via `scenario`, prints them, writes the static dashboard, then either

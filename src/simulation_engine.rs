@@ -566,13 +566,11 @@ impl<'a> Simulator<'a> {
                         .edge_between(&stop.stop_id, &next.stop_id)
                         .map(|e| e.capacity as u32)
                         .unwrap_or(1);
-                    // En modo estricto cada cantón admite un único tren (capacidad 1);
-                    // si no, se estima por bloques de señalización dentro de la sección.
-                    let eff_cap = if cfg.strict_signaling {
-                        1
-                    } else {
-                        base_cap.max((run / cfg.min_block_headway_secs.max(1)).max(1))
-                    };
+                    // Capacidad del cantón = nº de bloques de señalización que caben en la
+                    // sección (marcha / separación mínima). Modela la vía múltiple: varios
+                    // trenes en marcha espaciados. La exclusión real (un solo tren en
+                    // cualquier sentido) la aporta el testigo de VÍA ÚNICA, más abajo.
+                    let eff_cap = base_cap.max((run / cfg.min_block_headway_secs.max(1)).max(1));
 
                     // ¿Cantón bloqueado por incidencia?
                     if let Some(&(from, until)) = blocked.get(&(na, nb)) {

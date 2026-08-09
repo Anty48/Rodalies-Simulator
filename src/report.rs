@@ -313,38 +313,24 @@ document.addEventListener('input',e=>{ const o=e.target.dataset&&e.target.datase
 $('c_run').addEventListener('click',simulate);
 </script>"#;
 
-/// Panel del optimizador (persistente, fuera de #dashboard).
-fn optimizer_panel(lines: &[String]) -> String {
-    let opts: String = lines
-        .iter()
-        .enumerate()
-        .map(|(i, l)| {
-            let sel = if i == 0 { " selected" } else { "" };
-            format!("<option value=\"{0}\"{1}>{0}</option>", esc(l), sel)
-        })
-        .collect();
-    format!(
-        r#"<div class="card">
-    <h2>Optimitzador d'horaris · minimització del potencial V(H)</h2>
-    <div class="formula">V(H) = w_reg·<b>regularitat</b> de freqüències (×3 en punta 07:00–09:30) + w_delay·<b>retard ponderat per passatgers</b> + w_conf·<b>conflictes de via</b></div>
-    <p class="muted" style="margin-top:8px">Cerca per <b>recuit simulat</b> (offsets ±5 min a la sortida d'origen), avaluada amb <b>Monte Carlo en paral·lel (rayon)</b> injectant incidències a punts crítics. Física estricta: cantons de capacitat 1, aspectes verd/groc/vermell, vía única i sense autobusos de substitució.</p>
-    <div class="controls-grid">
-      <div class="field"><label>Línia a optimitzar</label><select id="o_line">{opts}</select></div>
-      <div class="field"><button class="btn" id="o_run">▶ Optimitzar</button></div>
-      <div class="field" style="grid-column:1/-1"><div id="o_status" class="muted">Preparat. Tria una línia i prem Optimitzar per veure baixar V(H) en viu.</div></div>
-    </div>
-    <canvas id="o_chart" width="920" height="180" class="optchart"></canvas>
+/// Panel del optimizador del SISTEMA (persistente, fuera de #dashboard).
+fn optimizer_panel() -> String {
+    r#"<div class="card">
+    <h2>Optimitzador del SISTEMA · minimització del potencial V(H)</h2>
+    <div class="formula">V(H) = w_delay·<b>retard ponderat per passatgers</b> (×3 en punta) + w_conf·<b>conflictes entre línies</b> &nbsp;·&nbsp; integrat sobre tot el dia (05:00–00:00)</div>
+    <p class="muted" style="margin-top:8px">Coordina <b>TOTES les línies alhora</b>: el problema són els conflictes entre línies als cantons compartits i la resposta a les <b>incidències</b>. Recuit simulat sobre el <b>desfàs de fase de cada línia</b> (±5 min); cada candidat s'avalua amb moltes <b>simulacions Monte Carlo del sistema sencer</b>, cadascuna amb incidències aleatòries repartides pel dia (<b>rayon</b>). Física: cantons per blocs, vía única (testigo), andanes reals, sense busos de substitució.</p>
+    <button class="btn" id="o_run">▶ Optimitzar el sistema (dia laborable)</button>
+    <div id="o_status" class="muted" style="margin-top:10px">Preparat. Prem per veure baixar V(H) en viu al llarg de moltes simulacions.</div>
+    <canvas id="o_chart" width="920" height="190" class="optchart"></canvas>
     <div id="o_result"></div>
-  </div>"#,
-        opts = opts
-    )
+  </div>"#.to_string()
 }
 
 const OPT_SCRIPT: &str = r#"<script>
 (function(){
  const $=id=>document.getElementById(id);
  let timer=null;
- function draw(h,base){ const c=$('o_chart'); if(!c)return; const ctx=c.getContext('2d'); const W=c.width,H=c.height,P=30;
+ function draw(h,base){ const c=$('o_chart'); if(!c)return; const ctx=c.getContext('2d'); const W=c.width,H=c.height,P=34;
    ctx.clearRect(0,0,W,H); if(!h||!h.length)return;
    let mx=base||h[0],mn=h[0]; for(const v of h){if(v>mx)mx=v;if(v<mn)mn=v;} if(base){if(base<mn)mn=base;if(base>mx)mx=base;} if(mx-mn<1e-6)mx=mn+1;
    const x=i=>P+(W-2*P)*(h.length<2?1:i/(h.length-1)); const y=v=>P+(H-2*P)*(1-(v-mn)/(mx-mn));
@@ -356,15 +342,19 @@ const OPT_SCRIPT: &str = r#"<script>
  }
  async function poll(){ let j; try{j=await (await fetch('/api/optimize/status')).json();}catch(e){return;}
    draw(j.history,j.base_v);
-   if(j.running){ $('o_status').textContent='Optimitzant '+j.line+'… iteració '+j.iter+'/'+j.total+'  ·  V actual '+j.current_v.toFixed(1)+'  ·  millor '+j.best_v.toFixed(1); }
+   if(j.running){ $('o_status').textContent='Optimitzant el sistema… iteració '+j.iter+'/'+j.total+'  ·  V actual '+j.current_v.toFixed(1)+'  ·  millor '+j.best_v.toFixed(1); }
    else if(j.done){ if(timer){clearInterval(timer);timer=null;} $('o_run').disabled=false;
      if(j.error){ $('o_status').innerHTML='<span style="color:#f85149">⚠ '+j.error+'</span>'; }
-     else { $('o_status').innerHTML='<b style="color:#3fb950">✔ Optimització FINALITZADA</b> · línia '+j.line+' · '+j.total+' iteracions';
-       $('o_result').innerHTML='<div class="optdone">Potencial V: inicial <b>'+j.base_v.toFixed(1)+'</b> → final <b style="color:#f5a623">'+j.best_v.toFixed(1)+'</b> &nbsp;(<b>−'+j.delta_pct.toFixed(1)+'%</b>)&nbsp;&nbsp; <a href="'+j.csv+'" target="_blank">⬇ CSV</a> &nbsp; <a href="'+j.pdf+'" target="_blank">⬇ PDF horari</a></div>'; }
+     else {
+       $('o_status').innerHTML='<b style="color:#3fb950">✔ Optimització FINALITZADA</b> · '+j.total+' iteracions · '+j.trips+' trens coordinats';
+       let rows=(j.files||[]).map(f=>'<tr><td class=mono>'+f.line+'</td><td class=num>'+(f.offset_min>=0?'+':'')+f.offset_min+' min</td><td><a href="'+f.csv+'" target=_blank>CSV</a></td><td><a href="'+f.pdf+'" target=_blank>PDF</a></td></tr>').join('');
+       $('o_result').innerHTML='<div class="optdone">Potencial V: <b>'+j.base_v.toFixed(1)+'</b> → <b style="color:#f5a623">'+j.best_v.toFixed(1)+'</b> (<b>−'+j.delta_pct.toFixed(1)+'%</b>) &nbsp;·&nbsp; pic de retard mitjà '+j.base_delay.toFixed(0)+' → '+j.best_delay.toFixed(0)+' s &nbsp;·&nbsp; recuperació '+j.base_recovery.toFixed(1)+' → '+j.best_recovery.toFixed(1)+' min</div>'
+         +'<div class="scroll" style="margin-top:10px"><table><thead><tr><th>línia</th><th>desfàs</th><th>horari</th><th></th></tr></thead><tbody>'+rows+'</tbody></table></div>';
+     }
    }
  }
- function start(){ const b=$('o_run'); b.disabled=true; $('o_result').innerHTML=''; $('o_status').textContent='Iniciant…';
-   fetch('/api/optimize/start?line='+encodeURIComponent($('o_line').value)).then(()=>{ if(timer)clearInterval(timer); timer=setInterval(poll,400); poll(); });
+ function start(){ const b=$('o_run'); b.disabled=true; $('o_result').innerHTML=''; $('o_status').textContent='Iniciant… (simulant el sistema sencer amb incidències)';
+   fetch('/api/optimize/start').then(()=>{ if(timer)clearInterval(timer); timer=setInterval(poll,500); poll(); });
  }
  const b=$('o_run'); if(b) b.addEventListener('click',start);
 })();
@@ -436,7 +426,7 @@ pub fn render_interactive_page(
 ) -> String {
     let body = render_body(summary, example, sim, res, generated_at);
     let ctrls = controls_html(lines, controls);
-    let optp = optimizer_panel(lines);
+    let optp = optimizer_panel();
     format!(
         "<title>rodalies-sim · dashboard interactiu</title>\n{STYLE}\n<div class=\"wrap\">\n  {HEADER}\n  {ctrls}\n  {optp}\n  <div id=\"dashboard\">\n{body}\n  </div>\n</div>\n{SCRIPT}\n{OPT_SCRIPT}\n"
     )

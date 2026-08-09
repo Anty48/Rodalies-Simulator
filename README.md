@@ -110,10 +110,23 @@ cargo run --release -- --no-open     # no abre el navegador automáticamente
 cargo run --release -- optimize R1 R4  # OPTIMIZA los horarios de esas líneas (ver abajo)
 ```
 
-### Motor de optimización de horarios
+### Motor de optimización de horarios (del SISTEMA)
 
-`cargo run --release -- optimize [R1 R2N R4 …]` reorienta el proyecto como **motor de
-optimización por minimización de una función de potencial** V(H):
+`cargo run --release -- optimize` optimiza el **sistema entero** (todas las líneas a la
+vez) para un **día laborable completo (05:00–00:00)**. El problema real no es una línea
+aislada, sino los **conflictos entre líneas** en los cantones compartidos (el tronco
+Sants–Passeig lo usan 8–9 líneas) y la **respuesta a las incidencias**: un buen juego de
+horarios hace que, ante una incidencia, el sistema **tienda a la estabilidad** en vez de al
+caos. Se optimiza el **desfase de fase de cada línea** (±5 min); cada candidato se evalúa
+con **muchas simulaciones Monte Carlo del sistema completo, cada una con incidencias
+aleatorias repartidas por el día**, en paralelo (`rayon`).
+
+Resultado real (una ejecución, ~9 s): V **643 → 196 (−70 %)**, conflictos entre líneas
+**81 → 12**, y **tiempo medio de recuperación tras incidencia 329 min → 100 min**. Genera
+un **CSV y un PDF por línea** (`report/optimized/`) con el horario coordinado.
+
+`cargo run --release -- optimize-line R1 R4` es un modo avanzado que optimiza líneas por
+separado (con la misma función de potencial):
 
 - **Física estricta** (`signaling.rs`): señalización por cantones con los tres aspectos
   (verde = velocidad nominal; amarillo = anden de destino ocupado → ralentiza; rojo =
@@ -140,12 +153,17 @@ referencia):
   **distinguen** (marcador propio en el mapa) y se **excluyen** de la física ferroviaria y
   de la optimización.
 
-### Optimización desde la web (en vivo)
+### Optimización del sistema desde la web (en vivo)
 
-El dashboard incluye un panel **Optimitzador**: eliges una línea, pulsas *Optimitzar* y el
-servidor lanza el recocido simulado en segundo plano; la web muestra **en vivo cómo baja
-V(H)** (gráfico + contador de iteraciones) y, al terminar, un aviso claro con el **valor
-final y el % de reducción** y enlaces de descarga al **CSV** y al **PDF**.
+El dashboard incluye un panel **Optimitzador del sistema**: pulsas *Optimitzar el sistema*
+y el servidor lanza el recocido simulado del sistema completo en segundo plano; la web
+muestra **en vivo cómo baja V(H)** a lo largo de las simulaciones (gráfico + contador de
+iteraciones) y, al terminar, un aviso claro con el **valor final, el % de reducción, el pico
+de retraso y el tiempo de recuperación**, más una tabla con el **desfase óptimo por línea**
+y enlaces de descarga a cada **CSV** y **PDF**.
+
+El PDF de cada línea es una tabla de horarios con **las estaciones en columnas y los trenes
+(horarios) en filas**.
 
 ### UI interactiva (servidor web)
 

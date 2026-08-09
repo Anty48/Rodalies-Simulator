@@ -13,26 +13,37 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 
 use crate::gtfs_loader::Network;
-use crate::optimizer::{self, PotentialWeights, SearchConfig};
+use crate::optimizer::{self, PotentialWeights, SystemSearch};
 use crate::report::{self, Controls};
 use crate::scenario::{self, now_utc_string, SimParams};
 
-/// Estado del trabajo de optimización (compartido con la UI vía /api/optimize/status).
+#[derive(Debug, Clone, Serialize, Default)]
+pub struct LineFile {
+    pub line: String,
+    pub csv: String,
+    pub pdf: String,
+    pub offset_min: i64,
+}
+
+/// Estado del trabajo de optimización del sistema (compartido con la UI).
 #[derive(Debug, Clone, Serialize, Default)]
 pub struct OptJob {
     pub running: bool,
     pub done: bool,
-    pub line: String,
     pub iter: usize,
     pub total: usize,
     pub base_v: f64,
     pub current_v: f64,
     pub best_v: f64,
-    pub history: Vec<f64>,
-    pub csv: String,
-    pub pdf: String,
-    pub error: Option<String>,
     pub delta_pct: f64,
+    pub base_delay: f64,
+    pub best_delay: f64,
+    pub base_recovery: f64,
+    pub best_recovery: f64,
+    pub trips: usize,
+    pub history: Vec<f64>,
+    pub files: Vec<LineFile>,
+    pub error: Option<String>,
 }
 
 pub struct ServerState {
@@ -149,13 +160,8 @@ fn render_fragment(state: &ServerState, query: &str) -> String {
     report::render_body(&summary, &example, &sim, &res, &now_utc_string())
 }
 
-/// Lanza la optimización de una línea en un hilo aparte (si no hay otra en curso).
-fn start_optimization(state: &ServerState, query: &str) -> String {
-    let q = parse_query(query);
-    let line = q.get("line").cloned().unwrap_or_default();
-    if line.is_empty() || !state.lines.contains(&line) {
-        return "{\"started\":false,\"reason\":\"línia no vàlida\"}".into();
-    }
+/// Lanza la optimización del SISTEMA en un hilo aparte (si no hay otra en curso).
+fn start_optimization(state: &ServerState, _query: &str) -> String {
     {
         let mut job = state.opt.lock().unwrap();
         if job.running {
@@ -163,21 +169,18 @@ fn start_optimization(state: &ServerState, query: &str) -> String {
         }
         *job = OptJob {
             running: true,
-            line: line.clone(),
-            total: SearchConfig::default().iters,
+            total: SystemSearch::default().iters,
             ..Default::default()
         };
     }
-
     let net = state.net.clone();
     let opt = state.opt.clone();
-    std::thread::spawn(move || run_optimization(net, opt, line));
+    std::thread::spawn(move || run_optimization(net, opt));
     "{\"started\":true}".into()
 }
 
-fn run_optimization(net: Arc<Network>, opt: Arc<Mutex<OptJob>>, line: String) {
-    let service_id = net.dominant_service().unwrap_or_default();
-    let sc = SearchConfig::default();
+fn run_optimization(net: Arc<Network>, opt: Arc<Mutex<OptJob>>) {
+    let sc = SystemSearch::default();
     let w = PotentialWeights::default();
 
     let job = opt.clone();
@@ -192,31 +195,33 @@ fn run_optimization(net: Arc<Network>, opt: Arc<Mutex<OptJob>>, line: String) {
         j.history.push(best);
     };
 
-    let res = optimizer::optimize_line_cb(&net, &line, &service_id, sc, w, &cb);
+    let res = optimizer::optimize_system(&net, sc, w, &cb);
 
     let mut j = opt.lock().unwrap();
     match res {
         Some(r) => {
+            let service_id = net.dominant_service().unwrap_or_default();
             let dir = std::path::Path::new("report").join("optimized");
-            let csv = crate::exporter::export_line_csv(&net, &r, &dir)
-                .ok()
-                .map(|p| file_url(&p))
-                .unwrap_or_default();
-            let pdf = crate::exporter::export_line_pdf(&net, &r, &dir)
-                .ok()
-                .map(|p| file_url(&p))
-                .unwrap_or_default();
+            let files = crate::exporter::export_system(&net, &r, &service_id, sc.window, &dir);
             j.base_v = r.base_v;
             j.best_v = r.best_v;
-            j.delta_pct = if r.base_v.abs() > 1e-9 {
-                (r.base_v - r.best_v) / r.base_v * 100.0
-            } else {
-                0.0
-            };
-            j.csv = csv;
-            j.pdf = pdf;
+            j.delta_pct = r.delta_pct;
+            j.base_delay = r.base_delay;
+            j.best_delay = r.best_delay;
+            j.base_recovery = r.base_recovery_min;
+            j.best_recovery = r.best_recovery_min;
+            j.trips = r.trips;
+            j.files = files
+                .into_iter()
+                .map(|(line, csv, pdf)| LineFile {
+                    offset_min: r.offsets.get(&line).copied().unwrap_or(0) / 60,
+                    line,
+                    csv: file_url(&csv),
+                    pdf: file_url(&pdf),
+                })
+                .collect();
         }
-        None => j.error = Some("La línia no té prou viatges a la finestra.".into()),
+        None => j.error = Some("No hi ha prou trens per optimitzar.".into()),
     }
     j.running = false;
     j.done = true;

@@ -65,9 +65,14 @@ async fn main() {
     let load_ms = t0.elapsed().as_secs_f64() * 1000.0;
     println!("✓ Càrrega completada en {:.1} ms\n", load_ms);
 
-    // Modo optimizador: `cargo run --release -- optimize [R1 R4 ...]`
+    // Modo optimizador del SISTEMA: `cargo run --release -- optimize`
     if std::env::args().any(|a| a == "optimize" || a == "--optimize") {
-        run_optimizer(&net);
+        run_system_optimizer(&net);
+        return;
+    }
+    // Modo optimizador por LÍNEA (avanzado): `cargo run --release -- optimize-line R1 R4`
+    if std::env::args().any(|a| a == "optimize-line") {
+        run_line_optimizer(&net);
         return;
     }
 
@@ -124,7 +129,50 @@ async fn main() {
 // Modo optimizador de horarios
 // --------------------------------------------------------------------------
 
-fn run_optimizer(net: &Network) {
+/// Optimización del SISTEMA completo (todas las líneas, día laborable, incidencias).
+fn run_system_optimizer(net: &Network) {
+    use optimizer::SystemSearch;
+    let sc = SystemSearch::default();
+    let w = PotentialWeights::default();
+
+    println!("┌─ OPTIMITZACIÓ DEL SISTEMA (Recuit Simulat + Monte Carlo · rayon) ─┐");
+    println!(
+        "  Dia laborable {}–{}  ·  {} iteracions × {} sims (× {} incidències c/u)",
+        fmt_hms(sc.window.0), fmt_hms(sc.window.1), sc.iters, sc.mc_runs, sc.incidents_per_run
+    );
+    println!("  Sistema SENCER: es coordinen totes les línies (conflictes entre línies).");
+    println!("  Física estricta: cantons per blocs, vía única (testigo), andanes reals, sense bus.");
+    println!("└──────────────────────────────────────────────────────────────────┘");
+
+    let total = sc.iters;
+    let progress = move |it: usize, cur: f64, best: f64| {
+        if it == 0 || it % 20 == 0 || it == total {
+            println!("   iter {:>4}/{}  ·  V actual {:>10.1}  ·  millor {:>10.1}", it, total, cur, best);
+        }
+    };
+
+    let t0 = Instant::now();
+    let result = optimizer::optimize_system(net, sc, w, &progress);
+    let secs = t0.elapsed().as_secs_f64();
+
+    let Some(result) = result else {
+        eprintln!("✗ No hi ha prou trens per optimitzar.");
+        return;
+    };
+    exporter::print_system_comparison(&result);
+
+    let service_id = net.dominant_service().unwrap_or_default();
+    let dir = Path::new("report").join("optimized");
+    println!("\n  Exportant horaris optimitzats (CSV + PDF) per línia a {}\\ …", dir.display());
+    let files = exporter::export_system(net, &result, &service_id, sc.window, &dir);
+    for (line, _csv, pdf) in &files {
+        println!("   ✓ {:<4} → {}", line, pdf.file_name().unwrap().to_string_lossy());
+    }
+    println!("\n✓ Optimització del sistema completada en {:.1} s.", secs);
+}
+
+/// Optimización por LÍNEA (modo avanzado; el problema real es el sistema entero).
+fn run_line_optimizer(net: &Network) {
     let service_id = match net.dominant_service() {
         Some(s) => s,
         None => {

@@ -2,9 +2,11 @@
 
 pub mod potential;
 pub mod search;
+pub mod system;
 
 pub use potential::PotentialWeights;
-pub use search::{optimize_line, optimize_line_cb, LineOptResult, SearchConfig};
+pub use search::{optimize_line, LineOptResult, SearchConfig};
+pub use system::{optimize_system, SystemResult, SystemSearch};
 
 use crate::gtfs_loader::Network;
 use rayon::prelude::*;
