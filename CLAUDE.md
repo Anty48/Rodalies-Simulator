@@ -22,9 +22,10 @@ $env:Path = "$env:USERPROFILE\.cargo\bin;$env:Path"; & cargo <cmd>
 
 The binary reads `stops.txt`, `routes.txt`, `trips.txt`, `stop_times.txt` from `./data/gtfs`
 and **exits if the folder or any file is missing**. `data/` and `fomento_transit/` are
-gitignored (external data). To (re)generate `./data/gtfs`, place the national GTFS feed in
-`./fomento_transit/` and run `bash scripts/prep_gtfs.sh` — it filters the feed to Rodalies
-de Catalunya (`route_short_name` starting with `R`).
+gitignored (external data; the national feed and other raw sources live under `./raw/`).
+To (re)generate `./data/gtfs`, place the national GTFS feed in `./raw/fomento_transit/` and
+run `bash scripts/prep_gtfs.sh` — it filters the feed to Rodalies de Catalunya
+(`route_short_name` starting with `R`).
 
 ## Architecture
 

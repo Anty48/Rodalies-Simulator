@@ -56,6 +56,8 @@ src/
   simulation_engine.rs   # Motor de eventos discretos + señalización + incidencias
 scripts/
   prep_gtfs.sh           # Filtra un feed GTFS nacional a Rodalies de Catalunya
+data/gtfs/               # GTFS de Rodalies que lee el simulador (generado, no versionado)
+raw/                     # Feed GTFS nacional y fuentes crudas de terceros (no versionado)
 ```
 
 ## Dependencias
@@ -70,7 +72,7 @@ scripts/
 El simulador lee `stops.txt`, `routes.txt`, `trips.txt` y `stop_times.txt` de
 `./data/gtfs`. Estos archivos **no se versionan** (son datos externos). Para generarlos a
 partir del feed GTFS público de Cercanías/Rodalies (p. ej. el del Ministerio de
-Transportes), coloca el feed nacional en `./fomento_transit/` y ejecuta:
+Transportes), coloca el feed nacional en `./raw/fomento_transit/` y ejecuta:
 
 ```bash
 bash scripts/prep_gtfs.sh

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 cd "C:/Projects/Rod4lia 2.0"
-SRC=fomento_transit
+SRC=raw/fomento_transit
 OUT=data/gtfs
 TMP="$(mktemp -d)"
 mkdir -p "$OUT"

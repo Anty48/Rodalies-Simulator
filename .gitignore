@@ -2,17 +2,11 @@
 /target
 **/*.rs.bk
 
-# --- Datos GTFS y fuentes crudas (externas, no se versionan) ---
+# --- Datos externos (no se versionan) ---
+# /data/ = GTFS de Rodalies generado por scripts/prep_gtfs.sh
+# /raw/  = feed GTFS nacional y fuentes crudas de terceros
 /data/
-/fomento_transit/
-*.zip
-*.xlsx
-*.pb
-
-# Fuentes de referencia locales (grandes / de terceros)
-estaciones.csv
-informacion-trenes.csv
-listado-estaciones-rodalies-barcelona.csv
+/raw/
 
 # IDE / SO
 .idea/
