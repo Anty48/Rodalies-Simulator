@@ -18,6 +18,8 @@ $env:Path = "$env:USERPROFILE\.cargo\bin;$env:Path"; & cargo <cmd>
   starts an interactive web server on http://127.0.0.1:8080 (blocks until Ctrl+C).
   `-- --static` = write+open the offline HTML and exit; `-- --no-open` = don't open a browser
   (use for CI/tests). `run.bat` is the double-click launcher.
+- Optimize timetables: `cargo run --release -- optimize [R1 R4 …]` runs simulated annealing
+  and writes `report/optimized/R*_optimized.csv` + a console comparison. No line args = top-4.
 - Tests: `cargo test` · single test: `cargo test dwell_grows_with_delay`
   (unit tests live in `#[cfg(test)]` modules inside `src/passenger_model.rs`)
 - Manual server check: run with `--no-open`, then `curl http://127.0.0.1:8080/api/render?block=12&delay=8`
@@ -62,6 +64,26 @@ runtime — there is no hardcoded map. Data flows in one direction: GTFS → `Ne
     `BlockSegment` (by station name) and `BlockSegmentById` (by stop_id, exact).
   - **Stability metric**: samples network total/mean delay each minute (`Sample`), reports
     peak accumulated delay and the recovery time back below the equilibrium threshold.
+
+- **`signaling.rs`** — pure three-aspect block logic (`Aspect` Green/Yellow/Red, `Signals`).
+  Green = nominal; Yellow (destination platform occupied) = run time × `yellow_slowdown`; Red
+  (canton occupied) = the engine holds the train. The engine calls it when `strict_signaling`
+  is on (capacity 1 per canton and platform).
+
+- **`optimizer/`** — timetable optimization. `potential.rs`: `V(H)` = regularity (peak-weighted
+  headway std) + passenger-weighted delay (timeline integral) + conflict penalty (`held_events`).
+  `search.rs`: `optimize_line` runs simulated annealing over per-trip departure offsets (±5 min);
+  each candidate is scored by the mean `V` over a FIXED set of Monte-Carlo incidents evaluated in
+  parallel with rayon, using the engine in `strict_signaling` + `line_filter` + `offsets` mode.
+  `mod.rs::optimize_lines` parallelizes across lines. Conflicts count distinct red stops (a
+  `waiting` flag on `TrainRt`), not every 10s retry.
+
+- **`exporter.rs`** — writes `report/optimized/<LINE>_optimized.csv` and the console comparison.
+
+- **`map.rs`** — `network_map_svg` projects stations from lat/lon (equirectangular, cos-lat
+  corrected), draws cantons, and animates a sample of trains along their real routes with SMIL
+  `animateMotion` (keyTimes from the schedule) — no JS, works in the static file. Returned via
+  `SimView.map_svg`.
 
 - **`scenario.rs`** — the single source of truth for turning parameters (`SimParams`:
   window, line filter, block/delay minutes, platform capacity, min block headway, stochastic

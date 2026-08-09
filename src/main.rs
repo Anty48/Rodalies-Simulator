@@ -7,11 +7,15 @@
 //!   * `--static`: solo escribe y abre el dashboard HTML (offline, sin servidor).
 //!   * `--no-open`: no abre el navegador automáticamente.
 
+mod exporter;
 mod gtfs_loader;
+mod map;
+mod optimizer;
 mod passenger_model;
 mod report;
 mod scenario;
 mod server;
+mod signaling;
 mod simulation_engine;
 
 use std::path::Path;
@@ -19,6 +23,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use gtfs_loader::{fmt_hms, Network};
+use optimizer::{PotentialWeights, SearchConfig};
 use report::{ExampleView, ResView, SimView, SummaryView};
 use scenario::SimParams;
 
@@ -58,6 +63,12 @@ async fn main() {
     };
     let load_ms = t0.elapsed().as_secs_f64() * 1000.0;
     println!("✓ Càrrega completada en {:.1} ms\n", load_ms);
+
+    // Modo optimizador: `cargo run --release -- optimize [R1 R4 ...]`
+    if std::env::args().any(|a| a == "optimize" || a == "--optimize") {
+        run_optimizer(&net);
+        return;
+    }
 
     // 3. Construir las vistas (con parámetros por defecto) y volcarlas a consola.
     let params = SimParams::default();
@@ -105,6 +116,77 @@ async fn main() {
         }
         std::process::exit(1);
     }
+}
+
+// --------------------------------------------------------------------------
+// Modo optimizador de horarios
+// --------------------------------------------------------------------------
+
+fn run_optimizer(net: &Network) {
+    let service_id = match net.dominant_service() {
+        Some(s) => s,
+        None => {
+            eprintln!("✗ No hi ha cap servei per optimitzar.");
+            return;
+        }
+    };
+
+    // Líneas pedidas por CLI (las que empiezan por 'R'), o un conjunto por defecto.
+    let available = scenario::distinct_lines(net);
+    let requested: Vec<String> = std::env::args()
+        .filter(|a| a.len() >= 2 && a.starts_with('R') && a.chars().nth(1).unwrap().is_ascii_digit())
+        .filter(|a| available.contains(a))
+        .collect();
+    let lines: Vec<String> = if !requested.is_empty() {
+        requested
+    } else {
+        // Por defecto, las 4 líneas con más servicios.
+        available.into_iter().take(4).collect()
+    };
+
+    let sc = SearchConfig::default();
+    let w = PotentialWeights::default();
+
+    println!("┌─ OPTIMITZACIÓ DE HORARIS (Recuit Simulat + Monte Carlo · rayon) ─┐");
+    println!(
+        "  Línies: {}  ·  finestra {}–{}  ·  {} iteracions × {} sims MC  ·  offset ±{} min",
+        lines.join(", "),
+        fmt_hms(sc.window.0),
+        fmt_hms(sc.window.1),
+        sc.iters,
+        sc.mc_runs,
+        sc.max_offset_min
+    );
+    println!("  Física: senyalització estricta per cantons (capacitat 1, groc/vermell)");
+    println!("  service_id dominant: {}", service_id);
+    println!("└─────────────────────────────────────────────────────────────────┘");
+
+    let t0 = Instant::now();
+    let results = optimizer::optimize_lines(net, &lines, &service_id, sc, w);
+    let secs = t0.elapsed().as_secs_f64();
+
+    if results.is_empty() {
+        eprintln!("✗ Cap línia amb prou viatges a la finestra per optimitzar.");
+        return;
+    }
+
+    exporter::print_comparison(&results);
+
+    let dir = Path::new("report").join("optimized");
+    println!("\n  Exportant taules d'horaris optimitzades a {}\\ …", dir.display());
+    for r in &results {
+        match exporter::export_line_csv(net, r, &dir) {
+            Ok(p) => println!(
+                "   ✓ {:<4} → {}  ({} viatges, {} amb ajust)",
+                r.line,
+                p.file_name().unwrap().to_string_lossy(),
+                r.n_trips,
+                r.offsets.len()
+            ),
+            Err(e) => eprintln!("   ✗ {}: {}", r.line, e),
+        }
+    }
+    println!("\n✓ Optimització completada en {:.1} s.", secs);
 }
 
 // --------------------------------------------------------------------------

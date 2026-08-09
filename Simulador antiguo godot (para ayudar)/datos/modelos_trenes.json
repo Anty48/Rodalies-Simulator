@@ -1,0 +1,6 @@
+{
+  "447": { "tipo": "Monopiso",  "capacidad": 600,  "velocidad_max": 120, "aceleracion": "Alta" },
+  "465": { "tipo": "Civia",     "capacidad": 800,  "velocidad_max": 120, "aceleracion": "Alta" },
+  "450": { "tipo": "Dos Pisos", "capacidad": 1860, "velocidad_max": 140, "aceleracion": "Baja", "lineas_permitidas": ["R2", "R2_NORD", "R2_SUD"] },
+  "490": { "tipo": "Intercity", "capacidad": 220,  "velocidad_max": 160, "aceleracion": "Media" }
+}

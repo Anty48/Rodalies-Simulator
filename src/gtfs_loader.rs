@@ -27,6 +27,10 @@ struct RawStop {
     stop_name: String,
     #[serde(default)]
     parent_station: Option<String>,
+    #[serde(default)]
+    stop_lat: Option<String>,
+    #[serde(default)]
+    stop_lon: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -69,6 +73,8 @@ pub struct StopNode {
     pub stop_id: String,
     pub stop_name: String,
     pub parent_station: Option<String>,
+    pub lat: Option<f64>,
+    pub lon: Option<f64>,
 }
 
 /// Arista dirigida = cantón/sección de vía entre dos paradas consecutivas.
@@ -279,6 +285,8 @@ pub fn load(dir: &Path) -> Result<Network, Box<dyn Error>> {
                     .parent_station
                     .map(|p| p.trim().to_string())
                     .filter(|p| !p.is_empty()),
+                lat: s.stop_lat.and_then(|v| v.trim().parse().ok()),
+                lon: s.stop_lon.and_then(|v| v.trim().parse().ok()),
             });
             node_of_stop.insert(stop_id, node);
         }

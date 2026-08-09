@@ -56,6 +56,8 @@ pub struct SimView {
     pub peak_mean: f64,
     pub recovery: Option<String>,
     pub timeline: Vec<Sample>,
+    /// SVG del mapa geográfico de la red con trenes animados.
+    pub map_svg: String,
 }
 
 pub struct ResRow {
@@ -235,6 +237,7 @@ th { color:var(--muted); font-weight:600; font-size:.78rem; text-transform:upper
 td.num { text-align:right; }
 .pill { background:var(--panel2); border:1px solid var(--border); border-radius:20px; padding:1px 9px; font-size:.8rem; }
 .chart { width:100%; height:auto; display:block; }
+.map { width:100%; height:auto; display:block; background:var(--bg); border:1px solid var(--border); border-radius:10px; }
 .grid { stroke:var(--border); stroke-width:1; }
 .axis { fill:var(--muted); font-size:12px; font-family:monospace; }
 .bar-row { display:flex; align-items:center; gap:10px; margin:6px 0; font-size:.85rem; }
@@ -461,11 +464,14 @@ pub fn render_body(
     // --- Log CTC ---
     let mut log_html = String::new();
     for e in &sim.events {
-        let (cls, badge) = match e.kind.as_str() {
-            "INCIDÈNCIA" => ("ev-inc", "⛔"),
-            "ARRIBA" => ("ev-arr", "▼"),
-            "SURT" => ("ev-dep", "▲"),
-            _ => ("", "·"),
+        let (cls, badge) = if e.kind == "INCIDÈNCIA" {
+            ("ev-inc", "⛔")
+        } else if e.kind == "ARRIBA" {
+            ("ev-arr", "▼")
+        } else if e.kind.starts_with("SURT") {
+            ("ev-dep", "▲")
+        } else {
+            ("", "·")
         };
         let late = if e.delay >= 120 { " late" } else if e.delay > 0 { " warn" } else { "" };
         if e.kind == "INCIDÈNCIA" {
@@ -549,6 +555,12 @@ pub fn render_body(
   </div>
 
   <section class="card">
+    <h2>Mapa de la xarxa · trens en circulació</h2>
+    <p class="muted">Estacions i cantons projectats des de lat/lon del GTFS; els punts de color són trens movent-se per la seva ruta real (bucle de la finestra simulada).</p>
+    {map_svg}
+  </section>
+
+  <section class="card">
     <h2>Retard acumulat de la xarxa</h2>
     {chart}
   </section>
@@ -582,6 +594,7 @@ pub fn render_body(
         metrics_html = metrics_html,
         key_stations = key_stations,
         inc_html = inc_html,
+        map_svg = sim.map_svg,
         chart = chart,
         log_html = log_html,
         segment = esc(&res.segment),

@@ -53,8 +53,13 @@ src/
   main.rs                # Punto de entrada: carga, resumen, simulación CTC, resiliencia
   gtfs_loader.rs         # Parser GTFS -> grafo petgraph + servicios (carga dinámica)
   passenger_model.rs     # Dwell time en función de pasajeros y retraso
+  signaling.rs           # Sistema de señalización por cantones (verde/amarillo/rojo, cap. 1)
   simulation_engine.rs   # Motor de eventos discretos + señalización + incidencias
   scenario.rs            # Constructores de "vistas" parametrizados (consola y web)
+  optimizer/potential.rs # Función de potencial V(H)
+  optimizer/search.rs    # Recocido simulado + Monte Carlo paralelo (rayon)
+  exporter.rs            # Exporta horarios optimizados a CSV + comparativa
+  map.rs                 # Mapa SVG de la red (lat/lon) con trenes animados
   report.rs              # Renderiza el dashboard HTML (estático e interactivo)
   server.rs              # Servidor web local (tokio) para la UI interactiva
 run.bat                  # Lanzador de doble clic (Windows): compila, ejecuta y abre la UI
@@ -99,10 +104,32 @@ y **abre un dashboard web interactivo** en el navegador.
 Por línea de comandos:
 
 ```bash
-cargo run --release              # imprime resumen, escribe report/dashboard.html y arranca el servidor web
-cargo run --release -- --static  # solo genera y abre el dashboard HTML (offline, sin servidor)
-cargo run --release -- --no-open # no abre el navegador automáticamente
+cargo run --release                  # imprime resumen, escribe report/dashboard.html y arranca el servidor web
+cargo run --release -- --static      # solo genera y abre el dashboard HTML (offline, sin servidor)
+cargo run --release -- --no-open     # no abre el navegador automáticamente
+cargo run --release -- optimize R1 R4  # OPTIMIZA los horarios de esas líneas (ver abajo)
 ```
+
+### Motor de optimización de horarios
+
+`cargo run --release -- optimize [R1 R2N R4 …]` reorienta el proyecto como **motor de
+optimización por minimización de una función de potencial** V(H):
+
+- **Física estricta** (`signaling.rs`): señalización por cantones con los tres aspectos
+  (verde = velocidad nominal; amarillo = anden de destino ocupado → ralentiza; rojo =
+  cantón ocupado → parada y retraso), **capacidad 1** por cantón y por andén.
+- **Potencial** `V(H)` (`optimizer/potential.rs`): regularidad de frecuencias (con
+  penalización **triple en hora punta** 07:00–09:30), retraso ponderado por pasajeros, y
+  penalización severa por conflicto de vía.
+- **Búsqueda** (`optimizer/search.rs`): **recocido simulado** que prueba variaciones de
+  ±1..±5 min en la salida de origen; cada candidato se evalúa con **N simulaciones Monte
+  Carlo en paralelo (`rayon`)** inyectando incidencias aleatorias en puntos críticos
+  (Clot, Arc de Triomf…).
+- **Exportación** (`exporter.rs`): escribe `report/optimized/R*_optimized.csv` (hora de
+  salida/llegada por estación y tren) y una comparativa en consola: **V base vs
+  optimizado, tiempo de recuperación y reducción de retraso por pasajero**.
+
+Ejemplo real (una ejecución): R1 −80 % de V (conflictos 15→2), R2N −58 % (3→0).
 
 ### UI interactiva (servidor web)
 
@@ -113,6 +140,10 @@ separación mínima de bloque y pasajeros estocásticos. Al pulsar **Simular** v
 correr la simulación en el servidor y actualiza el dashboard (gráfico SVG del retraso, log
 CTC coloreado, métricas de estabilidad y tabla de resiliencia) sin recompilar. Ctrl+C para
 parar el servidor.
+
+El dashboard incluye además un **mapa de la red** (SVG) con las estaciones y cantones
+proyectados desde lat/lon del GTFS y **trenes moviéndose** por sus rutas reales (animación
+SMIL, sin JavaScript).
 
 ### Dashboard estático (offline)
 

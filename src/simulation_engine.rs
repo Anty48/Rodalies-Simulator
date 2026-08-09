@@ -16,6 +16,7 @@ use rand::SeedableRng;
 
 use crate::gtfs_loader::{fmt_hms, Network};
 use crate::passenger_model::PassengerModel;
+use crate::signaling::{Aspect, Signals};
 
 /// Granularidad de reintento cuando un tren queda retenido por señal (segundos).
 const RETRY_STEP: u32 = 10;
@@ -42,6 +43,15 @@ pub struct SimConfig {
     pub seed: Option<u64>,
     /// Si es `Some`, solo se simulan los servicios de esa línea (route_short_name).
     pub line_filter: Option<String>,
+    /// Señalización estricta: capacidad 1 por cantón y por andén (block system).
+    /// Cuando es `true` ignora `platform_capacity`/`min_block_headway_secs` y aplica
+    /// el aspecto amarillo (ralentización) de `signals`.
+    pub strict_signaling: bool,
+    /// Parámetros de los tres aspectos (verde/amarillo/rojo).
+    pub signals: Signals,
+    /// Desplazamientos (segundos) por `trip_id` respecto al horario GTFS base.
+    /// Los usa el optimizador para probar variaciones de la hora de salida.
+    pub offsets: std::sync::Arc<std::collections::HashMap<String, i64>>,
 }
 
 impl Default for SimConfig {
@@ -62,6 +72,9 @@ impl Default for SimConfig {
             ],
             seed: None,
             line_filter: None,
+            strict_signaling: false,
+            signals: Signals::default(),
+            offsets: std::sync::Arc::new(std::collections::HashMap::new()),
         }
     }
 }
@@ -135,6 +148,9 @@ struct TrainRt {
     holding_edge: Option<(NodeIndex, NodeIndex)>,
     /// Incidencia de retraso ya aplicada (para no repetirla).
     delay_incident_done: bool,
+    /// `true` mientras está retenido por señal (para contar conflictos distintos, no
+    /// cada reintento de 10 s).
+    waiting: bool,
 }
 
 // --------------------------------------------------------------------------
@@ -241,6 +257,20 @@ impl<'a> Simulator<'a> {
         // RNG opcional para la generación probabilística de pasajeros.
         let mut rng = cfg.seed.map(StdRng::seed_from_u64);
 
+        // Desplazamiento horario (segundos) del trip respecto al GTFS base.
+        let off = |idx: usize| -> i64 {
+            cfg.offsets
+                .get(&net.services[idx].trip_id)
+                .copied()
+                .unwrap_or(0)
+        };
+        // Capacidad efectiva de andén (1 en modo estricto).
+        let plat_cap: usize = if cfg.strict_signaling {
+            1
+        } else {
+            cfg.platform_capacity.max(1) as usize
+        };
+
         let mut trains: HashMap<usize, TrainRt> = HashMap::new();
         let mut heap: BinaryHeap<Reverse<Event>> = BinaryHeap::new();
 
@@ -255,9 +285,10 @@ impl<'a> Simulator<'a> {
                     track: None,
                     holding_edge: None,
                     delay_incident_done: false,
+                    waiting: false,
                 },
             );
-            let t0 = net.services[idx].schedule[0].arrival_sec;
+            let t0 = (net.services[idx].schedule[0].arrival_sec as i64 + off(idx)).max(0) as u32;
             heap.push(Reverse(Event {
                 time: t0,
                 trip_idx: idx,
@@ -377,15 +408,16 @@ impl<'a> Simulator<'a> {
                     };
 
                     // Señalización de andén: ¿hay vía libre?
-                    let slots = node_tracks
-                        .entry(node)
-                        .or_insert_with(|| vec![None; cfg.platform_capacity.max(1) as usize]);
+                    let slots = node_tracks.entry(node).or_insert_with(|| vec![None; plat_cap]);
                     let free = slots.iter().position(|s| s.is_none());
                     let Some(track) = free else {
                         // Andén saturado: el tren espera en el cantón anterior,
                         // acumulando retraso segundo a segundo.
-                        held_events += 1;
                         if let Some(t) = trains.get_mut(&ev.trip_idx) {
+                            if !t.waiting {
+                                held_events += 1;
+                                t.waiting = true;
+                            }
                             t.delay += RETRY_STEP as i64;
                         }
                         heap.push(Reverse(Event {
@@ -412,10 +444,11 @@ impl<'a> Simulator<'a> {
                     {
                         let t = trains.get_mut(&ev.trip_idx).unwrap();
                         t.active = true;
+                        t.waiting = false;
                         t.at_node = Some(node);
                         t.track = Some(track);
                         t.holding_edge = None;
-                        t.delay = ev.time as i64 - stop.arrival_sec as i64;
+                        t.delay = ev.time as i64 - (stop.arrival_sec as i64 + off(ev.trip_idx));
 
                         // Incidencia de retraso puntual.
                         if !t.delay_incident_done {
@@ -508,14 +541,22 @@ impl<'a> Simulator<'a> {
                         .edge_between(&stop.stop_id, &next.stop_id)
                         .map(|e| e.capacity as u32)
                         .unwrap_or(1);
-                    let eff_cap =
-                        base_cap.max((run / cfg.min_block_headway_secs.max(1)).max(1));
+                    // En modo estricto cada cantón admite un único tren (capacidad 1);
+                    // si no, se estima por bloques de señalización dentro de la sección.
+                    let eff_cap = if cfg.strict_signaling {
+                        1
+                    } else {
+                        base_cap.max((run / cfg.min_block_headway_secs.max(1)).max(1))
+                    };
 
                     // ¿Cantón bloqueado por incidencia?
                     if let Some(&(from, until)) = blocked.get(&(na, nb)) {
                         if ev.time >= from && ev.time < until {
-                            held_events += 1;
                             if let Some(t) = trains.get_mut(&ev.trip_idx) {
+                                if !t.waiting {
+                                    held_events += 1;
+                                    t.waiting = true;
+                                }
                                 t.delay += RETRY_STEP as i64;
                             }
                             heap.push(Reverse(Event {
@@ -526,11 +567,14 @@ impl<'a> Simulator<'a> {
                         }
                     }
 
-                    // Señalización de cantón: ¿quedan bloques libres en la sección?
+                    // Señalización de cantón (aspecto ROJO): ¿quedan bloques libres?
                     let occ = edge_busy.get(&(na, nb)).copied().unwrap_or(0);
                     if occ >= eff_cap {
-                        held_events += 1;
                         if let Some(t) = trains.get_mut(&ev.trip_idx) {
+                            if !t.waiting {
+                                held_events += 1;
+                                t.waiting = true;
+                            }
                             t.delay += RETRY_STEP as i64;
                         }
                         heap.push(Reverse(Event {
@@ -549,13 +593,31 @@ impl<'a> Simulator<'a> {
                     }
                     *edge_busy.entry((na, nb)).or_insert(0) += 1;
 
+                    // Aspecto de señal: verde si la andana de destino está libre,
+                    // amarillo si está ocupada (ralentiza para poder frenar a temps).
+                    let platform_ahead_free = node_tracks
+                        .get(&nb)
+                        .map(|s| s.iter().any(|x| x.is_none()))
+                        .unwrap_or(true);
+                    let aspect = Signals::aspect(true, platform_ahead_free);
+                    let eff_run = if cfg.strict_signaling {
+                        cfg.signals.traversal_time(run, aspect)
+                    } else {
+                        run
+                    };
+
                     if self.is_key_station(na) {
                         let d = trains.get(&ev.trip_idx).map(|t| t.delay).unwrap_or(0);
+                        let kind = if aspect == Aspect::Yellow && cfg.strict_signaling {
+                            "SURT⚠"
+                        } else {
+                            "SURT"
+                        };
                         events.push(CtcEvent {
                             time: ev.time,
                             train: svc.train_number.clone(),
                             line: svc.route_short_name.clone(),
-                            kind: "SURT".into(),
+                            kind: kind.into(),
                             station: net.graph[na].stop_name.clone(),
                             track: track.map(|t| t + 1).unwrap_or(0).to_string(),
                             delay: d,
@@ -566,10 +628,11 @@ impl<'a> Simulator<'a> {
                         t.at_node = None;
                         t.track = None;
                         t.holding_edge = Some((na, nb));
+                        t.waiting = false;
                     }
 
                     heap.push(Reverse(Event {
-                        time: ev.time + run,
+                        time: ev.time + eff_run,
                         trip_idx: ev.trip_idx,
                         stop_idx: ev.stop_idx + 1,
                         kind: EventKind::Arrive,

@@ -282,6 +282,7 @@ pub fn sim_view(net: &Network, p: &SimParams) -> SimView {
         peak_mean,
         recovery,
         timeline: res.timeline.clone(),
+        map_svg: crate::map::network_map_svg(net, p),
     }
 }
 
