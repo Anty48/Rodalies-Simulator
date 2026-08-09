@@ -1,0 +1,10 @@
+{
+  "R1": { "color": "#3A99D4", "descripcion": "Azul Claro", "terminales": ["HOSPITALET", "MACANET"] },
+  "R2": { "color": "#48A647", "descripcion": "Verde (tram central Castelldefels - Granollers Centre)", "terminales": ["CASTELLDEFELS", "GRANOLLERS"] },
+  "R2_NORD": { "color": "#7DC36D", "descripcion": "Verde Clar (R2 Nord: Aeroport - Maçanet-Massanes per Granollers)", "terminales": ["AEROPORT", "MACANET"] },
+  "R2_SUD": { "color": "#2E7D32", "descripcion": "Verde Fosc (R2 Sud: Sant Vicenç de Calders - Barcelona Estació de França per Vilanova)", "terminales": ["ST_VICENC", "EDF"] },
+  "R3": { "color": "#EC0021", "descripcion": "Rojo", "terminales": ["HOSPITALET", "LA_TOR_QUEROL"], "via_unica_desde": "MONTCADA_BIF" },
+  "R4": { "color": "#FFB21E", "descripcion": "Naranja", "terminales": ["ST_VICENC", "MANRESA"] },
+  "R7": { "color": "#DA91C0", "descripcion": "Rosa", "terminales": ["FABRA_PUIG", "CEDANYOLA_U"] },
+  "R8": { "color": "#9A2587", "descripcion": "Morado", "terminales": ["MARTORELL", "GRANOLLERS"] }
+}
