@@ -1,0 +1,21 @@
+# Rust (Cargo.lock SÍ se versiona: es un crate binario)
+/target
+**/*.rs.bk
+
+# --- Datos GTFS y fuentes crudas (externas, no se versionan) ---
+/data/
+/fomento_transit/
+*.zip
+*.xlsx
+*.pb
+
+# Fuentes de referencia locales (grandes / de terceros)
+estaciones.csv
+informacion-trenes.csv
+listado-estaciones-rodalies-barcelona.csv
+
+# IDE / SO
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db

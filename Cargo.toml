@@ -1,0 +1,18 @@
+[package]
+name = "rodalies-sim"
+version = "0.1.0"
+edition = "2021"
+description = "Simulador de tráfico ferroviario e incidencias hiperrealista para Rodalies de Barcelona, construido dinámicamente desde GTFS."
+license = "MIT"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+csv = "1"
+petgraph = "0.6"
+rayon = "1"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time"] }
+rand = "0.8"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
