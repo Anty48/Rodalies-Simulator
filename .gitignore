@@ -15,3 +15,6 @@
 .vscode/
 .DS_Store
 Thumbs.db
+
+# Simulador de referencia en Godot (material de consulta, no forma parte del crate)
+/Simulador antiguo godot (para ayudar)/
