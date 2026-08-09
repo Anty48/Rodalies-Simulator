@@ -7,9 +7,10 @@
 //! se calcula el potencial medio V(H). Se aceptan los cambios que reducen V(H) (o, con
 //! probabilidad decreciente, algunos que lo empeoran, para escapar de mínimos locales).
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
+use petgraph::graph::NodeIndex;
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 use rayon::prelude::*;
@@ -33,11 +34,11 @@ impl Default for SearchConfig {
     fn default() -> Self {
         SearchConfig {
             window: (6 * 3600, 10 * 3600),
-            iters: 120,
-            mc_runs: 6,
+            iters: 260,
+            mc_runs: 8,
             max_offset_min: 5,
             t0: 6.0,
-            cooling: 0.96,
+            cooling: 0.985,
             seed: 20260809,
         }
     }
@@ -75,11 +76,26 @@ pub fn optimize_line(
     sc: SearchConfig,
     w: PotentialWeights,
 ) -> Option<LineOptResult> {
+    optimize_line_cb(net, line, service_id, sc, w, &|_, _, _| {})
+}
+
+/// Como [`optimize_line`], con una función de progreso `(iteración, V_actual, V_mejor)`
+/// invocada en cada iteración (para la UI en vivo).
+pub fn optimize_line_cb(
+    net: &Network,
+    line: &str,
+    service_id: &str,
+    sc: SearchConfig,
+    w: PotentialWeights,
+    progress: &(dyn Fn(usize, f64, f64) + Sync),
+) -> Option<LineOptResult> {
     // Participantes: viajes de la línea en la ventana, ordenados por salida de origen.
+    // Solo trenes (los autobuses de sustitución no circulan por vía).
+    let single = Arc::new(crate::topology::single_track_pairs(net));
     let mut parts: Vec<(String, u32)> = net
         .services
         .iter()
-        .filter(|s| s.service_id == service_id && s.route_short_name == line)
+        .filter(|s| s.service_id == service_id && s.route_short_name == line && !s.is_bus)
         .filter_map(|s| {
             s.first_time().filter(|t| *t >= sc.window.0 && *t <= sc.window.1).map(|_| {
                 (s.trip_id.clone(), s.schedule[0].departure_sec)
@@ -120,7 +136,7 @@ pub fn optimize_line(
             .par_iter()
             .enumerate()
             .map(|(k, inc)| {
-                let sim = run_once(net, line, service_id, sc.window, &offsets, inc, k as u64);
+                let sim = run_once(net, line, service_id, sc.window, &offsets, &single, inc, k as u64);
                 let v = potential(&origin, &sim, &w);
                 let peak = sim.peak_total_delay as f64;
                 let rec = match sim.recovery_time {
@@ -149,8 +165,9 @@ pub fn optimize_line(
     let mut best = cur.clone();
     let mut e_best = e_cur;
     let mut temp = sc.t0;
+    progress(0, e_cur, e_best);
 
-    for _ in 0..sc.iters {
+    for it in 0..sc.iters {
         let mut cand = cur.clone();
         let j = rng.gen_range(0..n);
         let step = if rng.gen::<bool>() { 60 } else { -60 };
@@ -169,6 +186,7 @@ pub fn optimize_line(
             }
         }
         temp *= sc.cooling;
+        progress(it + 1, e_cur, e_best);
     }
 
     let best_eval = evaluate(&best);
@@ -195,12 +213,14 @@ pub fn optimize_line(
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 fn run_once(
     net: &Network,
     line: &str,
     service_id: &str,
     window: (u32, u32),
     offsets: &Arc<HashMap<String, i64>>,
+    single_track: &Arc<HashSet<(NodeIndex, NodeIndex)>>,
     incident: &Incident,
     seed: u64,
 ) -> crate::simulation_engine::SimResult {
@@ -209,6 +229,8 @@ fn run_once(
     cfg.end_sec = window.1;
     cfg.line_filter = Some(line.to_string());
     cfg.strict_signaling = true; // block system estricto (capacitat 1 + groc/vermell)
+    cfg.exclude_buses = true; // els autobusos no circulen per via
+    cfg.single_track = single_track.clone();
     cfg.seed = Some(1000 + seed);
     cfg.offsets = offsets.clone();
     let mut sim = Simulator::new(net, cfg);
@@ -231,6 +253,7 @@ fn build_mc_incidents(
     for s in net.services.iter().filter(|s| {
         s.service_id == service_id
             && s.route_short_name == line
+            && !s.is_bus
             && matches!(s.first_time(), Some(t) if t >= sc.window.0 && t <= sc.window.1)
     }) {
         for st in &s.schedule {
@@ -251,7 +274,7 @@ fn build_mc_incidents(
     let line_edges: Vec<(String, String)> = net
         .services
         .iter()
-        .filter(|s| s.service_id == service_id && s.route_short_name == line)
+        .filter(|s| s.service_id == service_id && s.route_short_name == line && !s.is_bus)
         .flat_map(|s| {
             s.schedule
                 .windows(2)

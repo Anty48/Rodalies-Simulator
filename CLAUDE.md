@@ -65,6 +65,11 @@ runtime — there is no hardcoded map. Data flows in one direction: GTFS → `Ne
   - **Stability metric**: samples network total/mean delay each minute (`Sample`), reports
     peak accumulated delay and the recovery time back below the equilibrium threshold.
 
+- **`topology.rs`** — operational data GTFS lacks: `platform_tracks(name)` (real track counts,
+  Sants 14…, default 2) and `single_track_pairs(net)` (undirected segments that are single-track;
+  configured in `SINGLE_TRACK`, e.g. R3 north of Montcada Bifurcació). Derived from public/Godot
+  reference data. Buses are `TrainService.is_bus` (GTFS `route_type==3`).
+
 - **`signaling.rs`** — pure three-aspect block logic (`Aspect` Green/Yellow/Red, `Signals`).
   Green = nominal; Yellow (destination platform occupied) = run time × `yellow_slowdown`; Red
   (canton occupied) = the engine holds the train. The engine calls it when `strict_signaling`
@@ -78,7 +83,10 @@ runtime — there is no hardcoded map. Data flows in one direction: GTFS → `Ne
   `mod.rs::optimize_lines` parallelizes across lines. Conflicts count distinct red stops (a
   `waiting` flag on `TrainRt`), not every 10s retry.
 
-- **`exporter.rs`** — writes `report/optimized/<LINE>_optimized.csv` and the console comparison.
+- **`exporter.rs`** — writes `report/optimized/<LINE>_optimized.csv`, a per-line **PDF**
+  timetable (`<LINE>_horari.pdf`, printpdf; stations×trains grid, paginated), and the console
+  comparison. Strict rail sim in the optimizer sets `strict_signaling` + `exclude_buses` +
+  `single_track` (from `topology`) and per-station platform capacity from `topology`.
 
 - **`map.rs`** — `network_map_svg` projects stations from lat/lon (equirectangular, cos-lat
   corrected), draws cantons, and animates a sample of trains along their real routes with SMIL
@@ -99,8 +107,11 @@ runtime — there is no hardcoded map. Data flows in one direction: GTFS → `Ne
   add a field to a `*View`, render it (otherwise dead-code warning).
 
 - **`server.rs`** — minimal tokio HTTP/1.1 server (GET only, `Connection: close`, localhost).
-  Routes: `/` (interactive page), `/api/render?…` (dashboard fragment for query params),
-  `/health`. Query params are parsed into `SimParams` (see `params_from_query`).
+  Routes: `/`, `/api/render?…`, `/health`, plus the optimizer: `/api/optimize/start?line=` (spawns
+  a std::thread running `optimize_line_cb`, progress written to `Arc<Mutex<OptJob>>`),
+  `/api/optimize/status` (live JSON: iter/total, base_v, best_v, history…), and
+  `/report/optimized/<file>` (serves generated CSV/PDF; response body is `Vec<u8>` for binaries).
+  The web `OPT_SCRIPT` polls status and draws the descending V(H) curve on a canvas.
 
 - **`main.rs`** — `#[tokio::main]`. Checks `./data/gtfs`, loads (timed in ms), builds the
   default `*View`s via `scenario`, prints them, writes the static dashboard, then either

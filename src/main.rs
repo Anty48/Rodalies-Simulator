@@ -17,6 +17,7 @@ mod scenario;
 mod server;
 mod signaling;
 mod simulation_engine;
+mod topology;
 
 use std::path::Path;
 use std::sync::Arc;
@@ -104,6 +105,7 @@ async fn main() {
         net: Arc::new(net),
         load_ms,
         lines,
+        opt: Arc::new(std::sync::Mutex::new(server::OptJob::default())),
     });
     let url = format!("http://127.0.0.1:{}", PORT);
     if !no_open {
@@ -173,17 +175,15 @@ fn run_optimizer(net: &Network) {
     exporter::print_comparison(&results);
 
     let dir = Path::new("report").join("optimized");
-    println!("\n  Exportant taules d'horaris optimitzades a {}\\ …", dir.display());
+    println!("\n  Exportant taules d'horaris optimitzades (CSV + PDF) a {}\\ …", dir.display());
     for r in &results {
         match exporter::export_line_csv(net, r, &dir) {
-            Ok(p) => println!(
-                "   ✓ {:<4} → {}  ({} viatges, {} amb ajust)",
-                r.line,
-                p.file_name().unwrap().to_string_lossy(),
-                r.n_trips,
-                r.offsets.len()
-            ),
-            Err(e) => eprintln!("   ✗ {}: {}", r.line, e),
+            Ok(p) => print!("   ✓ {:<4} → {}", r.line, p.file_name().unwrap().to_string_lossy()),
+            Err(e) => eprint!("   ✗ {} CSV: {}", r.line, e),
+        }
+        match exporter::export_line_pdf(net, r, &dir) {
+            Ok(p) => println!(" + {}  ({} viatges, {} amb ajust)", p.file_name().unwrap().to_string_lossy(), r.n_trips, r.offsets.len()),
+            Err(e) => println!("  (PDF error: {})", e),
         }
     }
     println!("\n✓ Optimització completada en {:.1} s.", secs);

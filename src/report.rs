@@ -278,6 +278,10 @@ footer { color:var(--muted); font-size:.8rem; text-align:center; padding-top:20p
   padding:11px 22px; font-size:.95rem; font-weight:700; cursor:pointer; box-shadow:0 3px 12px rgba(226,35,26,.3); }
 .btn:disabled { opacity:.6; cursor:progress; }
 #dashboard { transition:opacity .15s; }
+.optchart { width:100%; height:auto; display:block; background:var(--bg); border:1px solid var(--border); border-radius:8px; margin-top:12px; }
+.optdone { margin-top:12px; font-size:1rem; padding:12px 16px; background:var(--panel2); border:1px solid var(--border); border-radius:10px; }
+.optdone a { color:var(--accent2); font-weight:700; text-decoration:none; }
+.formula { font-family:'Cascadia Code',Consolas,monospace; background:var(--panel2); border:1px solid var(--border); border-radius:8px; padding:10px 14px; font-size:.85rem; overflow-x:auto; }
 </style>"#;
 
 const HEADER: &str = r#"<header class="top">
@@ -307,6 +311,63 @@ async function simulate(){
 }
 document.addEventListener('input',e=>{ const o=e.target.dataset&&e.target.dataset.out; if(o)$(o).textContent=e.target.value; });
 $('c_run').addEventListener('click',simulate);
+</script>"#;
+
+/// Panel del optimizador (persistente, fuera de #dashboard).
+fn optimizer_panel(lines: &[String]) -> String {
+    let opts: String = lines
+        .iter()
+        .enumerate()
+        .map(|(i, l)| {
+            let sel = if i == 0 { " selected" } else { "" };
+            format!("<option value=\"{0}\"{1}>{0}</option>", esc(l), sel)
+        })
+        .collect();
+    format!(
+        r#"<div class="card">
+    <h2>Optimitzador d'horaris · minimització del potencial V(H)</h2>
+    <div class="formula">V(H) = w_reg·<b>regularitat</b> de freqüències (×3 en punta 07:00–09:30) + w_delay·<b>retard ponderat per passatgers</b> + w_conf·<b>conflictes de via</b></div>
+    <p class="muted" style="margin-top:8px">Cerca per <b>recuit simulat</b> (offsets ±5 min a la sortida d'origen), avaluada amb <b>Monte Carlo en paral·lel (rayon)</b> injectant incidències a punts crítics. Física estricta: cantons de capacitat 1, aspectes verd/groc/vermell, vía única i sense autobusos de substitució.</p>
+    <div class="controls-grid">
+      <div class="field"><label>Línia a optimitzar</label><select id="o_line">{opts}</select></div>
+      <div class="field"><button class="btn" id="o_run">▶ Optimitzar</button></div>
+      <div class="field" style="grid-column:1/-1"><div id="o_status" class="muted">Preparat. Tria una línia i prem Optimitzar per veure baixar V(H) en viu.</div></div>
+    </div>
+    <canvas id="o_chart" width="920" height="180" class="optchart"></canvas>
+    <div id="o_result"></div>
+  </div>"#,
+        opts = opts
+    )
+}
+
+const OPT_SCRIPT: &str = r#"<script>
+(function(){
+ const $=id=>document.getElementById(id);
+ let timer=null;
+ function draw(h,base){ const c=$('o_chart'); if(!c)return; const ctx=c.getContext('2d'); const W=c.width,H=c.height,P=30;
+   ctx.clearRect(0,0,W,H); if(!h||!h.length)return;
+   let mx=base||h[0],mn=h[0]; for(const v of h){if(v>mx)mx=v;if(v<mn)mn=v;} if(base){if(base<mn)mn=base;if(base>mx)mx=base;} if(mx-mn<1e-6)mx=mn+1;
+   const x=i=>P+(W-2*P)*(h.length<2?1:i/(h.length-1)); const y=v=>P+(H-2*P)*(1-(v-mn)/(mx-mn));
+   ctx.strokeStyle='#2a333f';ctx.fillStyle='#8b98a5';ctx.font='11px monospace';ctx.lineWidth=1;
+   ctx.beginPath();ctx.moveTo(P,y(mx));ctx.lineTo(W-P,y(mx));ctx.stroke();ctx.fillText(mx.toFixed(0),2,y(mx)+4);
+   ctx.beginPath();ctx.moveTo(P,y(mn));ctx.lineTo(W-P,y(mn));ctx.stroke();ctx.fillText(mn.toFixed(0),2,y(mn)+4);
+   if(base){ctx.strokeStyle='#8b98a5';ctx.setLineDash([4,4]);ctx.beginPath();ctx.moveTo(P,y(base));ctx.lineTo(W-P,y(base));ctx.stroke();ctx.setLineDash([]);ctx.fillText('V inicial',W-P-52,y(base)-4);}
+   ctx.strokeStyle='#e2231a';ctx.lineWidth=2;ctx.beginPath();h.forEach((v,i)=>{i?ctx.lineTo(x(i),y(v)):ctx.moveTo(x(i),y(v));});ctx.stroke();
+ }
+ async function poll(){ let j; try{j=await (await fetch('/api/optimize/status')).json();}catch(e){return;}
+   draw(j.history,j.base_v);
+   if(j.running){ $('o_status').textContent='Optimitzant '+j.line+'… iteració '+j.iter+'/'+j.total+'  ·  V actual '+j.current_v.toFixed(1)+'  ·  millor '+j.best_v.toFixed(1); }
+   else if(j.done){ if(timer){clearInterval(timer);timer=null;} $('o_run').disabled=false;
+     if(j.error){ $('o_status').innerHTML='<span style="color:#f85149">⚠ '+j.error+'</span>'; }
+     else { $('o_status').innerHTML='<b style="color:#3fb950">✔ Optimització FINALITZADA</b> · línia '+j.line+' · '+j.total+' iteracions';
+       $('o_result').innerHTML='<div class="optdone">Potencial V: inicial <b>'+j.base_v.toFixed(1)+'</b> → final <b style="color:#f5a623">'+j.best_v.toFixed(1)+'</b> &nbsp;(<b>−'+j.delta_pct.toFixed(1)+'%</b>)&nbsp;&nbsp; <a href="'+j.csv+'" target="_blank">⬇ CSV</a> &nbsp; <a href="'+j.pdf+'" target="_blank">⬇ PDF horari</a></div>'; }
+   }
+ }
+ function start(){ const b=$('o_run'); b.disabled=true; $('o_result').innerHTML=''; $('o_status').textContent='Iniciant…';
+   fetch('/api/optimize/start?line='+encodeURIComponent($('o_line').value)).then(()=>{ if(timer)clearInterval(timer); timer=setInterval(poll,400); poll(); });
+ }
+ const b=$('o_run'); if(b) b.addEventListener('click',start);
+})();
 </script>"#;
 
 fn controls_html(lines: &[String], c: &Controls) -> String {
@@ -375,8 +436,9 @@ pub fn render_interactive_page(
 ) -> String {
     let body = render_body(summary, example, sim, res, generated_at);
     let ctrls = controls_html(lines, controls);
+    let optp = optimizer_panel(lines);
     format!(
-        "<title>rodalies-sim · dashboard interactiu</title>\n{STYLE}\n<div class=\"wrap\">\n  {HEADER}\n  {ctrls}\n  <div id=\"dashboard\">\n{body}\n  </div>\n</div>\n{SCRIPT}\n"
+        "<title>rodalies-sim · dashboard interactiu</title>\n{STYLE}\n<div class=\"wrap\">\n  {HEADER}\n  {ctrls}\n  {optp}\n  <div id=\"dashboard\">\n{body}\n  </div>\n</div>\n{SCRIPT}\n{OPT_SCRIPT}\n"
     )
 }
 

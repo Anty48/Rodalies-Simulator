@@ -1,24 +1,45 @@
 //! Servidor web local (tokio) para la UI interactiva. Sirve:
-//!   * `GET /`            → página con controles + dashboard inicial + JS.
-//!   * `GET /api/render`  → fragmento HTML del dashboard para unos parámetros.
-//!
-//! Es un servidor HTTP/1.1 mínimo (solo GET, `Connection: close`) pensado para
-//! `127.0.0.1`; sin dependencias de framework, solo `tokio`.
+//!   * `GET /`                    → página con controles + dashboard inicial + JS.
+//!   * `GET /api/render`          → fragmento HTML del dashboard para unos parámetros.
+//!   * `GET /api/optimize/start`  → lanza la optimización de una línea en segundo plano.
+//!   * `GET /api/optimize/status` → progreso en vivo (JSON) de la optimización.
+//!   * `GET /report/optimized/…`  → descarga los CSV/PDF generados.
 
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
+use serde::Serialize;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 
 use crate::gtfs_loader::Network;
+use crate::optimizer::{self, PotentialWeights, SearchConfig};
 use crate::report::{self, Controls};
 use crate::scenario::{self, now_utc_string, SimParams};
+
+/// Estado del trabajo de optimización (compartido con la UI vía /api/optimize/status).
+#[derive(Debug, Clone, Serialize, Default)]
+pub struct OptJob {
+    pub running: bool,
+    pub done: bool,
+    pub line: String,
+    pub iter: usize,
+    pub total: usize,
+    pub base_v: f64,
+    pub current_v: f64,
+    pub best_v: f64,
+    pub history: Vec<f64>,
+    pub csv: String,
+    pub pdf: String,
+    pub error: Option<String>,
+    pub delta_pct: f64,
+}
 
 pub struct ServerState {
     pub net: Arc<Network>,
     pub load_ms: f64,
     pub lines: Vec<String>,
+    pub opt: Arc<Mutex<OptJob>>,
 }
 
 pub async fn serve(state: Arc<ServerState>, port: u16) -> std::io::Result<()> {
@@ -29,9 +50,7 @@ pub async fn serve(state: Arc<ServerState>, port: u16) -> std::io::Result<()> {
         let (stream, _) = listener.accept().await?;
         let st = state.clone();
         tokio::spawn(async move {
-            if let Err(e) = handle(stream, st).await {
-                eprintln!("  · connexió tancada: {e}");
-            }
+            let _ = handle(stream, st).await;
         });
     }
 }
@@ -48,17 +67,24 @@ async fn handle(mut stream: TcpStream, state: Arc<ServerState>) -> std::io::Resu
         .next()
         .and_then(|l| l.split_whitespace().nth(1))
         .unwrap_or("/");
+    let (path, query) = target.split_once('?').unwrap_or((target, ""));
 
-    let (path, query) = match target.split_once('?') {
-        Some((p, q)) => (p, q),
-        None => (target, ""),
-    };
-
-    let (status, ctype, body) = match path {
-        "/" => ("200 OK", "text/html", render_page(&state)),
-        "/api/render" => ("200 OK", "text/html", render_fragment(&state, query)),
-        "/health" => ("200 OK", "text/plain", "ok".to_string()),
-        _ => ("404 Not Found", "text/plain", "404".to_string()),
+    let (status, ctype, body): (&str, &str, Vec<u8>) = match path {
+        "/" => ("200 OK", "text/html", render_page(&state).into_bytes()),
+        "/api/render" => ("200 OK", "text/html", render_fragment(&state, query).into_bytes()),
+        "/api/optimize/start" => {
+            ("200 OK", "application/json", start_optimization(&state, query).into_bytes())
+        }
+        "/api/optimize/status" => {
+            let j = state.opt.lock().unwrap().clone();
+            ("200 OK", "application/json", serde_json::to_vec(&j).unwrap_or_default())
+        }
+        "/health" => ("200 OK", "text/plain", b"ok".to_vec()),
+        p if p.starts_with("/report/optimized/") => match serve_file(p) {
+            Some((ct, bytes)) => ("200 OK", ct, bytes),
+            None => ("404 Not Found", "text/plain", b"404".to_vec()),
+        },
+        _ => ("404 Not Found", "text/plain", b"404".to_vec()),
     };
 
     let head = format!(
@@ -66,9 +92,29 @@ async fn handle(mut stream: TcpStream, state: Arc<ServerState>) -> std::io::Resu
         body.len()
     );
     stream.write_all(head.as_bytes()).await?;
-    stream.write_all(body.as_bytes()).await?;
+    stream.write_all(&body).await?;
     stream.flush().await?;
     Ok(())
+}
+
+/// Sirve un archivo generado bajo report/optimized/ (CSV o PDF), con nombre saneado.
+fn serve_file(path: &str) -> Option<(&'static str, Vec<u8>)> {
+    let name = path.strip_prefix("/report/optimized/")?;
+    if name.is_empty()
+        || !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '.')
+        || name.contains("..")
+    {
+        return None;
+    }
+    let ct = if name.ends_with(".pdf") {
+        "application/pdf"
+    } else if name.ends_with(".csv") {
+        "text/csv"
+    } else {
+        return None;
+    };
+    let bytes = std::fs::read(std::path::Path::new("report/optimized").join(name)).ok()?;
+    Some((ct, bytes))
 }
 
 fn render_page(state: &ServerState) -> String {
@@ -89,25 +135,95 @@ fn render_page(state: &ServerState) -> String {
         random: p.random,
     };
     report::render_interactive_page(
-        &summary,
-        &example,
-        &sim,
-        &res,
-        &state.lines,
-        &controls,
-        &now_utc_string(),
+        &summary, &example, &sim, &res, &state.lines, &controls, &now_utc_string(),
     )
 }
 
 fn render_fragment(state: &ServerState, query: &str) -> String {
     let net = &state.net;
-    let q = parse_query(query);
-    let p = params_from_query(&q);
+    let p = params_from_query(&parse_query(query));
     let summary = scenario::summary_view(net, state.load_ms);
     let example = scenario::example_view(net, "25412", p.line.as_deref());
     let sim = scenario::sim_view(net, &p);
     let res = scenario::res_view(net, &p);
     report::render_body(&summary, &example, &sim, &res, &now_utc_string())
+}
+
+/// Lanza la optimización de una línea en un hilo aparte (si no hay otra en curso).
+fn start_optimization(state: &ServerState, query: &str) -> String {
+    let q = parse_query(query);
+    let line = q.get("line").cloned().unwrap_or_default();
+    if line.is_empty() || !state.lines.contains(&line) {
+        return "{\"started\":false,\"reason\":\"línia no vàlida\"}".into();
+    }
+    {
+        let mut job = state.opt.lock().unwrap();
+        if job.running {
+            return "{\"started\":false,\"reason\":\"ja hi ha una optimització en curs\"}".into();
+        }
+        *job = OptJob {
+            running: true,
+            line: line.clone(),
+            total: SearchConfig::default().iters,
+            ..Default::default()
+        };
+    }
+
+    let net = state.net.clone();
+    let opt = state.opt.clone();
+    std::thread::spawn(move || run_optimization(net, opt, line));
+    "{\"started\":true}".into()
+}
+
+fn run_optimization(net: Arc<Network>, opt: Arc<Mutex<OptJob>>, line: String) {
+    let service_id = net.dominant_service().unwrap_or_default();
+    let sc = SearchConfig::default();
+    let w = PotentialWeights::default();
+
+    let job = opt.clone();
+    let cb = move |it: usize, cur: f64, best: f64| {
+        let mut j = job.lock().unwrap();
+        j.iter = it;
+        j.current_v = cur;
+        j.best_v = best;
+        if it == 0 {
+            j.base_v = best;
+        }
+        j.history.push(best);
+    };
+
+    let res = optimizer::optimize_line_cb(&net, &line, &service_id, sc, w, &cb);
+
+    let mut j = opt.lock().unwrap();
+    match res {
+        Some(r) => {
+            let dir = std::path::Path::new("report").join("optimized");
+            let csv = crate::exporter::export_line_csv(&net, &r, &dir)
+                .ok()
+                .map(|p| file_url(&p))
+                .unwrap_or_default();
+            let pdf = crate::exporter::export_line_pdf(&net, &r, &dir)
+                .ok()
+                .map(|p| file_url(&p))
+                .unwrap_or_default();
+            j.base_v = r.base_v;
+            j.best_v = r.best_v;
+            j.delta_pct = if r.base_v.abs() > 1e-9 {
+                (r.base_v - r.best_v) / r.base_v * 100.0
+            } else {
+                0.0
+            };
+            j.csv = csv;
+            j.pdf = pdf;
+        }
+        None => j.error = Some("La línia no té prou viatges a la finestra.".into()),
+    }
+    j.running = false;
+    j.done = true;
+}
+
+fn file_url(p: &std::path::Path) -> String {
+    format!("/report/optimized/{}", p.file_name().unwrap().to_string_lossy())
 }
 
 fn params_from_query(q: &HashMap<String, String>) -> SimParams {
@@ -138,7 +254,6 @@ fn parse_query(q: &str) -> HashMap<String, String> {
         .collect()
 }
 
-/// Decodificación mínima de percent-encoding (`%XX` y `+` → espacio).
 fn url_decode(s: &str) -> String {
     let bytes = s.as_bytes();
     let mut out = Vec::with_capacity(bytes.len());
@@ -150,9 +265,7 @@ fn url_decode(s: &str) -> String {
                 i += 1;
             }
             b'%' if i + 2 < bytes.len() => {
-                let h = hex(bytes[i + 1]);
-                let l = hex(bytes[i + 2]);
-                if let (Some(h), Some(l)) = (h, l) {
+                if let (Some(h), Some(l)) = (hex(bytes[i + 1]), hex(bytes[i + 2])) {
                     out.push(h * 16 + l);
                     i += 3;
                 } else {

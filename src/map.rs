@@ -167,19 +167,29 @@ pub fn network_map_svg(net: &Network, params: &SimParams) -> String {
         }
         let kt_s = kt.iter().map(|v| format!("{:.4}", v)).collect::<Vec<_>>().join(";");
         let kp_s = kp.iter().map(|v| format!("{:.4}", v)).collect::<Vec<_>>().join(";");
-        let color = line_color(&svc.route_short_name);
-        trains.push_str(&format!(
-            "<circle r=\"3.4\" fill=\"{color}\" stroke=\"#0e1116\" stroke-width=\"0.6\"><title>Tren {} ({})</title>\
-             <animateMotion dur=\"{dur}s\" repeatCount=\"indefinite\" calcMode=\"linear\" \
-             keyTimes=\"{kt_s}\" keyPoints=\"{kp_s}\" path=\"{path}\"/></circle>",
-            esc(&svc.train_number),
-            esc(&svc.route_short_name),
-            color = color,
+        let anim = format!(
+            "<animateMotion dur=\"{dur}s\" repeatCount=\"indefinite\" calcMode=\"linear\" \
+             keyTimes=\"{kt_s}\" keyPoints=\"{kp_s}\" path=\"{path}\"/>",
             dur = LOOP_SECS,
             kt_s = kt_s,
             kp_s = kp_s,
             path = path,
-        ));
+        );
+        if svc.is_bus {
+            // Autobús de substitució per obres: marcador quadrat gris.
+            trains.push_str(&format!(
+                "<rect x=\"-3\" y=\"-3\" width=\"6\" height=\"6\" rx=\"1\" fill=\"#9aa4b2\" \
+                 stroke=\"#0e1116\" stroke-width=\"0.6\"><title>🚌 BUS {} ({}) · substitució</title>{anim}</rect>",
+                esc(&svc.train_number), esc(&svc.route_short_name)
+            ));
+        } else {
+            let color = line_color(&svc.route_short_name);
+            trains.push_str(&format!(
+                "<circle r=\"3.4\" fill=\"{color}\" stroke=\"#0e1116\" stroke-width=\"0.6\">\
+                 <title>Tren {} ({})</title>{anim}</circle>",
+                esc(&svc.train_number), esc(&svc.route_short_name), color = color
+            ));
+        }
     }
 
     format!(

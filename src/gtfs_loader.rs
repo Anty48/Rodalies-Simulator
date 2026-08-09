@@ -40,6 +40,9 @@ struct RawRoute {
     route_short_name: String,
     #[serde(default)]
     route_long_name: Option<String>,
+    /// GTFS route_type: 2 = tren (rail), 3 = autobús (substitució per obres).
+    #[serde(default)]
+    route_type: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -108,6 +111,8 @@ pub struct TrainService {
     pub service_id: String,
     pub headsign: Option<String>,
     pub schedule: Vec<ScheduledStop>,
+    /// `true` si el servicio es un autobús (route_type 3), p.ej. sustitución por obras.
+    pub is_bus: bool,
 }
 
 impl TrainService {
@@ -252,8 +257,9 @@ fn reader(path: &Path) -> Result<csv::Reader<std::fs::File>, Box<dyn Error>> {
 
 /// Carga la red completa desde una carpeta GTFS.
 pub fn load(dir: &Path) -> Result<Network, Box<dyn Error>> {
-    // 1. routes.txt -> route_id -> short_name
+    // 1. routes.txt -> route_id -> short_name (+ route_type para distinguir autobuses)
     let mut routes: HashMap<String, String> = HashMap::new();
+    let mut route_is_bus: std::collections::HashSet<String> = std::collections::HashSet::new();
     {
         let mut rdr = reader(&dir.join("routes.txt"))?;
         for rec in rdr.deserialize() {
@@ -263,7 +269,11 @@ pub fn load(dir: &Path) -> Result<Network, Box<dyn Error>> {
             } else {
                 r.route_short_name.clone()
             };
-            routes.insert(r.route_id.trim().to_string(), short.trim().to_string());
+            let rid = r.route_id.trim().to_string();
+            if r.route_type.as_deref().map(|t| t.trim()) == Some("3") {
+                route_is_bus.insert(rid.clone());
+            }
+            routes.insert(rid, short.trim().to_string());
         }
     }
 
@@ -405,6 +415,7 @@ pub fn load(dir: &Path) -> Result<Network, Box<dyn Error>> {
         let service_id = meta.map(|m| m.service_id.clone()).unwrap_or_default();
         let headsign = meta.and_then(|m| m.headsign.clone());
 
+        let is_bus = route_is_bus.contains(&route_id);
         services.push(TrainService {
             trip_id,
             train_number,
@@ -413,6 +424,7 @@ pub fn load(dir: &Path) -> Result<Network, Box<dyn Error>> {
             service_id,
             headsign,
             schedule: stops,
+            is_bus,
         });
     }
 

@@ -52,6 +52,11 @@ pub struct SimConfig {
     /// Desplazamientos (segundos) por `trip_id` respecto al horario GTFS base.
     /// Los usa el optimizador para probar variaciones de la hora de salida.
     pub offsets: std::sync::Arc<std::collections::HashMap<String, i64>>,
+    /// Segmentos de vía única (pares de nodos NO dirigidos): un solo tren por tramo
+    /// en cualquiera de los dos sentidos (testigo). Solo aplica en modo estricto.
+    pub single_track: std::sync::Arc<std::collections::HashSet<(NodeIndex, NodeIndex)>>,
+    /// Excluir servicios de autobús (route_type 3) de la simulación ferroviaria.
+    pub exclude_buses: bool,
 }
 
 impl Default for SimConfig {
@@ -75,6 +80,8 @@ impl Default for SimConfig {
             strict_signaling: false,
             signals: Signals::default(),
             offsets: std::sync::Arc::new(std::collections::HashMap::new()),
+            single_track: std::sync::Arc::new(std::collections::HashSet::new()),
+            exclude_buses: false,
         }
     }
 }
@@ -248,6 +255,9 @@ impl<'a> Simulator<'a> {
                     continue;
                 }
             }
+            if cfg.exclude_buses && svc.is_bus {
+                continue;
+            }
             match svc.first_time() {
                 Some(t) if t >= cfg.start_sec && t <= cfg.end_sec => participants.push(idx),
                 _ => {}
@@ -264,11 +274,14 @@ impl<'a> Simulator<'a> {
                 .copied()
                 .unwrap_or(0)
         };
-        // Capacidad efectiva de andén (1 en modo estricto).
-        let plat_cap: usize = if cfg.strict_signaling {
-            1
-        } else {
-            cfg.platform_capacity.max(1) as usize
+        // Capacidad de andén: en modo estricto usa el nº real de vías de la estación
+        // (dato operativo, ver `topology`); si no, la capacidad uniforme configurada.
+        let node_cap = |node: NodeIndex| -> usize {
+            if cfg.strict_signaling {
+                crate::topology::platform_tracks(&net.graph[node].stop_name).max(1) as usize
+            } else {
+                cfg.platform_capacity.max(1) as usize
+            }
         };
 
         let mut trains: HashMap<usize, TrainRt> = HashMap::new();
@@ -302,6 +315,9 @@ impl<'a> Simulator<'a> {
         let mut node_tracks: HashMap<NodeIndex, Vec<Option<usize>>> = HashMap::new();
         // cantón (from,to) -> nº de trenes actualmente en la sección (bloques ocupados)
         let mut edge_busy: HashMap<(NodeIndex, NodeIndex), u32> = HashMap::new();
+        // Vía única: par NO dirigido -> (sentido activo dirigido, nº de trenes en el tramo).
+        let mut st_token: HashMap<(NodeIndex, NodeIndex), ((NodeIndex, NodeIndex), u32)> =
+            HashMap::new();
 
         // Bloqueos de cantón por incidencia: (from,to) -> (desde, hasta)
         let mut blocked: HashMap<(NodeIndex, NodeIndex), (u32, u32)> = HashMap::new();
@@ -408,7 +424,8 @@ impl<'a> Simulator<'a> {
                     };
 
                     // Señalización de andén: ¿hay vía libre?
-                    let slots = node_tracks.entry(node).or_insert_with(|| vec![None; plat_cap]);
+                    let cap = node_cap(node);
+                    let slots = node_tracks.entry(node).or_insert_with(|| vec![None; cap]);
                     let free = slots.iter().position(|s| s.is_none());
                     let Some(track) = free else {
                         // Andén saturado: el tren espera en el cantón anterior,
@@ -435,6 +452,14 @@ impl<'a> Simulator<'a> {
                                 *c = c.saturating_sub(1);
                                 if *c == 0 {
                                     edge_busy.remove(&edge);
+                                }
+                            }
+                            // Libera el testigo de vía única si el tramo lo era.
+                            let key = crate::topology::unordered(edge.0, edge.1);
+                            if let Some(tok) = st_token.get_mut(&key) {
+                                tok.1 = tok.1.saturating_sub(1);
+                                if tok.1 == 0 {
+                                    st_token.remove(&key);
                                 }
                             }
                         }
@@ -567,6 +592,27 @@ impl<'a> Simulator<'a> {
                         }
                     }
 
+                    // Vía única: el tramo (no dirigido) debe estar libre o reservado por
+                    // nuestro MISMO sentido (testigo/bastón piloto).
+                    let st_key = crate::topology::unordered(na, nb);
+                    let single = cfg.strict_signaling && cfg.single_track.contains(&st_key);
+                    if single {
+                        if let Some((dir, cnt)) = st_token.get(&st_key) {
+                            if *cnt > 0 && *dir != (na, nb) {
+                                // Sentido contrario ocupando el tramo → ROJO.
+                                if let Some(t) = trains.get_mut(&ev.trip_idx) {
+                                    if !t.waiting {
+                                        held_events += 1;
+                                        t.waiting = true;
+                                    }
+                                    t.delay += RETRY_STEP as i64;
+                                }
+                                heap.push(Reverse(Event { time: ev.time + RETRY_STEP, ..ev }));
+                                continue;
+                            }
+                        }
+                    }
+
                     // Señalización de cantón (aspecto ROJO): ¿quedan bloques libres?
                     let occ = edge_busy.get(&(na, nb)).copied().unwrap_or(0);
                     if occ >= eff_cap {
@@ -582,6 +628,13 @@ impl<'a> Simulator<'a> {
                             ..ev
                         }));
                         continue;
+                    }
+
+                    // Reserva el testigo de vía única para nuestro sentido.
+                    if single {
+                        let e = st_token.entry(st_key).or_insert(((na, nb), 0));
+                        e.0 = (na, nb);
+                        e.1 += 1;
                     }
 
                     // El tren sale: libera andén, ocupa un bloque del cantón.

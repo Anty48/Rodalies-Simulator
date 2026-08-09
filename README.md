@@ -125,11 +125,27 @@ optimización por minimización de una función de potencial** V(H):
   ±1..±5 min en la salida de origen; cada candidato se evalúa con **N simulaciones Monte
   Carlo en paralelo (`rayon`)** inyectando incidencias aleatorias en puntos críticos
   (Clot, Arc de Triomf…).
-- **Exportación** (`exporter.rs`): escribe `report/optimized/R*_optimized.csv` (hora de
-  salida/llegada por estación y tren) y una comparativa en consola: **V base vs
-  optimizado, tiempo de recuperación y reducción de retraso por pasajero**.
+- **Exportación** (`exporter.rs`): escribe `report/optimized/R*_optimized.csv` **y un PDF por
+  línea** (`R*_horari.pdf`, tabla estación×tren estilo horario oficial) y una comparativa en
+  consola: **V base vs optimizado, recuperación y reducción de retraso por pasajero**.
 
-Ejemplo real (una ejecución): R1 −80 % de V (conflictos 15→2), R2N −58 % (3→0).
+Además (`topology.rs`, datos operativos derivados de fuentes públicas / del simulador de
+referencia):
+
+- **Vía única** (token/bastón piloto): tramos como R3 al norte de Montcada Bifurcació solo
+  admiten un tren a la vez en cualquier sentido.
+- **Vías reales por estación** (Sants 14, Clot 4… en vez de 1) → los andenes no son el
+  cuello de botella; los cantones sí (capacidad 1).
+- **Autobuses de sustitución por obras** (`route_type=3`, p.ej. 46 servicios en R3): se
+  **distinguen** (marcador propio en el mapa) y se **excluyen** de la física ferroviaria y
+  de la optimización.
+
+### Optimización desde la web (en vivo)
+
+El dashboard incluye un panel **Optimitzador**: eliges una línea, pulsas *Optimitzar* y el
+servidor lanza el recocido simulado en segundo plano; la web muestra **en vivo cómo baja
+V(H)** (gráfico + contador de iteraciones) y, al terminar, un aviso claro con el **valor
+final y el % de reducción** y enlaces de descarga al **CSV** y al **PDF**.
 
 ### UI interactiva (servidor web)
 
