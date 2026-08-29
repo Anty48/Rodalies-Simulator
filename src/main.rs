@@ -7,6 +7,7 @@
 //!   * `--static`: solo escribe y abre el dashboard HTML (offline, sin servidor).
 //!   * `--no-open`: no abre el navegador automáticamente.
 
+mod calculator;
 mod exporter;
 mod gtfs_loader;
 mod map;
@@ -106,10 +107,24 @@ async fn main() {
 
     // 5. Arrancar el servidor web interactivo.
     let lines = scenario::distinct_lines(&net);
+    let adif = calculator::infrastructure::AdifNet::load(Path::new("processed/adif/rfig_speed.json"));
+    match &adif {
+        Some(a) => println!("✓ CVM ADIF carregada: {} segments de via (processed/adif)", a.n_segments()),
+        None => println!("· CVM ADIF no trobada (processed/adif/rfig_speed.json). Executa scripts/fetch_adif_cvm.py"),
+    }
+    // LTV: auto-ingesta d'un ZIP diari a raw/ltv/ o càrrega de processed/adif/ltv.json.
+    let ltv = calculator::ltv::load_default();
+    match &ltv {
+        Some(l) => println!("✓ LTV carregades: {} limitacions temporals (snapshot {})", l.count(), l.snapshot),
+        None => println!("· LTV no trobades. Deixa el ZIP diari a raw/ltv/ o executa scripts/fetch_adif_ltv.py"),
+    }
     let state = Arc::new(server::ServerState {
         net: Arc::new(net),
         load_ms,
         lines,
+        line_cache: std::sync::Mutex::new(std::collections::HashMap::new()),
+        adif,
+        ltv: std::sync::RwLock::new(ltv.map(std::sync::Arc::new)),
         opt: Arc::new(std::sync::Mutex::new(server::OptJob::default())),
     });
     let url = format!("http://127.0.0.1:{}", PORT);

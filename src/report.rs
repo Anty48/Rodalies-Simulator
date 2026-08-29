@@ -282,6 +282,43 @@ footer { color:var(--muted); font-size:.8rem; text-align:center; padding-top:20p
 .optdone { margin-top:12px; font-size:1rem; padding:12px 16px; background:var(--panel2); border:1px solid var(--border); border-radius:10px; }
 .optdone a { color:var(--accent2); font-weight:700; text-decoration:none; }
 .formula { font-family:'Cascadia Code',Consolas,monospace; background:var(--panel2); border:1px solid var(--border); border-radius:8px; padding:10px 14px; font-size:.85rem; overflow-x:auto; }
+.tabs { display:flex; gap:8px; margin-bottom:22px; border-bottom:1px solid var(--border); }
+.tab { background:none; border:none; color:var(--muted); font-size:.95rem; font-weight:600; padding:10px 16px; cursor:pointer; border-bottom:2px solid transparent; margin-bottom:-1px; }
+.tab.active { color:var(--text); border-bottom-color:var(--accent); }
+.tabpane { display:none; }
+.tabpane.active { display:block; }
+h4 { margin:16px 0 8px; font-size:.98rem; }
+.series-row { display:flex; flex-wrap:wrap; gap:14px; }
+.serie-chk { display:flex; align-items:center; gap:6px; color:var(--text); font-size:.9rem; background:var(--panel2); border:1px solid var(--border); border-radius:8px; padding:6px 12px; }
+.serie-chk input[disabled]+b { color:var(--muted); }
+.provb { font-size:.72rem; font-weight:600; border:1px solid var(--border); border-radius:20px; padding:1px 8px; }
+.ficha { margin-top:16px; }
+.src { margin:6px 0 0; padding-left:18px; font-size:.88rem; }
+.src li { margin-bottom:8px; }
+.src-note { font-style:italic; }
+.dot { display:inline-block; width:10px; height:10px; border-radius:50%; margin-right:7px; vertical-align:middle; }
+.calcmap { width:100%; height:440px; border-radius:12px; border:1px solid var(--border); background:#0b0e13; }
+.legend { display:flex; flex-wrap:wrap; gap:14px; margin-top:10px; font-size:.82rem; color:var(--muted); }
+.legend span { display:inline-flex; align-items:center; gap:6px; }
+.legend i { width:14px; height:4px; border-radius:2px; display:inline-block; }
+.qflag { display:inline-flex; align-items:center; gap:6px; font-size:.82rem; }
+.qdot { width:11px; height:11px; border-radius:50%; display:inline-block; }
+.q-oficial { background:#3fb950; } .q-secundaria { background:#58a6ff; }
+.q-estimacion { background:#f5a623; } .q-suposicion { background:#e2231a; } .q-nd { background:#f85149; }
+.plot { width:100%; height:340px; }
+.zoombtn { float:right; background:var(--panel2); border:1px solid var(--border); color:var(--text); border-radius:8px; padding:4px 10px; cursor:pointer; font-size:.8rem; }
+.modal { display:none; position:fixed; inset:0; background:rgba(0,0,0,.72); z-index:1000; padding:3vh 3vw; }
+.modal.open { display:block; }
+.modal-inner { background:var(--panel); border:1px solid var(--border); border-radius:14px; width:100%; height:100%; padding:16px; position:relative; }
+.modal-close { position:absolute; top:10px; right:14px; background:var(--accent); color:#fff; border:none; border-radius:8px; padding:6px 12px; cursor:pointer; font-weight:700; z-index:1; }
+.modal-plot { width:100%; height:100%; }
+.anom { background:rgba(245,166,35,.10); border-left:3px solid var(--accent2); padding:8px 12px; border-radius:6px; margin-bottom:8px; font-size:.86rem; }
+.progress { height:8px; background:var(--panel2); border-radius:6px; overflow:hidden; margin-top:8px; }
+.progress > i { display:block; height:100%; width:0; background:linear-gradient(90deg,var(--accent2),var(--accent)); }
+.subtabs { display:flex; gap:6px; flex-wrap:wrap; margin:6px 0 14px; }
+.subtab { background:var(--panel2); border:1px solid var(--border); color:var(--muted); border-radius:8px; padding:6px 12px; cursor:pointer; font-size:.85rem; }
+.subtab.active { color:var(--text); border-color:var(--accent); }
+.leaflet-popup-content { color:#111; }
 </style>"#;
 
 const HEADER: &str = r#"<header class="top">
@@ -360,6 +397,240 @@ const OPT_SCRIPT: &str = r#"<script>
 })();
 </script>"#;
 
+/// Cambio de pestañas (sin frameworks).
+const TAB_SCRIPT: &str = r#"<script>
+document.querySelectorAll('.tab').forEach(t=>t.addEventListener('click',()=>{
+  document.querySelectorAll('.tab').forEach(x=>x.classList.remove('active'));
+  document.querySelectorAll('.tabpane').forEach(x=>x.classList.remove('active'));
+  t.classList.add('active');
+  document.getElementById(t.dataset.pane).classList.add('active');
+}));
+</script>"#;
+
+/// Lógica del calculador de tiempo mínimo (fetch a /api/mintime).
+const CALC_SCRIPT: &str = r#"<script>
+(function(){
+ const $=id=>document.getElementById(id);
+ async function calc(){
+   const o=$('mc_origin').value, d=$('mc_dest').value, dt=$('mc_dt').value;
+   const series=[...document.querySelectorAll('.mc_serie:checked')].map(c=>c.value);
+   if(o===d){ $('mc_result').innerHTML='<div class="card"><p class="muted">⚠ Tria un origen i un destí diferents.</p></div>'; return; }
+   if(!series.length){ $('mc_result').innerHTML='<div class="card"><p class="muted">⚠ Selecciona almenys una sèrie.</p></div>'; return; }
+   const b=$('mc_run'); b.disabled=true; const t=b.textContent; b.textContent='Calculant…';
+   const p=new URLSearchParams(); p.set('origin',o); p.set('dest',d); p.set('dt',dt); p.set('series',series.join(',')); p.set('ltv',$('mc_ltv')&&$('mc_ltv').checked?'1':'0');
+   try{ const r=await fetch('/api/mintime?'+p.toString()); $('mc_result').innerHTML=await r.text(); }
+   catch(e){ $('mc_result').innerHTML='<div class="card">Error: '+e+'</div>'; }
+   b.disabled=false; b.textContent=t;
+ }
+ const b=$('mc_run'); if(b) b.addEventListener('click',calc);
+})();
+</script>"#;
+
+/// Mapa (Leaflet) + análisis de línea completa (Plotly) + modal. Todo cliente, sobre
+/// los endpoints /api/stations, /api/lines y /api/line (cacheado en servidor y cliente).
+const CALC2_SCRIPT: &str = r#"<script>
+(function(){
+ const $=id=>document.getElementById(id);
+ const COL={'447':'#e2231a','450':'#58a6ff','470':'#3fb950','490':'#f5a623','456':'#8b98a5'};
+ const fmt=s=>{s=Math.round(s);const m=Math.floor(s/60);return m+':'+String(s%60).padStart(2,'0');};
+ let MAP=null,mapReady=false,STATIONS=[],STMARK={},ORIGIN=null,DEST=null,selLayer=null,lineLayer=null;
+ let LINES=[],LINE_DATA=null,activeSeries=null,CHARTS={};
+
+ // ---- Mapa ----
+ function initMap(){
+   if(mapReady){ if(MAP)MAP.invalidateSize(); return; }
+   if(typeof L==='undefined'){ return; } mapReady=true;
+   MAP=L.map('mc_map',{preferCanvas:true}).setView([41.55,2.05],9);
+   L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:18,attribution:'© OpenStreetMap'}).addTo(MAP);
+   fetch('/api/stations').then(r=>r.json()).then(list=>{ STATIONS=list;
+     list.forEach(s=>{ const m=L.circleMarker([s.lat,s.lon],{radius:3,color:'#8b98a5',fillColor:'#8b98a5',weight:1,fillOpacity:.75});
+       m.bindTooltip(s.name); m.on('click',()=>pickStation(s)); m.addTo(MAP); STMARK[s.id]=m; });
+   }).catch(()=>{});
+ }
+ function pickStation(s){
+   if(!ORIGIN || (ORIGIN&&DEST)){ ORIGIN=s; DEST=null; setSel('mc_origin',s.id); }
+   else { DEST=s; setSel('mc_dest',s.id); }
+   highlightSel();
+ }
+ function setSel(id,val){ const el=$(id); if([...el.options].some(o=>o.value===val)) el.value=val; }
+ function highlightSel(){
+   Object.values(STMARK).forEach(m=>m.setStyle({color:'#8b98a5',fillColor:'#8b98a5',radius:3}));
+   if(selLayer){MAP.removeLayer(selLayer);selLayer=null;}
+   const f=id=>STATIONS.find(s=>s.id===id);
+   if(ORIGIN&&STMARK[ORIGIN.id])STMARK[ORIGIN.id].setStyle({color:'#3fb950',fillColor:'#3fb950',radius:6});
+   if(DEST&&STMARK[DEST.id])STMARK[DEST.id].setStyle({color:'#e2231a',fillColor:'#e2231a',radius:6});
+   if(ORIGIN&&DEST){const a=f(ORIGIN.id),b=f(DEST.id);if(a&&b)selLayer=L.polyline([[a.lat,a.lon],[b.lat,b.lon]],{color:'#f5a623',weight:3,dashArray:'6 6'}).addTo(MAP);}
+ }
+ function drawLineOnMap(){
+   if(!MAP||!LINE_DATA)return; if(lineLayer){MAP.removeLayer(lineLayer);lineLayer=null;}
+   const pts=LINE_DATA.stations.filter(s=>s.lat!=null&&s.lon!=null).map(s=>[s.lat,s.lon]);
+   if(pts.length<2)return;
+   lineLayer=L.polyline(pts,{color:'#f5a623',weight:4,opacity:.9}).addTo(MAP);
+   MAP.fitBounds(lineLayer.getBounds(),{padding:[30,30]});
+ }
+
+ // ---- Poblar líneas/sentidos ----
+ fetch('/api/lines').then(r=>r.json()).then(list=>{ LINES=list; const sel=$('ln_line'); if(!sel)return; sel.innerHTML='';
+   list.forEach(l=>{const o=document.createElement('option');o.value=l.line;o.textContent=l.line;sel.appendChild(o);});
+   fillDirs();
+ }).catch(()=>{});
+ function fillDirs(){ const l=LINES.find(x=>x.line===$('ln_line').value); const d=$('ln_dir'); if(!d)return; d.innerHTML='';
+   if(!l)return; l.directions.forEach(dir=>{const o=document.createElement('option');o.value=dir.d0+'|'+dir.d1;o.textContent=dir.label+' ('+dir.n+' serveis)';d.appendChild(o);});
+ }
+ if($('ln_line'))$('ln_line').addEventListener('change',fillDirs);
+
+ // ---- Calcular línea completa ----
+ async function runLine(){
+   const line=$('ln_line').value, dv=$('ln_dir').value.split('|');
+   const series=[...document.querySelectorAll('.mc_serie:checked')].map(c=>c.value);
+   if(!line||dv.length<2){return;}
+   const dwell=$('ln_dwell').value, dws=$('ln_dwell_s').value, dt=$('mc_dt').value;
+   const b=$('ln_run');b.disabled=true; const bar=$('ln_bar');bar.style.display='block';bar.firstElementChild.style.width='20%';
+   $('ln_progress').textContent='Calculant tots els trams de la línia…';
+   const p=new URLSearchParams();p.set('line',line);p.set('d0',dv[0]);p.set('d1',dv[1]);p.set('series',series.join(','));p.set('dwell',dwell);if(dwell==='fixed')p.set('dwell_s',dws);p.set('dt',dt);p.set('ltv',$('ln_ltv')&&$('ln_ltv').checked?'1':'0');
+   try{ const r=await fetch('/api/line?'+p.toString()); LINE_DATA=await r.json(); bar.firstElementChild.style.width='100%';
+     if(LINE_DATA.error){ $('ln_out').innerHTML='<div class="card"><p class="muted">⚠ '+LINE_DATA.error+'</p></div>'; }
+     else { activeSeries=null; renderLine(); drawLineOnMap(); $('ln_progress').textContent='✔ '+LINE_DATA.n_segments+' trams · '+LINE_DATA.n_stations+' estacions'; }
+   }catch(e){ $('ln_out').innerHTML='<div class="card">Error: '+e+'</div>'; }
+   setTimeout(()=>{bar.style.display='none';bar.firstElementChild.style.width='0';},500); b.disabled=false;
+ }
+ if($('ln_run'))$('ln_run').addEventListener('click',runLine);
+
+ // ---- Cálculos cliente ----
+ function cumul(series){
+   const st=LINE_DATA.stations,segs=LINE_DATA.segments; let mn=0,mr=0; let refok=LINE_DATA.adif_available;
+   const o={km:[],min:[],ref:[],prog:[],margin:[]};
+   for(let i=0;i<st.length;i++){
+     if(i>0){const ss=segs[i-1].per_series[series];mn+=ss?ss.marcha_s:0; if(ss&&ss.marcha_ref_s!=null){mr+=ss.marcha_ref_s;}else{refok=false;}}
+     o.km.push(st[i].cum_km); o.min.push(mn); o.ref.push(mr);
+     const pg=st[i].programmed_cum_s; o.prog.push(pg==null?null:pg); o.margin.push(pg==null?null:(pg-mn));
+     mn+=st[i].dwell_s; mr+=st[i].dwell_s;
+   }
+   o.refok=refok; return o;
+ }
+
+ // ---- Render ----
+ function qdot(l){return '<span class="qdot q-'+l+'"></span>';}
+ function card(sub,val,lab){return '<div class="kpi"><div class="kpi-sub">'+sub+'</div><div class="kpi-val">'+val+'</div><div class="kpi-label">'+lab+'</div></div>';}
+ function chartCard(title,id){return '<div class="card"><button class="zoombtn" data-zoom="'+id+'">⛶ Ampliar</button><h2>'+title+'</h2><div id="'+id+'" class="plot"></div></div>';}
+
+ function renderLine(){
+   const d=LINE_DATA; if(!d||d.error)return;
+   if(!activeSeries||!d.series.includes(activeSeries))activeSeries=d.series[0];
+   const tot=d.totals[activeSeries]||{marcha_s:0,paradas_s:0,total_s:0,margin_median_s:0};
+   const pr=d.programmed;
+   const subtabs=d.series.map(s=>'<button class="subtab'+(s===activeSeries?' active':'')+'" data-serie="'+s+'" style="border-color:'+(s===activeSeries?COL[s]:'')+'">'+s+'</button>').join('');
+   // Comparación
+   let fastest=Math.min(...d.series.map(s=>d.totals[s].total_s));
+   const refc = d.adif_available?'<th>Total (CVM ADIF)</th><th>Marge (CVM)</th>':'';
+   let comp='<div class="scroll"><table><thead><tr><th>Tren</th><th>Marxa</th><th>Parades</th><th>Total (Vmax tren)</th>'+refc+'<th>Programat (mediana)</th><th>Marge</th><th>Δ vs ràpid</th></tr></thead><tbody>';
+   d.series.forEach(s=>{const t=d.totals[s];
+     let rc='';
+     if(d.adif_available){ rc = t.total_ref_s!=null ? '<td class="num mono" style="color:#3fb950">'+fmt(t.total_ref_s)+'</td><td class="num mono">'+(pr.n?(t.margin_ref_median_s>=0?'+':'−')+fmt(Math.abs(t.margin_ref_median_s)):'—')+'</td>' : '<td class="num muted">—</td><td class="num muted">—</td>'; }
+     comp+='<tr><td class=mono><span class=dot style="background:'+COL[s]+'"></span>'+s+'</td><td class="num mono">'+fmt(t.marcha_s)+'</td><td class="num mono">'+fmt(t.paradas_s)+'</td><td class="num mono">'+fmt(t.total_s)+'</td>'+rc+'<td class="num mono">'+(pr.n?fmt(pr.median):'—')+'</td><td class="num mono">'+(pr.n?(t.margin_median_s>=0?'+':'')+fmt(Math.abs(t.margin_median_s)):'—')+'</td><td class="num mono">+'+fmt(t.total_s-fastest)+'</td></tr>';});
+   d.unavailable.forEach(s=>{comp+='<tr class=muted><td class=mono>'+s+'</td><td colspan=6>dades insuficients — no es calcula</td></tr>';});
+   comp+='</tbody></table></div>';
+   // Tabla por estaciones (serie activa)
+   const cu=cumul(activeSeries); const st=d.stations,segs=d.segments;
+   let str='<div class="scroll"><table><thead><tr><th>Estació</th><th>Dist. acum.</th><th>Marxa acum.</th><th>Parada</th><th>Total acum.</th><th>Programat</th><th>Δ</th></tr></thead><tbody>';
+   for(let i=0;i<st.length;i++){const pg=st[i].programmed_cum_s;const diff=pg==null?null:(pg-cu.min[i]);
+     str+='<tr><td>'+st[i].name+'</td><td class="num mono">'+st[i].cum_km.toFixed(2)+' km</td><td class="num mono">'+fmt(cu.min[i])+'</td><td class="num mono">'+(st[i].dwell_s?st[i].dwell_s+' s':'—')+'</td><td class="num mono">'+fmt(cu.min[i])+'</td><td class="num mono">'+(pg==null?'—':fmt(pg))+'</td><td class="num mono">'+(diff==null?'—':(diff>=0?'+':'')+fmt(Math.abs(diff)))+'</td></tr>';}
+   str+='</tbody></table></div>';
+   // Fichas
+   let fich='<div class="scroll"><table><thead><tr><th>Tren</th><th>Vmax</th><th>Potència</th><th>Massa</th><th>Accel</th><th>Frenada</th></tr></thead><tbody>';
+   d.fichas.forEach(f=>{ if(!f.available){fich+='<tr class=muted><td>'+f.id+'</td><td colspan=5>dades insuficients (no inventades)</td></tr>';return;}
+     fich+='<tr><td class=mono>'+f.id+'</td><td>'+qdot(f.vmax_prov)+' '+f.vmax.toFixed(0)+' km/h</td><td>'+qdot(f.power_prov)+' '+f.power.toFixed(0)+' kW</td><td>'+qdot(f.mass_prov)+' '+f.mass.toFixed(1)+' t</td><td>'+qdot(f.accel_prov)+' '+f.accel.toFixed(2)+'</td><td>'+qdot(f.decel_prov)+' '+f.decel.toFixed(2)+'</td></tr>';});
+   fich+='</tbody></table></div>';
+   // Anomalías
+   let an=d.anomalies.length?d.anomalies.map(a=>'<div class="anom">'+a+'</div>').join(''):'<p class="muted">Cap anomalia detectada.</p>';
+   // Calidad
+   let ql=d.quality.map(q=>'<div class="qflag">'+qdot(q.level)+'<b>'+q.variable+'</b> — <span class="muted">'+q.note+'</span></div>').join('');
+   // Fuentes
+   let src='<div class="scroll"><table><thead><tr><th>Variable</th><th>Font</th><th>Mètode</th><th>Precisió</th></tr></thead><tbody>'+
+     d.sources.map(s=>'<tr><td>'+qdot(s.level)+' '+s.variable+'</td><td>'+s.source+'<br><span class="muted">'+s.organismo+' · '+s.url+'</span></td><td class="muted">'+s.method+'</td><td class="muted">'+s.precision+'</td></tr>').join('')+'</tbody></table></div>';
+
+   $('ln_out').innerHTML=
+     '<div class="card"><h2>'+d.line+' · '+d.direction_label+'</h2>'+
+       '<p class="muted">'+d.distance_km.toFixed(2)+' km · '+d.n_stations+' estacions · dt '+d.dt+' s · parades: '+d.dwell_mode+'</p>'+
+       (d.adif_available?('<p class="muted"><span class="qdot q-oficial"></span> <b>CVM ADIF aplicada</b> · cobertura '+d.coverage_pct.toFixed(0)+'% · distància ADIF '+(d.adif_distance_km!=null?d.adif_distance_km.toFixed(2)+' km':'—')+' (GTFS '+d.distance_km.toFixed(2)+' km)</p>'):'<p class="muted"><span class="qdot q-nd"></span> Sense CVM ADIF (executa scripts/fetch_adif_cvm.py).</p>')+
+       (d.ltv_snapshot?('<p class="muted"><span class="qdot q-estimacion"></span> <b>LTV aplicades</b> (snapshot '+d.ltv_snapshot+'): '+d.ltv_applied+' al recorregut'+(d.min_ltv_kmh!=null?' · mín '+d.min_ltv_kmh.toFixed(0)+' km/h':'')+' — temporal/fechat</p>'):'')+
+       '<div class="subtabs">'+subtabs+'</div>'+
+       '<div class="grid-kpi">'+card('Distància',d.distance_km.toFixed(1)+' km','línia completa')+
+         card('Temps mínim ('+activeSeries+')',fmt(tot.total_s),'Vmax tren · marxa '+fmt(tot.marcha_s)+' + parades '+fmt(tot.paradas_s))+
+         (d.adif_available&&tot.total_ref_s!=null?card('Refinat CVM ('+activeSeries+')',fmt(tot.total_ref_s),'amb velocitats ADIF reals'):'')+
+         card('Programat',pr.n?fmt(pr.median):'—',pr.n?('mediana de '+pr.n+' serveis'):'sense dades')+
+         card('Marge',pr.n?(((d.adif_available&&tot.margin_ref_median_s!=null?tot.margin_ref_median_s:tot.margin_median_s)>=0?'+':'−')+fmt(Math.abs(d.adif_available&&tot.margin_ref_median_s!=null?tot.margin_ref_median_s:tot.margin_median_s))):'—',d.adif_available?'programat − refinat':'programat − mínim')+
+       '</div>'+
+       '<p class="muted src-note">'+d.observed_note+'</p>'+
+       '<div style="margin-top:10px"><button class="zoombtn" style="float:none" id="ln_csv">⬇ CSV</button> <button class="zoombtn" style="float:none" id="ln_json">⬇ JSON</button></div>'+
+     '</div>'+
+     '<div class="card"><h2>Comparació de trens</h2>'+comp+'</div>'+
+     chartCard('Temps acumulat vs distància · mínim ('+activeSeries+') vs programat','ln_p_cum')+
+     chartCard('Marge acumulat vs distància ('+activeSeries+')','ln_p_margin')+
+     chartCard('Velocitat màxima assolida per tram ('+activeSeries+')','ln_p_vmax')+
+     '<div class="card"><h2>Anàlisi per estacions ('+activeSeries+')</h2>'+str+'</div>'+
+     '<div class="card"><h2>Comparar material</h2>'+fich+'<div id="ln_p_tot" class="plot" style="height:280px;margin-top:8px"></div></div>'+
+     '<div class="card"><h2>Anomalies i consistència</h2>'+an+'</div>'+
+     '<div class="card"><h2>Qualitat de les dades (per variable)</h2>'+ql+'</div>'+
+     '<div class="card"><h2>Fonts — d’on surt cada número</h2>'+src+'</div>';
+
+   makeCharts(cu);
+   // Wiring
+   document.querySelectorAll('.subtab').forEach(b=>b.addEventListener('click',()=>{activeSeries=b.dataset.serie;renderLine();}));
+   document.querySelectorAll('[data-zoom]').forEach(b=>b.addEventListener('click',()=>openModal(b.dataset.zoom)));
+   $('ln_csv').addEventListener('click',exportCSV); $('ln_json').addEventListener('click',exportJSON);
+ }
+
+ function baseLayout(t){return {title:{text:t,font:{color:'#e6edf3',size:13}},paper_bgcolor:'rgba(0,0,0,0)',plot_bgcolor:'rgba(0,0,0,0)',font:{color:'#8b98a5',size:11},margin:{l:58,r:14,t:36,b:42},xaxis:{gridcolor:'#2a333f',zeroline:false,title:'Distància (km)'},yaxis:{gridcolor:'#2a333f',zeroline:false},legend:{orientation:'h'}};}
+ function mk(id,data,layout){ if(typeof Plotly==='undefined')return; Plotly.newPlot(id,data,layout,{responsive:true,displaylogo:false}); CHARTS[id]={data,layout};}
+ function makeCharts(cu){
+   const d=LINE_DATA,c=COL[activeSeries];
+   // acumulado
+   let tr=[{x:cu.km,y:cu.min,name:'Mínim (Vmax tren)',mode:'lines',line:{color:c,width:2}}];
+   if(cu.refok)tr.push({x:cu.km,y:cu.ref,name:'Refinat (CVM ADIF)',mode:'lines',line:{color:'#3fb950',width:2}});
+   if(d.programmed.n)tr.push({x:cu.km,y:cu.prog,name:'Programat',mode:'lines',line:{color:'#8b98a5',width:2,dash:'dot'}});
+   let l1=baseLayout('');l1.yaxis.title='Temps acumulat (s)';mk('ln_p_cum',tr,l1);
+   // margen
+   let l2=baseLayout('');l2.yaxis.title='Marge (s)';mk('ln_p_margin',[{x:cu.km,y:cu.margin,mode:'lines',fill:'tozeroy',line:{color:'#f5a623',width:2},name:'Marge'}],l2);
+   // vmax por tramo
+   const xs=d.segments.map(s=>s.from+'→'+s.to),ys=d.segments.map(s=>{const ss=s.per_series[activeSeries];return ss?ss.vmax_reached_kmh:0;});
+   let l3=baseLayout('');l3.xaxis.title='Tram';l3.yaxis.title='Vmax assolida (km/h)';l3.xaxis.tickangle=-40;mk('ln_p_vmax',[{x:xs,y:ys,type:'bar',marker:{color:c}}],l3);
+   // totales comparación
+   const sx=d.series,sy=sx.map(s=>d.totals[s].total_s/60);
+   let l4=baseLayout('');l4.xaxis.title='Sèrie';l4.yaxis.title='Temps total (min)';mk('ln_p_tot',[{x:sx,y:sy,type:'bar',marker:{color:sx.map(s=>COL[s])}}],l4);
+ }
+
+ // ---- Modal ----
+ function openModal(id){ const m=$('mc_modal'); if(!CHARTS[id])return; m.classList.add('open');
+   const lay=Object.assign({},CHARTS[id].layout); lay.autosize=true;
+   Plotly.newPlot('mc_modal_plot',CHARTS[id].data,lay,{responsive:true,displaylogo:false});
+ }
+ if($('mc_modal_close'))$('mc_modal_close').addEventListener('click',()=>$('mc_modal').classList.remove('open'));
+
+ // ---- Export ----
+ function exportJSON(){ dl('linia_'+LINE_DATA.line+'.json',JSON.stringify(LINE_DATA,null,2),'application/json'); }
+ function exportCSV(){ const d=LINE_DATA; let rows=[['linea','sentido','tren','tramo','distancia_km','tiempo_marcha_s','vmax_kmh','t_accel_s','t_crucero_s','t_frenada_s']];
+   d.segments.forEach(seg=>{ d.series.forEach(s=>{ const ss=seg.per_series[s]; if(ss)rows.push([d.line,d.direction_label,s,seg.from+' → '+seg.to,seg.dist_km.toFixed(3),ss.marcha_s.toFixed(1),ss.vmax_reached_kmh.toFixed(1),ss.t_accel.toFixed(1),ss.t_cruise.toFixed(1),ss.t_brake.toFixed(1)]); }); });
+   rows.push([]); rows.push(['tren','total_marcha_s','total_paradas_s','total_min_s','programado_mediana_s','margen_s']);
+   d.series.forEach(s=>{const t=d.totals[s];rows.push([s,t.marcha_s.toFixed(1),t.paradas_s.toFixed(1),t.total_s.toFixed(1),d.programmed.median,t.margin_median_s.toFixed(1)]);});
+   dl('linia_'+d.line+'.csv',rows.map(r=>r.join(',')).join('\n'),'text/csv');
+ }
+ function dl(name,txt,mime){ const b=new Blob([txt],{type:mime}); const a=document.createElement('a'); a.href=URL.createObjectURL(b); a.download=name; a.click(); URL.revokeObjectURL(a.href); }
+
+ // ---- LTV: estat + recàrrega en calent ----
+ function ltvStatus(){ const el=$('ltv_status'); if(!el)return; fetch('/api/ltv/status').then(r=>r.json()).then(j=>{
+   el.innerHTML = j.available ? ('<span class="qdot q-estimacion"></span> LTV: '+j.count+' limitacions · snapshot '+j.snapshot) : 'LTV: no carregades (deixa el ZIP diari a raw/ltv/ i recarrega)';
+ }).catch(()=>{}); }
+ if($('ltv_reload'))$('ltv_reload').addEventListener('click',()=>{ const b=$('ltv_reload'); b.disabled=true; const t=b.textContent; b.textContent='Recarregant…';
+   fetch('/api/ltv/reload').then(r=>r.json()).then(()=>{ ltvStatus(); }).finally(()=>{ b.disabled=false; b.textContent=t; }); });
+ ltvStatus();
+
+ // ---- Init mapa al abrir la pestaña ----
+ const calcTab=document.querySelector('.tab[data-pane="pane-calc"]');
+ if(calcTab)calcTab.addEventListener('click',()=>setTimeout(initMap,60));
+})();
+</script>"#;
+
 fn controls_html(lines: &[String], c: &Controls) -> String {
     let mut opts = String::from("<option value=\"\">Totes les línies</option>");
     for l in lines {
@@ -423,12 +694,20 @@ pub fn render_interactive_page(
     lines: &[String],
     controls: &Controls,
     generated_at: &str,
+    calc_panel: &str,
 ) -> String {
     let body = render_body(summary, example, sim, res, generated_at);
     let ctrls = controls_html(lines, controls);
     let optp = optimizer_panel();
     format!(
-        "<title>rodalies-sim · dashboard interactiu</title>\n{STYLE}\n<div class=\"wrap\">\n  {HEADER}\n  {ctrls}\n  {optp}\n  <div id=\"dashboard\">\n{body}\n  </div>\n</div>\n{SCRIPT}\n{OPT_SCRIPT}\n"
+        "<title>rodalies-sim · dashboard interactiu</title>\n{STYLE}\n<div class=\"wrap\">\n  {HEADER}\n  \
+         <div class=\"tabs\">\
+           <button class=\"tab active\" data-pane=\"pane-sim\">Simulador · Optimitzador</button>\
+           <button class=\"tab\" data-pane=\"pane-calc\">Calculador de temps mínim</button>\
+         </div>\n  \
+         <div id=\"pane-sim\" class=\"tabpane active\">\n  {ctrls}\n  {optp}\n  <div id=\"dashboard\">\n{body}\n  </div>\n  </div>\n  \
+         <div id=\"pane-calc\" class=\"tabpane\">\n  {calc_panel}\n  </div>\n\
+         </div>\n{SCRIPT}\n{OPT_SCRIPT}\n{TAB_SCRIPT}\n{CALC_SCRIPT}\n{CALC2_SCRIPT}\n"
     )
 }
 

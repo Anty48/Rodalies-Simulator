@@ -18,3 +18,13 @@ Thumbs.db
 
 # Simulador de referencia en Godot (material de consulta, no forma parte del crate)
 /Simulador antiguo godot (para ayudar)/
+
+# Fase 3: datos ADIF procesados (grandes, no versionar)
+processed/
+
+# LTV: ZIPs diarios de ADIF (datos, no versionar); conservar la carpeta
+raw/ltv/*
+!raw/ltv/.gitkeep
+
+# ZIPs de datos crudos en la raíz (feed nacional, no versionar)
+/fomento_transit*.zip

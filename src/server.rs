@@ -51,6 +51,12 @@ pub struct ServerState {
     pub load_ms: f64,
     pub lines: Vec<String>,
     pub opt: Arc<Mutex<OptJob>>,
+    /// Caché de análisis de línea (clave = query string) para no recalcular.
+    pub line_cache: Mutex<HashMap<String, String>>,
+    /// Infraestructura ADIF (CVM + geometría) si está el fichero procesado.
+    pub adif: Option<crate::calculator::infrastructure::AdifNet>,
+    /// LTV (temporales) — recargable en caliente vía /api/ltv/reload.
+    pub ltv: std::sync::RwLock<Option<Arc<crate::calculator::ltv::LtvSet>>>,
 }
 
 pub async fn serve(state: Arc<ServerState>, port: u16) -> std::io::Result<()> {
@@ -83,6 +89,12 @@ async fn handle(mut stream: TcpStream, state: Arc<ServerState>) -> std::io::Resu
     let (status, ctype, body): (&str, &str, Vec<u8>) = match path {
         "/" => ("200 OK", "text/html", render_page(&state).into_bytes()),
         "/api/render" => ("200 OK", "text/html", render_fragment(&state, query).into_bytes()),
+        "/api/mintime" => ("200 OK", "text/html", render_mintime(&state, query).into_bytes()),
+        "/api/lines" => ("200 OK", "application/json", lines_json(&state).into_bytes()),
+        "/api/stations" => ("200 OK", "application/json", stations_json(&state).into_bytes()),
+        "/api/line" => ("200 OK", "application/json", line_json(&state, query).into_bytes()),
+        "/api/ltv/status" => ("200 OK", "application/json", ltv_status(&state).into_bytes()),
+        "/api/ltv/reload" => ("200 OK", "application/json", ltv_reload(&state).into_bytes()),
         "/api/optimize/start" => {
             ("200 OK", "application/json", start_optimization(&state, query).into_bytes())
         }
@@ -145,9 +157,201 @@ fn render_page(state: &ServerState) -> String {
         headway: p.min_block_headway,
         random: p.random,
     };
+    let stations = crate::calculator::infrastructure::station_list(net);
+    let calc_panel = crate::calculator::render::panel(&stations);
     report::render_interactive_page(
-        &summary, &example, &sim, &res, &state.lines, &controls, &now_utc_string(),
+        &summary, &example, &sim, &res, &state.lines, &controls, &now_utc_string(), &calc_panel,
     )
+}
+
+/// Fragmento de resultados del calculador de tiempo mínimo.
+fn render_mintime(state: &ServerState, query: &str) -> String {
+    let q = parse_query(query);
+    let net = &state.net;
+    let origin = q.get("origin").cloned().unwrap_or_default();
+    let dest = q.get("dest").cloned().unwrap_or_default();
+    let dt: f64 = q.get("dt").and_then(|v| v.parse().ok()).unwrap_or(0.1);
+    let series: Vec<String> = q
+        .get("series")
+        .map(|s| s.split(',').filter(|x| !x.is_empty()).map(|x| x.to_string()).collect())
+        .unwrap_or_default();
+    let apply_ltv = q.get("ltv").map(|v| v == "1").unwrap_or(false);
+    let ltv = if apply_ltv { state.ltv.read().ok().and_then(|g| g.clone()) } else { None };
+    let view = crate::calculator::compute(
+        net, &origin, &dest, &series, dt, state.adif.as_ref(), ltv.as_deref(),
+    );
+    crate::calculator::render::fragment(&view)
+}
+
+// -------------------------------------------------------------------------
+// Calculador · análisis de línea completa (JSON)
+// -------------------------------------------------------------------------
+
+#[derive(Serialize)]
+struct DirOut {
+    d0: String,
+    d1: String,
+    label: String,
+    n: usize,
+}
+#[derive(Serialize)]
+struct LineOut {
+    line: String,
+    directions: Vec<DirOut>,
+}
+
+/// Lista de líneas ferroviarias (no bus) con sus sentidos.
+fn lines_json(state: &ServerState) -> String {
+    let net = &state.net;
+    let mut out: Vec<LineOut> = Vec::new();
+    for line in &state.lines {
+        let dirs = crate::calculator::schedules::line_directions(net, line);
+        if dirs.is_empty() {
+            continue; // línea sin servicios de tren (p.ej. sólo buses)
+        }
+        let directions = dirs
+            .into_iter()
+            .filter(|d| d.n_services >= 2)
+            .map(|d| DirOut {
+                d0: d.key.0,
+                d1: d.key.1,
+                label: d.label,
+                n: d.n_services,
+            })
+            .collect::<Vec<_>>();
+        if !directions.is_empty() {
+            out.push(LineOut { line: line.clone(), directions });
+        }
+    }
+    serde_json::to_string(&out).unwrap_or_else(|_| "[]".into())
+}
+
+#[derive(Serialize)]
+struct StationOut {
+    id: String,
+    name: String,
+    lat: f64,
+    lon: f64,
+}
+
+/// Todas las estaciones con coordenadas que participan en algún servicio (para el mapa).
+fn stations_json(state: &ServerState) -> String {
+    let net = &state.net;
+    let mut seen = std::collections::HashSet::new();
+    let mut out: Vec<StationOut> = Vec::new();
+    for svc in &net.services {
+        for s in &svc.schedule {
+            if !seen.insert(s.stop_id.clone()) {
+                continue;
+            }
+            if let Some(n) = net.node(&s.stop_id) {
+                let sn = &net.graph[n];
+                if let (Some(lat), Some(lon)) = (sn.lat, sn.lon) {
+                    out.push(StationOut {
+                        id: sn.stop_id.clone(),
+                        name: sn.stop_name.clone(),
+                        lat,
+                        lon,
+                    });
+                }
+            }
+        }
+    }
+    serde_json::to_string(&out).unwrap_or_else(|_| "[]".into())
+}
+
+/// Análisis de línea completa (con caché por query string).
+fn line_json(state: &ServerState, query: &str) -> String {
+    // Caché.
+    if let Ok(cache) = state.line_cache.lock() {
+        if let Some(hit) = cache.get(query) {
+            return hit.clone();
+        }
+    }
+    let net = &state.net;
+    let q = parse_query(query);
+    let line = q.get("line").cloned().unwrap_or_default();
+
+    // Sentido: (d0,d1) o el primero disponible.
+    let dirs = crate::calculator::schedules::line_directions(net, &line);
+    let key = match (q.get("d0"), q.get("d1")) {
+        (Some(a), Some(b)) if !a.is_empty() && !b.is_empty() => (a.clone(), b.clone()),
+        _ => match dirs.first() {
+            Some(d) => d.key.clone(),
+            None => {
+                return serde_json::json!({"error":"Línia sense sentits al GTFS."}).to_string()
+            }
+        },
+    };
+
+    let series: Vec<String> = q
+        .get("series")
+        .map(|s| s.split(',').filter(|x| !x.is_empty()).map(|x| x.to_string()).collect())
+        .unwrap_or_else(|| vec!["447".into(), "450".into(), "470".into(), "490".into()]);
+
+    let dt: f64 = q.get("dt").and_then(|v| v.parse().ok()).unwrap_or(0.1);
+
+    let dwell = match q.get("dwell").map(|s| s.as_str()) {
+        Some("fixed") => {
+            let s = q.get("dwell_s").and_then(|v| v.parse().ok()).unwrap_or(30);
+            crate::calculator::line_analysis::DwellMode::Fixed(s)
+        }
+        Some("custom") => {
+            let mut m = std::collections::HashMap::new();
+            if let Some(c) = q.get("custom") {
+                for pair in c.split(',') {
+                    if let Some((id, sec)) = pair.split_once(':') {
+                        if let Ok(v) = sec.parse::<u32>() {
+                            m.insert(id.to_string(), v);
+                        }
+                    }
+                }
+            }
+            crate::calculator::line_analysis::DwellMode::Custom(m)
+        }
+        _ => crate::calculator::line_analysis::DwellMode::Auto,
+    };
+
+    let apply_ltv = q.get("ltv").map(|v| v == "1").unwrap_or(false);
+    let ltv = if apply_ltv { state.ltv.read().ok().and_then(|g| g.clone()) } else { None };
+    let analysis = crate::calculator::line_analysis::analyze_line(
+        net, &line, &key, &series, &dwell, dt, state.adif.as_ref(), ltv.as_deref(),
+    );
+    let json = serde_json::to_string(&analysis).unwrap_or_else(|_| "{}".into());
+
+    if analysis.error.is_none() {
+        if let Ok(mut cache) = state.line_cache.lock() {
+            if cache.len() > 200 {
+                cache.clear();
+            }
+            cache.insert(query.to_string(), json.clone());
+        }
+    }
+    json
+}
+
+/// Estado actual de las LTV cargadas.
+fn ltv_status(state: &ServerState) -> String {
+    match state.ltv.read().ok().and_then(|g| g.clone()) {
+        Some(l) => serde_json::json!({"available":true,"snapshot":l.snapshot,"count":l.count(),"source":l.source}).to_string(),
+        None => serde_json::json!({"available":false}).to_string(),
+    }
+}
+
+/// Recarga las LTV desde raw/ltv (ZIP diario) o processed/adif/ltv.json y limpia la caché.
+fn ltv_reload(state: &ServerState) -> String {
+    let fresh = crate::calculator::ltv::load_default().map(Arc::new);
+    let out = match &fresh {
+        Some(l) => serde_json::json!({"ok":true,"snapshot":l.snapshot,"count":l.count(),"source":l.source}).to_string(),
+        None => serde_json::json!({"ok":false,"reason":"no s'ha trobat cap dada LTV (raw/ltv o processed/adif/ltv.json)"}).to_string(),
+    };
+    if let Ok(mut g) = state.ltv.write() {
+        *g = fresh;
+    }
+    if let Ok(mut c) = state.line_cache.lock() {
+        c.clear(); // los análisis cacheados pueden depender de LTV
+    }
+    out
 }
 
 fn render_fragment(state: &ServerState, query: &str) -> String {
