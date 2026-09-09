@@ -6,6 +6,9 @@
   --morado:#830065; --naranja:#ec6e15; --verde:#2f9e44; --rojo:#c5221f;
 }
 * { box-sizing:border-box; }
+/* El atributo `hidden` debe ganar SIEMPRE, aunque el elemento tenga display:flex
+   (si no, los overlays .findia/.trenes se mostrarían al cargar). */
+[hidden] { display:none !important; }
 html,body { height:100%; }
 body { margin:0; background:var(--bg); color:var(--text);
   font-family:'Segoe UI',system-ui,-apple-system,sans-serif; display:flex; flex-direction:column; overflow:hidden; }
