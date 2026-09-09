@@ -5,6 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="light">
 <title>Rodalies Simulator · simulador de red</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <link rel="stylesheet" href="/game/style.css">
 </head>
 <body>
@@ -31,12 +33,12 @@
 </header>
 
 <main>
-  <canvas id="map"></canvas>
+  <div id="map"></div>
 
   <aside class="panel" id="panel">
     <section class="kpi-row">
       <div class="kpi"><div class="v" id="kActive">0</div><div class="l">trenes en circulación</div></div>
-      <div class="kpi"><div class="v" id="kDelay">0</div><div class="l">retraso acumulado (min·pasajero)</div></div>
+      <div class="kpi alt"><div class="v" id="kDelay">0</div><div class="l">retraso acumulado (min·pasajero)</div></div>
     </section>
     <section class="block">
       <h2>Red</h2>
@@ -55,12 +57,11 @@
     </section>
     <section class="block">
       <h2>Controles</h2>
-      <p class="muted">Arrastrar: desplazar · Rueda: zoom · Clic en estación: información. El reloj recorre la jornada 05:00 → 00:00 (día laborable dominante del GTFS).</p>
+      <p class="muted">Arrastrar: desplazar · Rueda: zoom (acotado a Cataluña) · Clic en estación: información. El reloj recorre la jornada 05:00 → 00:00 (día laborable dominante del GTFS). Base: ortofoto satélite (Esri World Imagery).</p>
     </section>
   </aside>
 </main>
 
-<div class="tip" id="tip" hidden></div>
 <script src="/game/app.js"></script>
 </body>
 </html>

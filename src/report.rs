@@ -207,11 +207,15 @@ const STYLE: &str = r#"<style>
    trenes, con el rojo corporativo de Rodalies como único acento, usado con
    mesura. Aspecto instrumental/científico: superficies planas, sin degradados. */
 :root {
-  --bg:#eceff3; --panel:#ffffff; --panel2:#f3f5f8; --border:#d3dae1;
-  --text:#1b2127; --muted:#5d6b78; --ink:#2b333b;
-  --accent:#d2231b; --accent-soft:rgba(210,35,27,.08); --accent2:#2b333b;
-  --arr:#1b7f3b; --dep:#1f6feb; --late:#c5221f; --warn:#9a6700;
-  --grid:#e1e6eb;
+  /* Paleta Renfe/Rodalies combinada: morado Renfe (#830065) y naranja Rodalies (#EC6E15)
+     como dos acentos repartidos por la interfaz, sobre blanco cálido (#F9F5F1) y gris
+     oscuro (#26272D) para texto y estructura. */
+  --bg:#f9f5f1; --panel:#ffffff; --panel2:#f4efe9; --border:#e3dace;
+  --text:#26272d; --muted:#6c6a72; --ink:#26272d;
+  --accent:#830065; --accent-soft:rgba(131,0,101,.08); --accent2:#ec6e15;
+  --accent2-soft:rgba(236,110,21,.10);
+  --arr:#1b7f3b; --dep:#1f6feb; --late:#c5221f; --warn:#b25a00;
+  --grid:#ece3d8;
 }
 * { box-sizing:border-box; }
 body { margin:0; background:var(--bg); color:var(--text);
@@ -252,7 +256,7 @@ td.num { text-align:right; font-variant-numeric:tabular-nums; }
 .bar-val { width:52px; text-align:right; font-variant-numeric:tabular-nums; }
 .bar-track { flex:1; height:10px; background:var(--panel2); border:1px solid var(--border); border-radius:3px; overflow:hidden; }
 .bar-track.sm { height:8px; }
-.bar-fill { display:block; height:100%; background:var(--accent); border-radius:2px; }
+.bar-fill { display:block; height:100%; background:var(--accent2); border-radius:2px; }
 .metrics { display:grid; grid-template-columns:1fr 1fr; gap:10px 22px; }
 .metric { display:flex; justify-content:space-between; border-bottom:1px dashed var(--border); padding:6px 0; font-size:.9rem; }
 .metric-label { color:var(--muted); }
@@ -324,7 +328,7 @@ h4 { margin:16px 0 8px; font-size:.98rem; }
 .modal-plot { width:100%; height:100%; }
 .anom { background:rgba(154,103,0,.08); border-left:3px solid var(--warn); padding:8px 12px; border-radius:0 4px 4px 0; margin-bottom:8px; font-size:.86rem; }
 .progress { height:8px; background:var(--panel2); border:1px solid var(--border); border-radius:4px; overflow:hidden; margin-top:8px; }
-.progress > i { display:block; height:100%; width:0; background:var(--accent); }
+.progress > i { display:block; height:100%; width:0; background:var(--accent2); }
 .subtabs { display:flex; gap:6px; flex-wrap:wrap; margin:6px 0 14px; }
 .subtab { background:var(--panel2); border:1px solid var(--border); color:var(--muted); border-radius:4px; padding:6px 12px; cursor:pointer; font-size:.85rem; }
 .subtab.active { color:var(--accent); border-color:var(--accent); }
@@ -381,7 +385,7 @@ fn game_panel() -> String {
     <p class="muted" style="margin-top:8px">Simulador 2D de la red construido íntegramente a partir del GTFS de Fomento_Transit: estaciones, vías reales por estación y la <b>secuencia real de cada línea</b> (sin aproximaciones). Los trenes circulan por su ruta siguiendo el horario a lo largo de la jornada (05:00–00:00), con reloj y control de velocidad. Puede cargar el <b>horario programado (GTFS)</b> o los <b>horarios optimizados</b> que produce el optimizador, e inyectar incidencias para observar el retraso acumulado.</p>
     <div style="margin-top:14px;display:flex;gap:10px;flex-wrap:wrap">
       <a class="btn" href="/game" target="_blank" rel="noopener">Abrir con horario programado (GTFS)</a>
-      <a class="btn" href="/game?source=optimized" target="_blank" rel="noopener" style="background:var(--ink)">Abrir con horario optimizado</a>
+      <a class="btn" href="/game?source=optimized" target="_blank" rel="noopener" style="background:var(--accent2)">Abrir con horario optimizado</a>
     </div>
     <p class="muted" style="margin-top:10px">El horario optimizado requiere haber ejecutado antes el optimizador (los CSV en <code>report/optimized/</code>); si no existen, el juego usa el programado.</p>
   </div>"#.to_string()
@@ -399,7 +403,7 @@ const OPT_SCRIPT: &str = r#"<script>
    ctx.beginPath();ctx.moveTo(P,y(mx));ctx.lineTo(W-P,y(mx));ctx.stroke();ctx.fillText(mx.toFixed(0),2,y(mx)+4);
    ctx.beginPath();ctx.moveTo(P,y(mn));ctx.lineTo(W-P,y(mn));ctx.stroke();ctx.fillText(mn.toFixed(0),2,y(mn)+4);
    if(base){ctx.strokeStyle='#9aa6b2';ctx.setLineDash([4,4]);ctx.beginPath();ctx.moveTo(P,y(base));ctx.lineTo(W-P,y(base));ctx.stroke();ctx.setLineDash([]);ctx.fillText('V inicial',W-P-52,y(base)-4);}
-   ctx.strokeStyle='#d2231b';ctx.lineWidth=2;ctx.beginPath();h.forEach((v,i)=>{i?ctx.lineTo(x(i),y(v)):ctx.moveTo(x(i),y(v));});ctx.stroke();
+   ctx.strokeStyle='#830065';ctx.lineWidth=2;ctx.beginPath();h.forEach((v,i)=>{i?ctx.lineTo(x(i),y(v)):ctx.moveTo(x(i),y(v));});ctx.stroke();
  }
  async function poll(){ let j; try{j=await (await fetch('/api/optimize/status')).json();}catch(e){return;}
    draw(j.history,j.base_v);
@@ -409,7 +413,7 @@ const OPT_SCRIPT: &str = r#"<script>
      else {
        $('o_status').innerHTML='<b style="color:#1b7f3b">Optimización finalizada</b> · '+j.total+' iteraciones · '+j.trips+' trenes coordinados';
        let rows=(j.files||[]).map(f=>'<tr><td class=mono>'+f.line+'</td><td class=num>'+(f.offset_min>=0?'+':'')+f.offset_min+' min</td><td><a href="'+f.csv+'" target=_blank>CSV</a></td><td><a href="'+f.pdf+'" target=_blank>PDF</a></td></tr>').join('');
-       $('o_result').innerHTML='<div class="optdone">Potencial V: <b>'+j.base_v.toFixed(1)+'</b> → <b style="color:#d2231b">'+j.best_v.toFixed(1)+'</b> (<b>−'+j.delta_pct.toFixed(1)+'%</b>) &nbsp;·&nbsp; pico de retraso medio '+j.base_delay.toFixed(0)+' → '+j.best_delay.toFixed(0)+' s &nbsp;·&nbsp; recuperación '+j.base_recovery.toFixed(1)+' → '+j.best_recovery.toFixed(1)+' min</div>'
+       $('o_result').innerHTML='<div class="optdone">Potencial V: <b>'+j.base_v.toFixed(1)+'</b> → <b style="color:#ec6e15">'+j.best_v.toFixed(1)+'</b> (<b>−'+j.delta_pct.toFixed(1)+'%</b>) &nbsp;·&nbsp; pico de retraso medio '+j.base_delay.toFixed(0)+' → '+j.best_delay.toFixed(0)+' s &nbsp;·&nbsp; recuperación '+j.base_recovery.toFixed(1)+' → '+j.best_recovery.toFixed(1)+' min</div>'
          +'<div class="scroll" style="margin-top:10px"><table><thead><tr><th>línea</th><th>desfase</th><th>horario</th><th></th></tr></thead><tbody>'+rows+'</tbody></table></div>';
      }
    }
