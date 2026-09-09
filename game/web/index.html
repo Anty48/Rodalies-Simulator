@@ -11,14 +11,17 @@
 </head>
 <body>
 <header class="bar">
-  <div class="brand"><span class="mark">R</span> Rodalies Simulator <span class="sub">· simulador de red</span></div>
+  <a class="menu" href="/" title="Volver al panel">← Menú</a>
+  <div class="brand"><span class="mark">R</span> Rodalies Simulator</div>
   <div class="clock" id="clock">05:00</div>
   <div class="speeds" id="speeds">
-    <button data-speed="0" class="active">Pausa</button>
-    <button data-speed="1">×1</button>
-    <button data-speed="2">×2</button>
-    <button data-speed="5">×5</button>
-    <button data-speed="20">×20</button>
+    <button data-speed="PAUSA" class="active">Pausa</button>
+    <button data-speed="X0.05">×0.05</button>
+    <button data-speed="X0.5">×0.5</button>
+    <button data-speed="X1">×1</button>
+    <button data-speed="X2">×2</button>
+    <button data-speed="X5">×5</button>
+    <button data-speed="X25">×25</button>
   </div>
   <div class="src">
     <label>Horarios
@@ -29,6 +32,7 @@
     </label>
     <select id="lineFilter"><option value="">Todas las líneas</option></select>
     <button id="reload">Cargar</button>
+    <button id="btnTrenes">Trenes</button>
   </div>
 </header>
 
@@ -38,29 +42,81 @@
   <aside class="panel" id="panel">
     <section class="kpi-row">
       <div class="kpi"><div class="v" id="kActive">0</div><div class="l">trenes en circulación</div></div>
-      <div class="kpi alt"><div class="v" id="kDelay">0</div><div class="l">retraso acumulado (min·pasajero)</div></div>
+      <div class="kpi alt"><div class="v" id="kDelay">0</div><div class="l">KPI retraso (pax·min)</div></div>
     </section>
+
     <section class="block">
       <h2>Red</h2>
       <div class="muted" id="netInfo">Cargando la red desde el GTFS…</div>
       <div class="legend" id="legend"></div>
+      <label class="chk"><input type="checkbox" id="showSignals" checked> Semáforos de tramo (al acercar)</label>
     </section>
+
     <section class="block">
-      <h2>Incidencias</h2>
-      <p class="muted">Inyecte un retraso en un tren en circulación para ver propagarse el KPI.</p>
-      <button id="incident">Inyectar incidencia (+5 min a un tren)</button>
+      <h2>Generador de incidencias</h2>
+      <div class="form">
+        <label>Tipo
+          <select id="incType"></select>
+        </label>
+        <label>Ámbito
+          <select id="incScope">
+            <option value="station">En una estación</option>
+            <option value="edge">En un tramo</option>
+          </select>
+        </label>
+        <label>Dónde
+          <select id="incWhere"></select>
+        </label>
+        <label>Cuándo (hh:mm)
+          <input type="time" id="incWhen" value="08:00" step="60">
+        </label>
+        <div class="btns">
+          <button id="incNow">Ahora</button>
+          <button id="incSchedule" class="primary">Programar</button>
+        </div>
+      </div>
       <ul class="inc" id="incList"></ul>
     </section>
+
     <section class="block" id="stationBox" hidden>
       <h2 id="stName">Estación</h2>
-      <div class="muted" id="stInfo"></div>
+      <div class="muted" id="stMeta"></div>
+      <div id="stNext" class="muted"></div>
+      <div id="stTracks" class="tracks"></div>
     </section>
+
     <section class="block">
       <h2>Controles</h2>
-      <p class="muted">Arrastrar: desplazar · Rueda: zoom (acotado a Cataluña) · Clic en estación: información. El reloj recorre la jornada 05:00 → 00:00 (día laborable dominante del GTFS). Base: ortofoto satélite (Esri World Imagery).</p>
+      <p class="muted">Arrastrar: desplazar · Rueda: zoom · Clic en estación: enclavamiento (vías, semáforos internos, vía principal, ocupación). Clic en un semáforo de tramo: Automático / Manual verde / Manual rojo. Los semáforos en rojo retienen a los trenes (retraso real → KPI). Reloj 05:00→00:00.</p>
     </section>
   </aside>
 </main>
+
+<!-- Panel de trenes (flotante, como en Godot) -->
+<div class="trenes" id="trenesPanel" hidden>
+  <div class="trenes-head">
+    <b>Trenes en marcha</b>
+    <button id="trenesClose">✕</button>
+  </div>
+  <div class="trenes-filters">
+    <select id="tFiltLine"><option value="">Todas</option></select>
+    <label class="chk"><input type="checkbox" id="tOnlyLate"> Solo con retraso</label>
+    <select id="tSort"><option value="line">Ordenar: línea</option><option value="delay">Ordenar: retraso</option></select>
+  </div>
+  <div class="trenes-list" id="trenesList"></div>
+</div>
+
+<!-- Fin del día -->
+<div class="findia" id="finDia" hidden>
+  <div class="findia-inner">
+    <h2>Fin del día · 00:00</h2>
+    <div id="finStats"></div>
+    <div class="btns">
+      <button id="finRepetir" class="primary">Repetir el día</button>
+      <a class="btn-sec" href="/">Menú principal</a>
+    </div>
+  </div>
+</div>
 
 <script src="/game/app.js"></script>
 </body>

@@ -50,6 +50,17 @@ struct GameLine {
     directions: Vec<GameDirection>,
 }
 
+/// Cantón (arista dirigida entre dos estaciones consecutivas de algún servicio) y las
+/// líneas que lo recorren. Es la unidad de vía real: dibujar por cantones —en vez de por
+/// una sola polilínea de itinerario— cubre TODAS las secciones por donde circula algún tren
+/// y evita las rectas «entre puntos aleatorios» de un itinerario mal ordenado.
+#[derive(Serialize)]
+struct GameEdge {
+    from: String,
+    to: String,
+    lines: Vec<String>,
+}
+
 #[derive(Serialize)]
 struct GameNetwork {
     generated_at: String,
@@ -57,6 +68,10 @@ struct GameNetwork {
     n_lines: usize,
     lines: Vec<GameLine>,
     stations: Vec<GameStation>,
+    /// Cantones (secciones de vía) con las líneas que los usan.
+    edges: Vec<GameEdge>,
+    /// Pares de estaciones (por stop_id) que forman tramos de vía única (de `topology`).
+    single_track: Vec<[String; 2]>,
 }
 
 /// Color estable de reserva cuando el feed no trae `route_color` (mismo criterio que el
@@ -70,9 +85,31 @@ fn fallback_color(line: &str) -> String {
 
 /// JSON de la topología del juego (estaciones + líneas con secuencias reales y colores).
 pub fn network_json(net: &Network, lines: &[String], generated_at: &str) -> String {
-    // Acumuladores de estaciones: id -> (nombre, lat, lon) y líneas que la sirven.
+    // Acumuladores de estaciones: id -> (nombre, lat, lon) y líneas que la sirven. Se llenan
+    // recorriendo TODOS los servicios de tren (no autobuses), de modo que toda estación por la
+    // que circula algún tren queda registrada (y así todo extremo de cantón es una estación
+    // conocida), no sólo las del itinerario canónico de cada sentido.
     let mut st_meta: HashMap<String, (String, f64, f64)> = HashMap::new();
     let mut st_lines: HashMap<String, Vec<String>> = HashMap::new();
+    for svc in &net.services {
+        if svc.is_bus {
+            continue;
+        }
+        for st in &svc.schedule {
+            if let Some(n) = net.node(&st.stop_id) {
+                let node = &net.graph[n];
+                if let (Some(lat), Some(lon)) = (node.lat, node.lon) {
+                    st_meta
+                        .entry(st.stop_id.clone())
+                        .or_insert_with(|| (node.stop_name.clone(), lat, lon));
+                    let entry = st_lines.entry(st.stop_id.clone()).or_default();
+                    if !entry.contains(&svc.route_short_name) {
+                        entry.push(svc.route_short_name.clone());
+                    }
+                }
+            }
+        }
+    }
 
     let mut out_lines: Vec<GameLine> = Vec::new();
     for line in lines {
@@ -85,19 +122,7 @@ pub fn network_json(net: &Network, lines: &[String], generated_at: &str) -> Stri
             let Some(itin) = crate::calculator::schedules::itinerary(net, line, &d.key) else {
                 continue;
             };
-            let mut seq: Vec<String> = Vec::with_capacity(itin.stops.len());
-            for s in &itin.stops {
-                seq.push(s.stop_id.clone());
-                if let (Some(lat), Some(lon)) = (s.lat, s.lon) {
-                    st_meta
-                        .entry(s.stop_id.clone())
-                        .or_insert_with(|| (s.name.clone(), lat, lon));
-                }
-                let entry = st_lines.entry(s.stop_id.clone()).or_default();
-                if !entry.contains(line) {
-                    entry.push(line.clone());
-                }
-            }
+            let seq: Vec<String> = itin.stops.iter().map(|s| s.stop_id.clone()).collect();
             directions.push(GameDirection {
                 from: d.key.0.clone(),
                 to: d.key.1.clone(),
@@ -120,6 +145,9 @@ pub fn network_json(net: &Network, lines: &[String], generated_at: &str) -> Stri
         });
     }
 
+    // Conjunto de estaciones con coordenadas (para validar extremos de cantón).
+    let st_coords: std::collections::HashSet<String> = st_meta.keys().cloned().collect();
+
     // Estaciones ordenadas por id (determinista).
     let mut stations: Vec<GameStation> = st_meta
         .into_iter()
@@ -139,12 +167,48 @@ pub fn network_json(net: &Network, lines: &[String], generated_at: &str) -> Stri
         .collect();
     stations.sort_by(|a, b| a.id.cmp(&b.id));
 
+    // Cantones: recorremos TODOS los servicios de tren (no autobuses) y registramos cada par
+    // de paradas consecutivas como una arista dirigida, acumulando qué líneas la usan. Así el
+    // trazado cubre cada sección por la que circula algún tren (incluidas ramificaciones).
+    let mut edge_lines: BTreeMap<(String, String), std::collections::BTreeSet<String>> = BTreeMap::new();
+    for svc in &net.services {
+        if svc.is_bus {
+            continue;
+        }
+        for w in svc.schedule.windows(2) {
+            edge_lines
+                .entry((w[0].stop_id.clone(), w[1].stop_id.clone()))
+                .or_default()
+                .insert(svc.route_short_name.clone());
+        }
+    }
+    // Sólo aristas cuyas dos estaciones tienen coordenadas (si no, no se pueden dibujar).
+    let coord = |id: &str| st_coords.contains(id);
+    let edges: Vec<GameEdge> = edge_lines
+        .into_iter()
+        .filter(|((a, b), _)| coord(a) && coord(b))
+        .map(|((from, to), lines)| GameEdge {
+            from,
+            to,
+            lines: lines.into_iter().collect(),
+        })
+        .collect();
+
+    // Tramos de vía única (de topology), traducidos a pares de stop_id.
+    let single_track: Vec<[String; 2]> = topology::single_track_pairs(net)
+        .into_iter()
+        .map(|(a, b)| [net.graph[a].stop_id.clone(), net.graph[b].stop_id.clone()])
+        .filter(|[a, b]| coord(a) && coord(b))
+        .collect();
+
     let net_out = GameNetwork {
         generated_at: generated_at.to_string(),
         n_stations: stations.len(),
         n_lines: out_lines.len(),
         lines: out_lines,
         stations,
+        edges,
+        single_track,
     };
     serde_json::to_string(&net_out).unwrap_or_else(|_| "{}".into())
 }
