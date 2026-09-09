@@ -74,6 +74,38 @@ struct GameNetwork {
     single_track: Vec<[String; 2]>,
 }
 
+/// ¿Existe un camino de `a` a `b` en `adj` SIN usar la arista directa `a→b`? (BFS). Se usa
+/// para la reducción transitiva del trazado: si lo hay, la arista `a→b` es un atajo (exprés)
+/// que la vía real ya cubre paso a paso, así que no debe dibujarse.
+fn path_exists_excluding(adj: &HashMap<&str, Vec<&str>>, a: &str, b: &str) -> bool {
+    let mut visto: std::collections::HashSet<&str> = std::collections::HashSet::new();
+    let mut cola: std::collections::VecDeque<&str> = std::collections::VecDeque::new();
+    visto.insert(a);
+    if let Some(vs) = adj.get(a) {
+        for &v in vs {
+            if v == b {
+                continue; // salta la arista directa a→b (una única vez, desde el origen)
+            }
+            if visto.insert(v) {
+                cola.push_back(v);
+            }
+        }
+    }
+    while let Some(u) = cola.pop_front() {
+        if u == b {
+            return true;
+        }
+        if let Some(vs) = adj.get(u) {
+            for &v in vs {
+                if visto.insert(v) {
+                    cola.push_back(v);
+                }
+            }
+        }
+    }
+    false
+}
+
 /// Color estable de reserva cuando el feed no trae `route_color` (mismo criterio que el
 /// mapa de la red): tono derivado del nombre, luminosidad moderada para fondo claro.
 fn fallback_color(line: &str) -> String {
@@ -182,11 +214,35 @@ pub fn network_json(net: &Network, lines: &[String], generated_at: &str) -> Stri
                 .insert(svc.route_short_name.clone());
         }
     }
-    // Sólo aristas cuyas dos estaciones tienen coordenadas (si no, no se pueden dibujar).
+    // Reducción transitiva POR LÍNEA: un servicio exprés que salta paradas produce un
+    // «atajo» A→C aunque la vía real pase por B (existen A→B y B→C). Ese atajo dibujaría una
+    // línea recta espuria. Para cada línea eliminamos toda arista (u,v) que sea alcanzable de
+    // u a v por OTRO camino de la misma línea; así queda sólo la adyacencia fina (la vía real),
+    // conservando ramificaciones (que no se descomponen). El resultado se une entre líneas.
     let coord = |id: &str| st_coords.contains(id);
-    let edges: Vec<GameEdge> = edge_lines
+    let mut per_line: HashMap<String, Vec<(String, String)>> = HashMap::new();
+    for ((a, b), lns) in &edge_lines {
+        if !(coord(a) && coord(b)) {
+            continue;
+        }
+        for l in lns {
+            per_line.entry(l.clone()).or_default().push((a.clone(), b.clone()));
+        }
+    }
+    let mut kept: BTreeMap<(String, String), std::collections::BTreeSet<String>> = BTreeMap::new();
+    for (line, es) in &per_line {
+        let mut adj: HashMap<&str, Vec<&str>> = HashMap::new();
+        for (a, b) in es {
+            adj.entry(a.as_str()).or_default().push(b.as_str());
+        }
+        for (a, b) in es {
+            if !path_exists_excluding(&adj, a, b) {
+                kept.entry((a.clone(), b.clone())).or_default().insert(line.clone());
+            }
+        }
+    }
+    let edges: Vec<GameEdge> = kept
         .into_iter()
-        .filter(|((a, b), _)| coord(a) && coord(b))
         .map(|((from, to), lines)| GameEdge {
             from,
             to,

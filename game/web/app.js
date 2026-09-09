@@ -200,7 +200,6 @@ function render() {
   for (const [id, m] of trainMarkers) if (!vivos.has(id)) { trainLayer.removeLayer(m); trainMarkers.delete(id); }
   $("kActive").textContent = S.activos;
   $("clock").textContent = hhmm(S.simT);
-  if (S.selSt) refrescarEstacion();
 }
 const nombre = (id) => { const s = S.stationById.get(id); return s ? s.name : id; };
 
@@ -223,38 +222,50 @@ function pintarSemaforos() {
 map.on("moveend zoomend", pintarSemaforos);
 
 // ---- Panel de enclavamiento de estación ---------------------------------------------------
-function abrirEstacion(s) { S.selSt = s; $("stationBox").hidden = false; refrescarEstacion(); }
-function refrescarEstacion() {
+function abrirEstacion(s) { S.selSt = s; $("stationBox").hidden = false; buildStationPanel(); }
+
+// Construye el panel UNA vez (o al cambiar un ajuste): crea el DOM y engancha los manejadores.
+// No debe llamarse cada fotograma (destruiría los botones justo al pulsarlos).
+function buildStationPanel() {
   const s = S.selSt; if (!s) return;
   const il = interlock(s.id);
-  // Ocupación en vivo: trenes parados aquí ocupan la vía principal de su lado.
-  for (let v = 0; v < il.tracks; v++) il.occ[v] = null;
-  for (const t of S.trains) { const te = S.simT - t.shift, seg = segmentoDe(t, te); if (seg && !seg.moving && t.pts[seg.i].id === s.id) { il.occ[t.side === "A" ? il.mainA : il.mainB] = t.id; } }
   $("stName").textContent = s.name;
   $("stMeta").textContent = `${il.tracks} vía(s) · líneas ${s.lines.join(", ")}`;
-  // Próximo tren que llega.
-  let prox = null, mejor = Infinity;
-  for (const t of S.trains) { const te = S.simT - t.shift, seg = segmentoDe(t, te); if (!seg) continue; for (let j = Math.max(seg.i, 0); j < t.pts.length; j++) { if (t.pts[j].id === s.id) { const eta = t.pts[j].a - te; if (eta >= 0 && eta < mejor) { mejor = eta; prox = t; } break; } } }
-  $("stNext").innerHTML = prox ? `<span class="stNextline">Próximo: <b>${prox.line}</b> tren ${prox.id} en ~${Math.round(mejor / 60)} min</span>` : `<span class="muted">Sin trenes próximos.</span>`;
-  // Selectores de vía principal + filas de vía con semáforos internos.
   let html = `<div class="form" style="display:flex;gap:8px;margin:8px 0">
       <label style="flex:1">Ppal. A<select id="selMainA"></select></label>
       <label style="flex:1">Ppal. B<select id="selMainB"></select></label></div>`;
   for (let v = 0; v < il.tracks; v++) {
-    const ga = il.green[v].A, gb = il.green[v].B, occ = il.occ[v];
+    const ga = il.green[v].A, gb = il.green[v].B;
     const tags = [il.mainA === v ? "◀A" : "", il.mainB === v ? "B▶" : ""].filter(Boolean).join(" ");
     html += `<div class="trackrow">
       <button class="sig ${ga ? "green" : "red"}" data-v="${v}" data-lado="A">A</button>
-      <div class="viac ${(il.mainA === v || il.mainB === v) ? "main" : ""} ${occ ? "occ" : ""}">Vía ${v + 1} ${tags}${occ ? " · " + occ : ""}</div>
+      <div class="viac ${(il.mainA === v || il.mainB === v) ? "main" : ""}" data-v="${v}">Vía ${v + 1} ${tags}<span class="occ-label"></span></div>
       <button class="sig ${gb ? "green" : "red"}" data-v="${v}" data-lado="B">B</button>
     </div>`;
   }
   const box = $("stTracks"); box.innerHTML = html;
   const opt = (sel, val) => { let o = ""; for (let v = 0; v < il.tracks; v++) o += `<option value="${v}"${v === val ? " selected" : ""}>Vía ${v + 1}</option>`; sel.innerHTML = o; };
   opt($("selMainA"), il.mainA); opt($("selMainB"), il.mainB);
-  $("selMainA").onchange = (e) => { il.mainA = +e.target.value; refrescarEstacion(); };
-  $("selMainB").onchange = (e) => { il.mainB = +e.target.value; refrescarEstacion(); };
-  box.querySelectorAll(".sig").forEach((b) => b.onclick = () => { const v = +b.dataset.v, l = b.dataset.lado; il.green[v][l] = !il.green[v][l]; refrescarEstacion(); });
+  $("selMainA").onchange = (e) => { il.mainA = +e.target.value; buildStationPanel(); };
+  $("selMainB").onchange = (e) => { il.mainB = +e.target.value; buildStationPanel(); };
+  box.querySelectorAll(".sig").forEach((b) => b.onclick = () => { const v = +b.dataset.v, l = b.dataset.lado; il.green[v][l] = !il.green[v][l]; buildStationPanel(); });
+  actualizarEstacionDinamico();
+}
+
+// Refresca SOLO lo que cambia con el tiempo (ocupación, próximo tren) sin recrear los botones.
+function actualizarEstacionDinamico() {
+  const s = S.selSt; if (!s || $("stationBox").hidden) return;
+  const il = interlock(s.id);
+  for (let v = 0; v < il.tracks; v++) il.occ[v] = null;
+  for (const t of S.trains) { const te = S.simT - t.shift, seg = segmentoDe(t, te); if (seg && !seg.moving && t.pts[seg.i].id === s.id) il.occ[t.side === "A" ? il.mainA : il.mainB] = t.id; }
+  let prox = null, mejor = Infinity;
+  for (const t of S.trains) { const te = S.simT - t.shift, seg = segmentoDe(t, te); if (!seg) continue; for (let j = Math.max(seg.i, 0); j < t.pts.length; j++) { if (t.pts[j].id === s.id) { const eta = t.pts[j].a - te; if (eta >= 0 && eta < mejor) { mejor = eta; prox = t; } break; } } }
+  $("stNext").innerHTML = prox ? `<span class="stNextline">Próximo: <b>${prox.line}</b> tren ${prox.id} en ~${Math.round(mejor / 60)} min</span>` : `<span class="muted">Sin trenes próximos.</span>`;
+  document.querySelectorAll("#stTracks .viac").forEach((cell) => {
+    const v = +cell.dataset.v, occ = il.occ[v];
+    cell.classList.toggle("occ", !!occ);
+    const lbl = cell.querySelector(".occ-label"); if (lbl) lbl.textContent = occ ? " · " + occ : "";
+  });
 }
 
 // ---- Generador de incidencias -------------------------------------------------------------
@@ -365,7 +376,7 @@ function bucle(now) {
   if (S.speed > 0 && !S.finished) paso(dt);
   render();
   acumUI += dt;
-  if (acumUI > 0.5) { acumUI = 0; actualizarKpi(); refrescarIncidencias(); refrescarTrenes(); }
+  if (acumUI > 0.5) { acumUI = 0; actualizarKpi(); refrescarIncidencias(); refrescarTrenes(); actualizarEstacionDinamico(); }
   requestAnimationFrame(bucle);
 }
 
