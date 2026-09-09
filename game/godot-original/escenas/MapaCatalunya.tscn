@@ -1,6 +1,0 @@
-[gd_scene format=3 uid="uid://q4oibj8dnw06"]
-
-[ext_resource type="Script" uid="uid://dlb33s2j6s2gp" path="res://scripts/MapaCatalunya.gd" id="1_i28ew"]
-
-[node name="MapaCatalunya" type="Node2D" unique_id=806240436]
-script = ExtResource("1_i28ew")
