@@ -40,11 +40,11 @@ impl Provenance {
     /// Color CSS para la insignia de procedencia en la UI.
     pub fn css(self) -> &'static str {
         match self {
-            Provenance::Oficial => "#3fb950",
-            Provenance::Secundaria => "#58a6ff",
-            Provenance::Estimacion => "#f5a623",
-            Provenance::Suposicion => "#f5a623",
-            Provenance::NoDisponible => "#f85149",
+            Provenance::Oficial => "#1b7f3b",
+            Provenance::Secundaria => "#1f6feb",
+            Provenance::Estimacion => "#9a6700",
+            Provenance::Suposicion => "#9a6700",
+            Provenance::NoDisponible => "#c5221f",
         }
     }
     /// Rango de incertidumbre (mayor = peor); usado para el aviso global por serie.

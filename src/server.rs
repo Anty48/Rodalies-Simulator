@@ -92,6 +92,29 @@ async fn handle(mut stream: TcpStream, state: Arc<ServerState>) -> std::io::Resu
         "/api/mintime" => ("200 OK", "text/html", render_mintime(&state, query).into_bytes()),
         "/api/lines" => ("200 OK", "application/json", lines_json(&state).into_bytes()),
         "/api/stations" => ("200 OK", "application/json", stations_json(&state).into_bytes()),
+        "/api/game/network" => (
+            "200 OK",
+            "application/json",
+            crate::game::network_json(&state.net, &state.lines, &now_utc_string()).into_bytes(),
+        ),
+        "/api/game/schedule" => {
+            let q = parse_query(query);
+            let optimized = q.get("source").map(|s| s == "optimized").unwrap_or(false);
+            let line = q.get("line").map(|s| s.as_str()).filter(|s| !s.is_empty());
+            (
+                "200 OK",
+                "application/json",
+                crate::game::schedule_json(&state.net, optimized, line).into_bytes(),
+            )
+        }
+        "/game" | "/game/" => match serve_game_file("index.html") {
+            Some((ct, bytes)) => ("200 OK", ct, bytes),
+            None => ("404 Not Found", "text/plain", b"404".to_vec()),
+        },
+        p if p.starts_with("/game/") => match serve_game_file(p.trim_start_matches("/game/")) {
+            Some((ct, bytes)) => ("200 OK", ct, bytes),
+            None => ("404 Not Found", "text/plain", b"404".to_vec()),
+        },
         "/api/line" => ("200 OK", "application/json", line_json(&state, query).into_bytes()),
         "/api/ltv/status" => ("200 OK", "application/json", ltv_status(&state).into_bytes()),
         "/api/ltv/reload" => ("200 OK", "application/json", ltv_reload(&state).into_bytes()),
@@ -137,6 +160,31 @@ fn serve_file(path: &str) -> Option<(&'static str, Vec<u8>)> {
         return None;
     };
     let bytes = std::fs::read(std::path::Path::new("report/optimized").join(name)).ok()?;
+    Some((ct, bytes))
+}
+
+/// Sirve los archivos estáticos del juego web desde `game/web/` (nombre saneado).
+fn serve_game_file(name: &str) -> Option<(&'static str, Vec<u8>)> {
+    if name.is_empty()
+        || name.contains("..")
+        || !name.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | '-' | '/'))
+    {
+        return None;
+    }
+    let ct = if name.ends_with(".html") {
+        "text/html"
+    } else if name.ends_with(".js") {
+        "text/javascript"
+    } else if name.ends_with(".css") {
+        "text/css"
+    } else if name.ends_with(".json") {
+        "application/json"
+    } else if name.ends_with(".svg") {
+        "image/svg+xml"
+    } else {
+        "application/octet-stream"
+    };
+    let bytes = std::fs::read(std::path::Path::new("game/web").join(name)).ok()?;
     Some((ct, bytes))
 }
 
@@ -279,7 +327,7 @@ fn line_json(state: &ServerState, query: &str) -> String {
         _ => match dirs.first() {
             Some(d) => d.key.clone(),
             None => {
-                return serde_json::json!({"error":"Línia sense sentits al GTFS."}).to_string()
+                return serde_json::json!({"error":"Línea sin sentidos en el GTFS."}).to_string()
             }
         },
     };

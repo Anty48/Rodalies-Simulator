@@ -182,7 +182,7 @@ pub struct CtcEvent {
     pub time: u32,
     pub train: String,
     pub line: String,
-    /// "ARRIBA", "SURT" o "INCIDÈNCIA".
+    /// "LLEGADA", "SALIDA" o "INCIDENCIA".
     pub kind: String,
     pub station: String,
     pub track: String,
@@ -336,7 +336,7 @@ impl<'a> Simulator<'a> {
                     (Some(na), Some(nb)) => {
                         blocked.insert((na, nb), (*from_sec, from_sec + dur_secs));
                         incident_log.push(format!(
-                            "  ⛔ INCIDÈNCIA: bloqueig del cantó {} → {} de {} a {}",
+                            "  INCIDENCIA: bloqueo del cantón {} → {} de {} a {}",
                             net.stop_name(from_stop_id),
                             net.stop_name(to_stop_id),
                             fmt_hms(*from_sec),
@@ -344,7 +344,7 @@ impl<'a> Simulator<'a> {
                         ));
                     }
                     _ => incident_log.push(format!(
-                        "  ⚠ Incidència de bloqueig (id) ignorada: {} → {}",
+                        "  Incidencia de bloqueo (id) ignorada: {} → {}",
                         from_stop_id, to_stop_id
                     )),
                 },
@@ -357,14 +357,14 @@ impl<'a> Simulator<'a> {
                         let n = net.node_of_stop[&s.stop_id];
                         delay_incidents.insert((train_number.clone(), n), *extra_secs);
                         incident_log.push(format!(
-                            "  ⛔ INCIDÈNCIA: retard de +{} min al tren {} a {}",
+                            "  INCIDENCIA: retraso de +{} min al tren {} en {}",
                             extra_secs / 60,
                             train_number,
                             s.stop_name
                         ));
                     }
                     None => incident_log.push(format!(
-                        "  ⚠ Incidència de retard ignorada: no trobo l'estació {}",
+                        "  Incidencia de retraso ignorada: no se encuentra la estación {}",
                         at_stop_name
                     )),
                 },
@@ -486,9 +486,9 @@ impl<'a> Simulator<'a> {
                                     time: ev.time,
                                     train: svc.train_number.clone(),
                                     line: svc.route_short_name.clone(),
-                                    kind: "INCIDÈNCIA".into(),
+                                    kind: "INCIDENCIA".into(),
                                     station: format!(
-                                        "[{}] Tren {} rep +{} min a {}",
+                                        "[{}] El tren {} recibe +{} min en {}",
                                         fmt_hms(ev.time),
                                         svc.train_number,
                                         extra / 60,
@@ -508,7 +508,7 @@ impl<'a> Simulator<'a> {
                             time: ev.time,
                             train: svc.train_number.clone(),
                             line: svc.route_short_name.clone(),
-                            kind: "ARRIBA".into(),
+                            kind: "LLEGADA".into(),
                             station: net.graph[node].stop_name.clone(),
                             track: (track + 1).to_string(),
                             delay: arrival_delay,
@@ -660,9 +660,9 @@ impl<'a> Simulator<'a> {
                     if self.is_key_station(na) {
                         let d = trains.get(&ev.trip_idx).map(|t| t.delay).unwrap_or(0);
                         let kind = if aspect == Aspect::Yellow && cfg.strict_signaling {
-                            "SURT⚠"
+                            "SALIDA!"
                         } else {
-                            "SURT"
+                            "SALIDA"
                         };
                         events.push(CtcEvent {
                             time: ev.time,

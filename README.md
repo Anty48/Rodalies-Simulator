@@ -1,13 +1,20 @@
-# rodalies-sim
+# Rodalies-Simulator
 
-Simulador de **tráfico ferroviario e incidencias** para **Rodalies de Barcelona**, escrito
-en Rust. Construye la red (grafo de vías/cantones), la asignación de vías por estación y
-los trenes **100 % dinámicamente** a partir de archivos **GTFS** históricos ubicados en
-`./data/gtfs`.
+Plataforma unificada de **simulación, optimización y visualización** de la red de **Rodalies
+de Catalunya**. Reúne, en un único repositorio, dos proyectos antes separados:
 
-Su objetivo es analizar la **resiliencia** del sistema: cómo se propagan los retrasos por
-señalización y aglomeración de pasajeros, y cuánto tarda la red en volver al equilibrio
-tras una incidencia.
+- **Simulador y optimizador de horarios** (Rust, raíz del repositorio): construye la red
+  (grafo de vías/cantones), la asignación de vías por estación y los trenes **100 %
+  dinámicamente** a partir de archivos **GTFS** (feed de Fomento_Transit) en `./data/gtfs`.
+  Incluye el panel de análisis web (dashboard + optimizador + calculador de tiempo mínimo).
+- **Simulador de red / juego** (`game/`): un simulador 2D data-driven de la red. La versión
+  actual es **web-nativa** (`game/web/`, HTML5 Canvas + JS puro) servida por el propio servidor
+  en `/game` y alimentada por el GTFS y los horarios optimizados; el proyecto **Godot original**
+  se conserva intacto en `game/godot-original/`. Véase `game/README.md`.
+
+El objetivo analítico del simulador es la **resiliencia** del sistema: cómo se propagan los
+retrasos por señalización y aglomeración de pasajeros, y cuánto tarda la red en volver al
+equilibrio tras una incidencia.
 
 ---
 

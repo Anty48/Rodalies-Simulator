@@ -58,7 +58,7 @@ fn write_csv(
     let mut wtr = csv::Writer::from_path(&path)?;
     wtr.write_record([
         "trip_short_name", "trip_id", "stop_sequence", "stop_id", "stop_name",
-        "arribada", "sortida", "offset_min",
+        "llegada", "salida", "offset_min",
     ])?;
     for t in trains {
         let o = off(t);
@@ -90,7 +90,7 @@ fn write_pdf(
     // Estaciones (columnas) = trayecto más largo.
     let canon = trains.iter().max_by_key(|t| t.schedule.len()).copied();
     let Some(canon) = canon else {
-        return Err("línia sense trens".into());
+        return Err("línea sin trenes".into());
     };
     let stations: Vec<(String, String)> = canon
         .schedule
@@ -100,7 +100,7 @@ fn write_pdf(
 
     let (w, h) = (297.0f32, 210.0f32);
     let (doc, page1, layer1) =
-        PdfDocument::new(format!("Rodalies {} · horari optimitzat", line), Mm(w), Mm(h), "capa");
+        PdfDocument::new(format!("Rodalies {} · horario optimizado", line), Mm(w), Mm(h), "capa");
     let font = doc.add_builtin_font(BuiltinFont::Helvetica)?;
     let bold = doc.add_builtin_font(BuiltinFont::HelveticaBold)?;
 
@@ -125,16 +125,16 @@ fn write_pdf(
         };
 
         layer.use_text(
-            format!("Rodalies · Línia {} — horari optimitzat  (pàg. {}/{})", line, pi + 1, n_pages),
+            format!("Rodalies · Línea {} — horario optimizado  (pág. {}/{})", line, pi + 1, n_pages),
             12.0, Mm(x_label), Mm(h - 12.0), &bold,
         );
         layer.use_text(
-            "Files = trens (horaris) · columnes = estacions. Generat per rodalies-sim.",
+            "Filas = trenes (horarios) · columnas = estaciones. Generado por Rodalies Simulator.",
             7.5, Mm(x_label), Mm(h - 17.0), &font,
         );
 
         // Cabecera de columnas: nombre de estación abreviado.
-        layer.use_text("Tren \\ Estació", 6.5, Mm(x_label), Mm(top + 4.0), &bold);
+        layer.use_text("Tren \\ Estación", 6.5, Mm(x_label), Mm(top + 4.0), &bold);
         for (ci, (_, name)) in stations.iter().enumerate() {
             let x = x_first + ci as f32 * colw;
             let ab = abbrev(name);

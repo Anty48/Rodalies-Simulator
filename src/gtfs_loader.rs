@@ -43,6 +43,9 @@ struct RawRoute {
     /// GTFS route_type: 2 = tren (rail), 3 = autobús (substitució per obres).
     #[serde(default)]
     route_type: Option<String>,
+    /// Color de línea del feed (hex sin '#', p. ej. "7DBCEC"). Fuente oficial del color.
+    #[serde(default)]
+    route_color: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -129,6 +132,8 @@ pub struct Network {
     pub node_of_stop: HashMap<String, NodeIndex>,
     /// route_id -> route_short_name (R1, R2N, R4, ...).
     pub routes: HashMap<String, String>,
+    /// route_short_name -> color hex del feed GTFS (con '#', p. ej. "#7DBCEC"). Color oficial.
+    pub line_colors: HashMap<String, String>,
     pub services: Vec<TrainService>,
 }
 
@@ -259,6 +264,7 @@ fn reader(path: &Path) -> Result<csv::Reader<std::fs::File>, Box<dyn Error>> {
 pub fn load(dir: &Path) -> Result<Network, Box<dyn Error>> {
     // 1. routes.txt -> route_id -> short_name (+ route_type para distinguir autobuses)
     let mut routes: HashMap<String, String> = HashMap::new();
+    let mut line_colors: HashMap<String, String> = HashMap::new();
     let mut route_is_bus: std::collections::HashSet<String> = std::collections::HashSet::new();
     {
         let mut rdr = reader(&dir.join("routes.txt"))?;
@@ -269,11 +275,17 @@ pub fn load(dir: &Path) -> Result<Network, Box<dyn Error>> {
             } else {
                 r.route_short_name.clone()
             };
+            let short = short.trim().to_string();
             let rid = r.route_id.trim().to_string();
             if r.route_type.as_deref().map(|t| t.trim()) == Some("3") {
                 route_is_bus.insert(rid.clone());
             }
-            routes.insert(rid, short.trim().to_string());
+            // Color oficial de la línea (hex del feed). Se guarda por route_short_name,
+            // normalizado con '#' delante; se ignoran valores vacíos.
+            if let Some(c) = r.route_color.as_deref().map(|c| c.trim()).filter(|c| !c.is_empty()) {
+                line_colors.entry(short.clone()).or_insert_with(|| format!("#{c}"));
+            }
+            routes.insert(rid, short);
         }
     }
 
@@ -439,6 +451,7 @@ pub fn load(dir: &Path) -> Result<Network, Box<dyn Error>> {
         graph,
         node_of_stop,
         routes,
+        line_colors,
         services,
     })
 }

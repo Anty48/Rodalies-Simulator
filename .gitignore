@@ -16,8 +16,13 @@
 .DS_Store
 Thumbs.db
 
-# Simulador de referencia en Godot (material de consulta, no forma parte del crate)
+# Copia de trabajo local del Godot antiguo (el backup intacto versionado vive en game/godot-original/)
 /Simulador antiguo godot (para ayudar)/
+
+# Cachés del editor Godot y temporales de Python dentro de game/ (el código SÍ se versiona)
+game/**/.godot/
+game/**/__pycache__/
+**/*.pyc
 
 # Fase 3: datos ADIF procesados (grandes, no versionar)
 processed/

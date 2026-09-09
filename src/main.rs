@@ -9,6 +9,7 @@
 
 mod calculator;
 mod exporter;
+mod game;
 mod gtfs_loader;
 mod map;
 mod optimizer;
@@ -320,8 +321,8 @@ fn print_sim(sim: &SimView) {
     }
     let max = 40usize;
     for e in sim.events.iter().take(max) {
-        if e.kind == "INCIDÈNCIA" {
-            println!("  ⛔ {}", e.station);
+        if e.kind == "INCIDENCIA" {
+            println!("  ! {}", e.station);
         } else {
             println!(
                 "[{}] Tren {:>8} ({:<3}) {:<6} {:<30} via {}  ({:+} s)",

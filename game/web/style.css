@@ -1,0 +1,71 @@
+/* Juego web — misma librea Rodalies/Renfe que el panel de análisis: blancos, grises y el
+   rojo Rodalies como único acento. HTML/CSS puro, sin frameworks. */
+:root {
+  --bg:#eceff3; --panel:#ffffff; --panel2:#f3f5f8; --border:#d3dae1;
+  --text:#1b2127; --muted:#5d6b78; --ink:#2b333b; --accent:#d2231b;
+  --map-bg:#f6f8fa; --map-land:#eef1f4;
+}
+* { box-sizing:border-box; }
+html,body { height:100%; }
+body {
+  margin:0; background:var(--bg); color:var(--text);
+  font-family:'Segoe UI',system-ui,-apple-system,sans-serif;
+  display:flex; flex-direction:column; overflow:hidden;
+}
+.bar {
+  display:flex; align-items:center; gap:18px; padding:8px 16px;
+  background:var(--panel); border-bottom:2px solid var(--ink); flex:0 0 auto; flex-wrap:wrap;
+}
+.brand { font-weight:700; font-size:1.05rem; display:flex; align-items:center; gap:9px; }
+.brand .mark {
+  display:inline-flex; align-items:center; justify-content:center;
+  width:30px; height:30px; border-radius:5px; background:var(--accent); color:#fff; font-weight:800;
+}
+.brand .sub { color:var(--muted); font-weight:400; font-size:.85rem; }
+.clock {
+  font-family:'Cascadia Code',Consolas,monospace; font-size:1.5rem; font-weight:700;
+  font-variant-numeric:tabular-nums; padding:2px 12px; border:1px solid var(--border);
+  border-radius:5px; background:var(--panel2); margin-left:auto;
+}
+.speeds { display:flex; gap:4px; }
+.speeds button, .src button, #incident {
+  border:1px solid var(--border); background:var(--panel2); color:var(--text);
+  border-radius:5px; padding:6px 12px; cursor:pointer; font-size:.9rem; font-weight:600;
+}
+.speeds button.active { background:var(--accent); color:#fff; border-color:var(--accent); }
+.src { display:flex; align-items:center; gap:8px; font-size:.85rem; color:var(--muted); }
+.src select {
+  border:1px solid var(--border); border-radius:5px; padding:5px 8px; background:var(--panel);
+  color:var(--text); font-size:.85rem;
+}
+#reload { background:var(--accent); color:#fff; border-color:var(--accent); }
+#incident { width:100%; background:var(--accent); color:#fff; border-color:var(--accent); }
+
+main { flex:1 1 auto; display:flex; min-height:0; }
+#map { flex:1 1 auto; display:block; background:var(--map-bg); cursor:grab; touch-action:none; }
+#map:active { cursor:grabbing; }
+
+.panel {
+  flex:0 0 320px; overflow-y:auto; background:var(--panel);
+  border-left:1px solid var(--border); padding:14px 16px;
+}
+.kpi-row { display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-bottom:14px; }
+.kpi { border:1px solid var(--border); border-top:3px solid var(--ink); border-radius:5px; padding:10px 12px; }
+.kpi .v { font-size:1.5rem; font-weight:700; font-variant-numeric:tabular-nums; }
+.kpi .l { font-size:.72rem; color:var(--muted); margin-top:2px; }
+.block { border-top:1px solid var(--border); padding:14px 0; }
+.block:first-of-type { border-top:none; }
+h2 { font-size:.78rem; text-transform:uppercase; letter-spacing:.05em; color:var(--muted); margin:0 0 8px; font-weight:700; }
+.muted { color:var(--muted); font-size:.85rem; }
+.legend { display:flex; flex-direction:column; gap:5px; margin-top:10px; }
+.legend .row { display:flex; align-items:center; gap:8px; font-size:.85rem; }
+.legend .sw { width:22px; height:5px; border-radius:2px; flex:0 0 auto; }
+.legend .n { color:var(--muted); margin-left:auto; font-variant-numeric:tabular-nums; }
+.inc { list-style:none; padding:0; margin:10px 0 0; }
+.inc li { font-size:.82rem; padding:6px 10px; border-left:3px solid var(--accent);
+  background:rgba(210,35,27,.06); border-radius:0 4px 4px 0; margin-bottom:6px; }
+.tip {
+  position:fixed; pointer-events:none; background:var(--ink); color:#fff; font-size:.8rem;
+  padding:5px 9px; border-radius:5px; z-index:10; white-space:nowrap; transform:translate(-50%,-140%);
+}
+@media (max-width:760px) { .panel { display:none; } }

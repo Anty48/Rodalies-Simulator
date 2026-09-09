@@ -21,11 +21,11 @@ fn mmss(s: f64) -> String {
 /// Color estable por serie.
 fn series_color(id: &str) -> &'static str {
     match id {
-        "447" => "#e2231a",
-        "450" => "#58a6ff",
-        "470" => "#3fb950",
-        "490" => "#f5a623",
-        _ => "#8b98a5",
+        "447" => "#d2231b",
+        "450" => "#1f6feb",
+        "470" => "#1b7f3b",
+        "490" => "#9a6700",
+        _ => "#5d6b78",
     }
 }
 
@@ -102,47 +102,47 @@ pub fn panel(stations: &[(String, String)]) -> String {
   <script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
 
   <div class="card">
-    <h2>Calculador de temps mínim entre estacions</h2>
-    <p class="muted">Simula el <b>moviment físic</b> del tren (acceleració, creuer i frenada anticipada) per estimar el <b>temps mínim teòric</b>. Tria estacions al mapa o als desplegables. Prioritat: <b>exactitud de dades &gt; aparença</b>.</p>
+    <h2>Calculador de tiempo mínimo entre estaciones</h2>
+    <p class="muted">Simula el <b>movimiento físico</b> del tren (aceleración, crucero y frenada anticipada) para estimar el <b>tiempo mínimo teórico</b>. Seleccione estaciones en el mapa o en los desplegables. Prioridad: <b>exactitud de los datos &gt; apariencia</b>.</p>
 
     <div id="mc_map" class="calcmap"></div>
     <div class="legend">
-      <span><i style="background:#3fb950"></i> Origen</span>
-      <span><i style="background:#e2231a"></i> Destí</span>
-      <span><i style="background:#f5a623"></i> Recorregut seleccionat</span>
-      <span><i style="background:#8b98a5"></i> Estacions</span>
-      <span class="muted">Clic a una estació = origen; segon clic = destí. Base: OpenStreetMap.</span>
+      <span><i style="background:#1b7f3b"></i> Origen</span>
+      <span><i style="background:#d2231b"></i> Destino</span>
+      <span><i style="background:#9a6700"></i> Recorrido seleccionado</span>
+      <span><i style="background:#5d6b78"></i> Estaciones</span>
+      <span class="muted">Clic en una estación = origen; segundo clic = destino. Base cartográfica: OpenStreetMap.</span>
     </div>
 
     <div class="controls-grid" style="margin-top:16px">
       <div class="field"><label>Origen</label><select id="mc_origin">{origin_opts}</select></div>
-      <div class="field"><label>Destí</label><select id="mc_dest">{dest_opts}</select></div>
-      <div class="field"><label>Pas d'integració dt</label>
+      <div class="field"><label>Destino</label><select id="mc_dest">{dest_opts}</select></div>
+      <div class="field"><label>Paso de integración dt</label>
         <select id="mc_dt"><option value="0.05">0,05 s</option><option value="0.1" selected>0,1 s</option><option value="0.2">0,2 s</option></select></div>
-      <div class="field" style="grid-column:1/-1"><label>Sèries a comparar</label>
+      <div class="field" style="grid-column:1/-1"><label>Series a comparar</label>
         <div class="series-row">{series_boxes}</div></div>
-      <div class="field"><label class="chk"><input type="checkbox" id="mc_ltv"> Aplicar LTV (temporals)</label></div>
-      <div class="field"><button class="btn" id="mc_run">▶ Calcular tram</button></div>
+      <div class="field"><label class="chk"><input type="checkbox" id="mc_ltv"> Aplicar LTV (temporales)</label></div>
+      <div class="field"><button class="btn" id="mc_run">Calcular tramo</button></div>
     </div>
   </div>
   <div id="mc_result"></div>
 
   <div class="card">
-    <h2>Anàlisi de línia completa</h2>
-    <p class="muted">Calcula <b>tots els trams consecutius</b> d'una línia (des del GTFS, sense hardcodejar), suma <b>temps de marxa + temps de parada</b> i ho compara amb el <b>temps programat</b>. Tria línia i sentit.</p>
+    <h2>Análisis de línea completa</h2>
+    <p class="muted">Calcula <b>todos los tramos consecutivos</b> de una línea (a partir del GTFS, sin valores fijados en el código), suma <b>tiempo de marcha + tiempo de parada</b> y lo compara con el <b>tiempo programado</b>. Seleccione línea y sentido.</p>
     <div class="controls-grid" style="margin-top:12px">
-      <div class="field"><label>Línia</label><select id="ln_line"></select></div>
-      <div class="field" style="grid-column:span 2"><label>Sentit</label><select id="ln_dir"></select></div>
-      <div class="field"><label>Temps de parada</label>
-        <select id="ln_dwell"><option value="auto" selected>Automàtic (GTFS)</option><option value="fixed">Fix</option></select></div>
-      <div class="field"><label>Parada fixa <b id="ln_dwv">30</b> s</label>
+      <div class="field"><label>Línea</label><select id="ln_line"></select></div>
+      <div class="field" style="grid-column:span 2"><label>Sentido</label><select id="ln_dir"></select></div>
+      <div class="field"><label>Tiempo de parada</label>
+        <select id="ln_dwell"><option value="auto" selected>Automático (GTFS)</option><option value="fixed">Fijo</option></select></div>
+      <div class="field"><label>Parada fija <b id="ln_dwv">30</b> s</label>
         <input type="range" id="ln_dwell_s" min="0" max="120" step="5" value="30" data-out="ln_dwv"></div>
-      <div class="field"><label class="chk"><input type="checkbox" id="ln_ltv"> Aplicar LTV (temporals)</label></div>
-      <div class="field"><button class="btn" id="ln_run">▶ Calcular línia completa</button></div>
+      <div class="field"><label class="chk"><input type="checkbox" id="ln_ltv"> Aplicar LTV (temporales)</label></div>
+      <div class="field"><button class="btn" id="ln_run">Calcular línea completa</button></div>
     </div>
     <div style="margin-top:10px;display:flex;gap:12px;align-items:center;flex-wrap:wrap">
       <span class="muted" id="ltv_status">LTV: —</span>
-      <button class="zoombtn" style="float:none" id="ltv_reload">↻ Recarregar LTV (ZIP diari a raw/ltv/)</button>
+      <button class="zoombtn" style="float:none" id="ltv_reload">Recargar LTV (ZIP diario en raw/ltv/)</button>
     </div>
     <div id="ln_progress" class="muted" style="margin-top:10px"></div>
     <div class="progress" id="ln_bar" style="display:none"><i></i></div>
@@ -153,7 +153,7 @@ pub fn panel(stations: &[(String, String)]) -> String {
   {methodology}
 
   <div class="modal" id="mc_modal"><div class="modal-inner">
-    <button class="modal-close" id="mc_modal_close">✕ Tancar</button>
+    <button class="modal-close" id="mc_modal_close">Cerrar</button>
     <div class="modal-plot" id="mc_modal_plot"></div>
   </div></div>"#,
         origin_opts = opts(&default_origin),
@@ -174,46 +174,46 @@ fn methodology_section() -> String {
         let acc = if s.available { format!("{:.2} m/s²", s.accel_start.value) } else { "—".into() };
         let dec = if s.available { format!("{:.2} m/s²", s.decel_service.value) } else { "—".into() };
         fichas.push_str(&format!(
-            "<div class=\"ficha\"><h4>Sèrie {} · <span class=\"muted\">{}</span></h4>\
-             <div class=\"scroll\"><table><thead><tr><th>Dada</th><th>Valor</th><th>Procedència</th><th>Font</th></tr></thead><tbody>{}{}{}{}{}</tbody></table></div>\
+            "<div class=\"ficha\"><h4>Serie {} · <span class=\"muted\">{}</span></h4>\
+             <div class=\"scroll\"><table><thead><tr><th>Dato</th><th>Valor</th><th>Procedencia</th><th>Fuente</th></tr></thead><tbody>{}{}{}{}{}</tbody></table></div>\
              <p class=\"muted\" style=\"margin-top:6px\">{}</p></div>",
             esc(s.id), esc(s.builder),
-            ficha_row("Velocitat màxima", vmax, &s.vmax_kmh),
-            ficha_row("Potència", pw, &s.power_kw),
-            ficha_row("Massa (en buit)", ms, &s.mass_t),
-            ficha_row("Acceleració d'arrencada", acc, &s.accel_start),
-            ficha_row("Deceleració de servei", dec, &s.decel_service),
+            ficha_row("Velocidad máxima", vmax, &s.vmax_kmh),
+            ficha_row("Potencia", pw, &s.power_kw),
+            ficha_row("Masa (en vacío)", ms, &s.mass_t),
+            ficha_row("Aceleración de arranque", acc, &s.accel_start),
+            ficha_row("Deceleración de servicio", dec, &s.decel_service),
             esc(s.notes),
         ));
     }
 
     format!(
         r#"<section class="card">
-    <h2>Fonts i metodologia</h2>
-    <h3>Infraestructura i distància</h3>
+    <h2>Fuentes y metodología</h2>
+    <h3>Infraestructura y distancia</h3>
     <ul class="src">
-      <li><b>Distància ferroviària</b> — <span class="provb" style="color:#f5a623">Aproximació</span> No hi ha dataset de PK ni de geometria de via d'Adif (RINF/CVM) al projecte. Es fa servir la <b>polilínia d'estacions reals</b> del recorregut (seqüència del GTFS) sumant distàncies geodèsiques entre estacions consecutives. <b>No</b> és una recta origen→destí, però <b>infravalora</b> la longitud real de via (ignora la sinuositat entre estacions). Font: <code>data/gtfs</code> (Rodalies/Cercanías).</li>
-      <li><b>Perfil de velocitats màximes de la via (CVM)</b> — <span class="provb" style="color:#f85149">No disponible</span> No es disposa del Quadre de Velocitats Màximes d'Adif per tram, així que <b>no s'inventa</b>: al model, el límit el posa la Vmax del propi tren. Com a dada REAL de context es mostra la <b>velocitat comercial mitjana observada</b> per tram (horaris GTFS).</li>
-      <li><b>Estacions i coordenades</b> — <span class="provb" style="color:#3fb950">Oficial</span> GTFS de Rodalies/Cercanías (stops.txt: nom + lat/lon). Referència creuada amb Renfe Data (<code>listado-estaciones-rodalies-barcelona.csv</code>) i Adif (<code>estaciones.csv</code>).</li>
+      <li><b>Distancia ferroviaria</b> — <span class="provb" style="color:#9a6700">Aproximación</span> No se dispone de un conjunto de datos de PK ni de geometría de vía de Adif (RINF/CVM) en el proyecto. Se emplea la <b>polilínea de estaciones reales</b> del recorrido (secuencia del GTFS) sumando distancias geodésicas entre estaciones consecutivas. <b>No</b> es una recta origen→destino, pero <b>infravalora</b> la longitud real de la vía (ignora la sinuosidad entre estaciones). Fuente: <code>data/gtfs</code> (Rodalies/Cercanías).</li>
+      <li><b>Perfil de velocidades máximas de la vía (CVM)</b> — <span class="provb" style="color:#c5221f">No disponible</span> No se dispone del Cuadro de Velocidades Máximas de Adif por tramo, de modo que <b>no se inventa</b>: en el modelo, el límite lo impone la Vmax del propio tren. Como dato REAL de contexto se muestra la <b>velocidad comercial media observada</b> por tramo (horarios GTFS).</li>
+      <li><b>Estaciones y coordenadas</b> — <span class="provb" style="color:#1b7f3b">Oficial</span> GTFS de Rodalies/Cercanías (stops.txt: nombre + lat/lon). Referencia cruzada con Renfe Data (<code>listado-estaciones-rodalies-barcelona.csv</code>) y Adif (<code>estaciones.csv</code>).</li>
     </ul>
-    <h3>Material rodant (sèries)</h3>
-    <p class="muted">Fonts: <b>Renfe — informacion-trenes.csv</b> (data.renfe.com; Vmax, potència, massa de 447/450/470), <b>Wikipedia EN — Renfe Class 490</b> (Vmax/potència/massa de la 490), <b>Wikipedia EN — Renfe Class 447</b> (contrast). <b>Cap font</b> publica corbes d'acceleració ni de frenada per sèrie → es modelen (veure sota). La <b>sèrie 456 no s'ha trobat documentada</b> i es marca com a no disponible (no s'inventa).</p>
+    <h3>Material rodante (series)</h3>
+    <p class="muted">Fuentes: <b>Renfe — informacion-trenes.csv</b> (data.renfe.com; Vmax, potencia y masa de las 447/450/470), <b>Wikipedia EN — Renfe Class 490</b> (Vmax/potencia/masa de la 490), <b>Wikipedia EN — Renfe Class 447</b> (contraste). <b>Ninguna fuente</b> publica curvas de aceleración ni de frenada por serie → se modelan (véase más abajo). La <b>serie 456 no se ha encontrado documentada</b> y se marca como no disponible (no se inventa).</p>
     {fichas}
-    <h3>Model físic (tracció i frenada)</h3>
-    <div class="formula">a_tracció(v) = min( a_arrencada , η · P / (m·(1+λ) · v) )&nbsp;&nbsp;·&nbsp;&nbsp;frenada = deceleració constant b</div>
-    <p class="muted" style="margin-top:8px">Integració per passos (dt) amb <b>frenada anticipada</b>: a cada punt es mira endavant per no superar mai cap reducció ni el destí (v=0). Model de <b>potència constant</b> amb tope d'arrencada. Paràmetres del model (suposicions, iguals per a totes les sèries perquè no hi ha dades publicades): a_arrencada=1,0 m/s², b=0,9 m/s², η=0,85, λ=0,10.</p>
+    <h3>Modelo físico (tracción y frenada)</h3>
+    <div class="formula">a_tracción(v) = mín( a_arranque , η · P / (m·(1+λ) · v) )&nbsp;&nbsp;·&nbsp;&nbsp;frenada = deceleración constante b</div>
+    <p class="muted" style="margin-top:8px">Integración por pasos (dt) con <b>frenada anticipada</b>: en cada punto se mira hacia adelante para no superar nunca ninguna reducción ni el destino (v=0). Modelo de <b>potencia constante</b> con tope de arranque. Parámetros del modelo (supuestos, iguales para todas las series porque no hay datos publicados): a_arranque=1,0 m/s², b=0,9 m/s², η=0,85, λ=0,10.</p>
 
-    <h2 style="margin-top:26px">Precisió i limitacions</h2>
-    <p class="muted">El resultat és un <b>«temps mínim teòric»</b>, NO el temps que un maquinista pot o ha de fer en servei real. El model <b>NO</b> té en compte, entre d'altres:</p>
+    <h2 style="margin-top:26px">Precisión y limitaciones</h2>
+    <p class="muted">El resultado es un <b>«tiempo mínimo teórico»</b>, NO el tiempo que un maquinista puede o debe realizar en servicio real. El modelo <b>NO</b> tiene en cuenta, entre otros:</p>
     <ul class="src">
-      <li>Senyalització, bloqueig i trànsit d'altres trens (marxa en tènue, aspectes grocs/vermells).</li>
-      <li>Límits de velocitat reals de la infraestructura per tram (CVM d'Adif no disponible).</li>
-      <li>Resistència a l'avanç (Davis): els coeficients no estan disponibles per sèrie i no s'inventen → el temps és una <b>cota inferior optimista</b>.</li>
-      <li>Pendents i rampes del perfil longitudinal (no disponibles).</li>
-      <li>Corbes d'esforç tractor reals (no publicades) i adherència variable.</li>
-      <li>Temps de parada, obertura/tancament de portes i marges de seguretat.</li>
-      <li>Restriccions temporals (obres, precaucions) i limitacions operatives.</li>
-      <li>La distància és una polilínia d'estacions (infravalora la via real).</li>
+      <li>Señalización, bloqueo y tráfico de otros trenes (marcha a la vista, aspectos ámbar/rojo).</li>
+      <li>Límites de velocidad reales de la infraestructura por tramo (CVM de Adif no disponible).</li>
+      <li>Resistencia al avance (Davis): los coeficientes no están disponibles por serie y no se inventan → el tiempo es una <b>cota inferior optimista</b>.</li>
+      <li>Pendientes y rampas del perfil longitudinal (no disponibles).</li>
+      <li>Curvas de esfuerzo tractor reales (no publicadas) y adherencia variable.</li>
+      <li>Tiempo de parada, apertura/cierre de puertas y márgenes de seguridad.</li>
+      <li>Restricciones temporales (obras, precauciones) y limitaciones operativas.</li>
+      <li>La distancia es una polilínea de estaciones (infravalora la vía real).</li>
     </ul>
   </section>"#,
         fichas = fichas,
@@ -226,20 +226,20 @@ fn methodology_section() -> String {
 
 pub fn fragment(v: &CalcView) -> String {
     if let Some(err) = &v.error {
-        return format!("<div class=\"card\"><p class=\"muted\">⚠ {}</p></div>", esc(err));
+        return format!("<div class=\"card\"><p class=\"muted\">{}</p></div>", esc(err));
     }
 
     // --- Cabecera de resultado (por serie disponible: tarjeta grande) ---
     let mut cards = String::new();
     for r in v.results.iter().filter(|r| r.available) {
         let warn = if !r.reached_end {
-            "<div class=\"muted\" style=\"color:#f85149\">⚠ el tren no arriba a completar el recorregut amb aquests paràmetres</div>"
+            "<div class=\"muted\" style=\"color:#c5221f\">El tren no llega a completar el recorrido con estos parámetros.</div>"
         } else {
             ""
         };
         let refined = match r.time_ref_s {
             Some(t) => format!(
-                "<div class=\"kpi-sub\" style=\"margin-top:4px\">Amb <b>CVM ADIF</b>: <b style=\"color:#3fb950\">{}</b> (Vmàx {:.0} km/h)</div>",
+                "<div class=\"kpi-sub\" style=\"margin-top:4px\">Con <b>CVM ADIF</b>: <b style=\"color:#1b7f3b\">{}</b> (Vmáx {:.0} km/h)</div>",
                 mmss(t),
                 r.vmax_ref_reached_kmh.unwrap_or(0.0)
             ),
@@ -247,12 +247,12 @@ pub fn fragment(v: &CalcView) -> String {
         };
         cards.push_str(&format!(
             r#"<div class="kpi" style="border-left:4px solid {color}">
-              <div class="kpi-sub">Sèrie {id} · {name}</div>
+              <div class="kpi-sub">Serie {id} · {name}</div>
               <div class="kpi-val">{time}</div>
-              <div class="kpi-label">temps mínim (Vmax tren)</div>
-              <div class="kpi-sub" style="margin-top:6px">Vmàx assolida <b>{vreach:.0}</b> km/h · límit tren {vficha:.0} km/h</div>
+              <div class="kpi-label">tiempo mínimo (Vmax tren)</div>
+              <div class="kpi-sub" style="margin-top:6px">Vmáx alcanzada <b>{vreach:.0}</b> km/h · límite tren {vficha:.0} km/h</div>
               {refined}
-              <div class="kpi-sub" style="margin-top:4px">Fiabilitat dades: {prov}</div>
+              <div class="kpi-sub" style="margin-top:4px">Fiabilidad de los datos: {prov}</div>
               {warn}
             </div>"#,
             color = series_color(&r.id),
@@ -277,7 +277,7 @@ pub fn fragment(v: &CalcView) -> String {
             ));
         } else {
             comp.push_str(&format!(
-                "<tr class=\"muted\"><td class=\"mono\">{}</td><td class=\"num\">{:.2} km</td><td colspan=3>sèrie no disponible — no es calcula (no s'inventen dades)</td></tr>",
+                "<tr class=\"muted\"><td class=\"mono\">{}</td><td class=\"num\">{:.2} km</td><td colspan=3>serie no disponible — no se calcula (no se inventan datos)</td></tr>",
                 esc(&r.id), v.distance_km
             ));
         }
@@ -302,7 +302,7 @@ pub fn fragment(v: &CalcView) -> String {
 
     // --- Perfil de velocidades (infraestructura) ---
     let profile_html = format!(
-        "<tr><td class=\"mono\">0,0 km</td><td class=\"mono\">{:.1} km</td><td>Vmàx del tren (sense dada CVM) <span class=\"provb\" style=\"color:#f85149\">No disponible</span></td></tr>",
+        "<tr><td class=\"mono\">0,0 km</td><td class=\"mono\">{:.1} km</td><td>Vmáx del tren (sin dato CVM) <span class=\"provb\" style=\"color:#c5221f\">No disponible</span></td></tr>",
         v.distance_km
     );
 
@@ -315,7 +315,7 @@ pub fn fragment(v: &CalcView) -> String {
         ));
     }
     if obs_html.is_empty() {
-        obs_html = "<tr><td colspan=4 class=\"muted\">Sense horaris de referència per a aquesta ruta (ruta per graf).</td></tr>".into();
+        obs_html = "<tr><td colspan=4 class=\"muted\">Sin horarios de referencia para esta ruta (ruta por grafo).</td></tr>".into();
     }
 
     // --- Estaciones de la ruta ---
@@ -331,20 +331,20 @@ pub fn fragment(v: &CalcView) -> String {
     let line_txt = v
         .line
         .as_ref()
-        .map(|l| format!(" · línia {}", esc(l)))
+        .map(|l| format!(" · línea {}", esc(l)))
         .unwrap_or_default();
 
     let times_note = if v.has_times {
-        "Ruta d'un servei real del GTFS (amb horaris de referència)."
+        "Ruta de un servicio real del GTFS (con horarios de referencia)."
     } else {
-        "Ruta calculada pel graf d'estacions (sense horari de referència directe)."
+        "Ruta calculada por el grafo de estaciones (sin horario de referencia directo)."
     };
     let adif_note = if v.adif_available {
         let ad = v.adif_distance_km.unwrap_or(0.0);
         let diff = ad - v.distance_km;
         let pct = if v.distance_km > 0.0 { diff / v.distance_km * 100.0 } else { 0.0 };
         format!(
-            "<p class=\"muted\"><span class=\"qdot q-oficial\"></span> <b>CVM ADIF aplicada</b> · cobertura {:.0}% · Vmàx mín. infraestructura {} · distància GTFS {:.2} km vs ADIF {:.2} km ({}{:.2} km, {}{:.1}%)</p>",
+            "<p class=\"muted\"><span class=\"qdot q-oficial\"></span> <b>CVM ADIF aplicada</b> · cobertura {:.0}% · Vmáx mín. infraestructura {} · distancia GTFS {:.2} km vs. ADIF {:.2} km ({}{:.2} km, {}{:.1}%)</p>",
             v.coverage_pct,
             v.min_vmax_kmh.map(|x| format!("{:.0} km/h", x)).unwrap_or_else(|| "—".into()),
             v.distance_km, ad,
@@ -352,14 +352,14 @@ pub fn fragment(v: &CalcView) -> String {
             if pct >= 0.0 { "+" } else { "" }, pct,
         )
     } else {
-        "<p class=\"muted\"><span class=\"qdot q-nd\"></span> Sense CVM ADIF (executa scripts/fetch_adif_cvm.py per activar-la).</p>".to_string()
+        "<p class=\"muted\"><span class=\"qdot q-nd\"></span> Sin CVM ADIF (ejecute scripts/fetch_adif_cvm.py para activarla).</p>".to_string()
     };
     let ltv_note = match &v.ltv_snapshot {
         Some(snap) => format!(
-            "<p class=\"muted\"><span class=\"qdot q-estimacion\"></span> <b>LTV aplicades</b> (snapshot {}): {} al recorregut{}. <span class=\"muted\">Temporal/fechat.</span></p>",
+            "<p class=\"muted\"><span class=\"qdot q-estimacion\"></span> <b>LTV aplicadas</b> (instantánea {}): {} en el recorrido{}. <span class=\"muted\">Temporal/fechado.</span></p>",
             esc(snap),
             v.ltv_applied,
-            v.min_ltv_kmh.map(|x| format!(" · mín {:.0} km/h", x)).unwrap_or_default(),
+            v.min_ltv_kmh.map(|x| format!(" · mín. {:.0} km/h", x)).unwrap_or_default(),
         ),
         None => String::new(),
     };
@@ -367,54 +367,54 @@ pub fn fragment(v: &CalcView) -> String {
 
     format!(
         r#"<div class="card">
-    <h2>Resultat · {origin} → {dest}{line}</h2>
-    <p class="muted">Distància ferroviària <b>{dist:.2} km</b> · dt {dt} s · {nstops} estacions</p>
-    <p class="muted src-note">Font distància: {dsrc}</p>
+    <h2>Resultado · {origin} → {dest}{line}</h2>
+    <p class="muted">Distancia ferroviaria <b>{dist:.2} km</b> · dt {dt} s · {nstops} estaciones</p>
+    <p class="muted src-note">Fuente de la distancia: {dsrc}</p>
     <p class="muted">{times_note}</p>
     {adif_note}
     <div class="grid-kpi" style="margin-top:12px">{cards}</div>
   </div>
 
   <div class="card">
-    <h2>Comparació entre sèries</h2>
+    <h2>Comparación entre series</h2>
     <div class="scroll"><table>
-      <thead><tr><th>Tren</th><th>Distància</th><th>Temps mínim</th><th>Vmàx assolida</th><th>Límit tren</th></tr></thead>
+      <thead><tr><th>Tren</th><th>Distancia</th><th>Tiempo mínimo</th><th>Vmáx alcanzada</th><th>Límite tren</th></tr></thead>
       <tbody>{comp}</tbody></table></div>
     <ul class="src" style="margin-top:12px">{notes}</ul>
   </div>
 
   <div class="cols">
     <div class="card">
-      <h2>Velocitat · distància</h2>
+      <h2>Velocidad · distancia</h2>
       {chart_vx}
     </div>
     <div class="card">
-      <h2>Velocitat · temps</h2>
+      <h2>Velocidad · tiempo</h2>
       {chart_vt}
     </div>
   </div>
 
   <div class="card">
-    <h2>Fases del moviment</h2>
+    <h2>Fases del movimiento</h2>
     {phases_html}
   </div>
 
   <div class="cols">
     <div class="card">
-      <h2>Perfil de velocitats (infraestructura)</h2>
-      <div class="scroll"><table><thead><tr><th>Inici</th><th>Fi</th><th>Vmàx</th></tr></thead><tbody>{profile_html}</tbody></table></div>
-      <p class="muted" style="margin-top:8px">Sense CVM d'Adif no es defineixen límits per tram (no s'inventen). Vegeu les velocitats comercials observades a la dreta com a dada real de context.</p>
+      <h2>Perfil de velocidades (infraestructura)</h2>
+      <div class="scroll"><table><thead><tr><th>Inicio</th><th>Fin</th><th>Vmáx</th></tr></thead><tbody>{profile_html}</tbody></table></div>
+      <p class="muted" style="margin-top:8px">Sin CVM de Adif no se definen límites por tramo (no se inventan). Véanse las velocidades comerciales observadas a la derecha como dato real de contexto.</p>
     </div>
     <div class="card">
-      <h2>Velocitat comercial observada (GTFS)</h2>
-      <div class="scroll"><table><thead><tr><th>Tram</th><th>Distància</th><th>Temps real</th><th>V mitjana</th></tr></thead><tbody>{obs_html}</tbody></table></div>
-      <p class="muted" style="margin-top:8px">Mitjana real inclou acceleració/frenada però NO és una Vmàx.</p>
+      <h2>Velocidad comercial observada (GTFS)</h2>
+      <div class="scroll"><table><thead><tr><th>Tramo</th><th>Distancia</th><th>Tiempo real</th><th>V media</th></tr></thead><tbody>{obs_html}</tbody></table></div>
+      <p class="muted" style="margin-top:8px">La media real incluye aceleración/frenada pero NO es una Vmáx.</p>
     </div>
   </div>
 
   <div class="card">
-    <h2>Estacions de la ruta</h2>
-    <div class="scroll"><table><thead><tr><th>Estació</th><th>PK acumulat (aprox.)</th><th>Arribada (GTFS)</th></tr></thead><tbody>{route_html}</tbody></table></div>
+    <h2>Estaciones de la ruta</h2>
+    <div class="scroll"><table><thead><tr><th>Estación</th><th>PK acumulado (aprox.)</th><th>Llegada (GTFS)</th></tr></thead><tbody>{route_html}</tbody></table></div>
   </div>"#,
         origin = esc(&v.origin_name),
         dest = esc(&v.dest_name),
@@ -458,13 +458,13 @@ fn phases_block(v: &CalcView) -> String {
             ));
         }
         out.push_str(&format!(
-            "<div class=\"ficha\"><h4><span class=\"dot\" style=\"background:{}\"></span>Sèrie {} · {}</h4>\
-             <div class=\"scroll\"><table><thead><tr><th>Interval</th><th>Fase</th><th>Detall</th></tr></thead><tbody>{}</tbody></table></div></div>",
+            "<div class=\"ficha\"><h4><span class=\"dot\" style=\"background:{}\"></span>Serie {} · {}</h4>\
+             <div class=\"scroll\"><table><thead><tr><th>Intervalo</th><th>Fase</th><th>Detalle</th></tr></thead><tbody>{}</tbody></table></div></div>",
             series_color(&r.id), esc(&r.id), mmss(r.time_s), rows
         ));
     }
     if out.is_empty() {
-        out = "<p class=\"muted\">Cap sèrie disponible seleccionada.</p>".into();
+        out = "<p class=\"muted\">Ninguna serie disponible seleccionada.</p>".into();
     }
     out
 }
@@ -477,7 +477,7 @@ fn phases_block(v: &CalcView) -> String {
 fn chart(v: &CalcView, by_distance: bool) -> String {
     let avail: Vec<&TrainResult> = v.results.iter().filter(|r| r.available).collect();
     if avail.is_empty() {
-        return "<p class=\"muted\">Sense dades.</p>".into();
+        return "<p class=\"muted\">Sin datos.</p>".into();
     }
     let w = 900.0;
     let h = 320.0;
@@ -576,7 +576,7 @@ fn chart(v: &CalcView, by_distance: bool) -> String {
         ));
     }
 
-    let xlabel = if by_distance { "Distància (km)" } else { "Temps (mm:ss)" };
+    let xlabel = if by_distance { "Distancia (km)" } else { "Tiempo (mm:ss)" };
     format!(
         r##"<svg viewBox="0 0 {w:.0} {h:.0}" preserveAspectRatio="xMidYMid meet" class="chart" role="img" aria-label="{xlabel}">
   <style>.stationmark{{stroke:var(--border);stroke-width:1;stroke-dasharray:3 3;}}</style>

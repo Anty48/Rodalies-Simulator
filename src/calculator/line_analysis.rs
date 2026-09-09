@@ -31,9 +31,9 @@ pub enum DwellMode {
 impl DwellMode {
     fn label(&self) -> String {
         match self {
-            DwellMode::Auto => "Automàtic (mediana GTFS)".into(),
-            DwellMode::Fixed(s) => format!("Fix {} s", s),
-            DwellMode::Custom(_) => "Personalitzat".into(),
+            DwellMode::Auto => "Automático (mediana GTFS)".into(),
+            DwellMode::Fixed(s) => format!("Fijo {} s", s),
+            DwellMode::Custom(_) => "Personalizado".into(),
         }
     }
 }
@@ -273,97 +273,97 @@ fn ficha_of(id: &str) -> Option<Ficha> {
 fn sources_list(adif_available: bool) -> Vec<SourceItem> {
     let cvm = if adif_available {
         SourceItem {
-            variable: "Velocitat màxima infraestructura (CVM)".into(),
-            source: "ADIF — DesignSpeed (velocitat de disseny per enllaç)".into(),
+            variable: "Velocidad máxima infraestructura (CVM)".into(),
+            source: "ADIF — DesignSpeed (velocidad de diseño por enlace)".into(),
             organismo: "ADIF — IDEADIF".into(),
             url: "https://ideadif.adif.es/services/wfs (INSPIRE tn-ra:DesignSpeed) · datos.gob.es e0dat0002".into(),
             file: "processed/adif/rfig_speed.json (scripts/fetch_adif_cvm.py)".into(),
-            method: "Projecció de la ruta a l'enllaç ADIF més proper → Vmax(x)".into(),
-            precision: "Oficial (velocitat de disseny; cobertura parcial segons proximitat)".into(),
+            method: "Proyección de la ruta al enlace ADIF más próximo → Vmax(x)".into(),
+            precision: "Oficial (velocidad de diseño; cobertura parcial según proximidad)".into(),
             level: "oficial".into(),
         }
     } else {
         SourceItem {
-            variable: "Velocitat màxima infraestructura (CVM)".into(),
-            source: "ADIF — no carregat".into(),
+            variable: "Velocidad máxima infraestructura (CVM)".into(),
+            source: "ADIF — no cargado".into(),
             organismo: "ADIF".into(),
-            url: "Executa scripts/fetch_adif_cvm.py → processed/adif/rfig_speed.json".into(),
+            url: "Ejecute scripts/fetch_adif_cvm.py → processed/adif/rfig_speed.json".into(),
             file: "—".into(),
-            method: "Sense fitxer processat → límit = Vmax del tren".into(),
+            method: "Sin archivo procesado → límite = Vmax del tren".into(),
             precision: "No disponible".into(),
             level: "nd".into(),
         }
     };
     let ltv = SourceItem {
-        variable: "LTV (limitacions temporals de velocitat)".into(),
+        variable: "LTV (limitaciones temporales de velocidad)".into(),
         source: "ADIF — HUB LTV (ArcGIS FeatureServer LTV_2)".into(),
         organismo: "ADIF".into(),
         url: "https://ltv-adif.hub.arcgis.com · services7.arcgis.com/.../LTV_2/FeatureServer".into(),
-        file: "processed/adif/ltv.json (scripts/fetch_adif_ltv.py o ZIP a raw/ltv/)".into(),
-        method: "Punt d'inici + extensió per PK al llarg de la ruta (min amb DesignSpeed)".into(),
-        precision: "Velocitat oficial però TEMPORAL (snapshot fechat); s'aplica si s'activa".into(),
+        file: "processed/adif/ltv.json (scripts/fetch_adif_ltv.py o ZIP en raw/ltv/)".into(),
+        method: "Punto de inicio + extensión por PK a lo largo de la ruta (mín. con DesignSpeed)".into(),
+        precision: "Velocidad oficial pero TEMPORAL (instantánea fechada); se aplica si se activa".into(),
         level: "estimacion".into(),
     };
     vec![
         cvm,
         ltv,
         SourceItem {
-            variable: "Distància / ruta / estacions".into(),
+            variable: "Distancia / ruta / estaciones".into(),
             source: "GTFS Rodalies/Cercanías".into(),
             organismo: "Renfe / Rodalies de Catalunya".into(),
             url: "data.renfe.com (feed GTFS)".into(),
             file: "data/gtfs (stops/routes/trips/stop_times)".into(),
-            method: "Polilínia d'estacions (haversine entre parades consecutives)".into(),
-            precision: "Aproximada (no PK oficial; infravalora la via real)".into(),
+            method: "Polilínea de estaciones (haversine entre paradas consecutivas)".into(),
+            precision: "Aproximada (sin PK oficial; infravalora la vía real)".into(),
             level: "secundaria".into(),
         },
         SourceItem {
-            variable: "Temps de parada (dwell)".into(),
+            variable: "Tiempo de parada (dwell)".into(),
             source: "GTFS stop_times (arrival/departure)".into(),
             organismo: "Renfe / Rodalies de Catalunya".into(),
             url: "data.renfe.com".into(),
             file: "data/gtfs/stop_times.txt".into(),
-            method: "Mediana de (departure − arrival) per estació i sentit".into(),
+            method: "Mediana de (departure − arrival) por estación y sentido".into(),
             precision: "Oficial programada".into(),
             level: "oficial".into(),
         },
         SourceItem {
-            variable: "Temps programat".into(),
+            variable: "Tiempo programado".into(),
             source: "GTFS stop_times".into(),
             organismo: "Renfe / Rodalies de Catalunya".into(),
             url: "data.renfe.com".into(),
             file: "data/gtfs/stop_times.txt".into(),
-            method: "Estadística sobre serveis d'itinerari complet del sentit".into(),
+            method: "Estadística sobre servicios de itinerario completo del sentido".into(),
             precision: "Oficial programada (no observada)".into(),
             level: "oficial".into(),
         },
         SourceItem {
-            variable: "Material rodant (Vmax/potència/massa)".into(),
+            variable: "Material rodante (Vmax/potencia/masa)".into(),
             source: "Renfe informacion-trenes.csv (447/450/470) · Wikipedia EN (490)".into(),
             organismo: "Renfe / Wikipedia".into(),
             url: "data.renfe.com · en.wikipedia.org/wiki/Renfe_Class_490".into(),
             file: "raw/informacion-trenes.csv".into(),
-            method: "Fitxa tècnica".into(),
-            precision: "Oficial (447/450/470) · Secundària (490)".into(),
+            method: "Ficha técnica".into(),
+            precision: "Oficial (447/450/470) · Secundaria (490)".into(),
             level: "oficial".into(),
         },
         SourceItem {
-            variable: "Acceleració / frenada".into(),
-            source: "Model (no publicat per cap font)".into(),
+            variable: "Aceleración / frenada".into(),
+            source: "Modelo (no publicado por ninguna fuente)".into(),
             organismo: "—".into(),
             url: "—".into(),
             file: "src/calculator/rolling_stock.rs".into(),
-            method: "Potència constant amb tope d'arrencada; frenada b constant".into(),
-            precision: "Suposició del model".into(),
+            method: "Potencia constante con tope de arranque; frenada b constante".into(),
+            precision: "Suposición del modelo".into(),
             level: "suposicion".into(),
         },
         SourceItem {
-            variable: "Circulació observada (hora real)".into(),
-            source: "No trobada oberta".into(),
+            variable: "Circulación observada (hora real)".into(),
+            source: "No encontrada abierta".into(),
             organismo: "Renfe/Adif".into(),
             url: "—".into(),
             file: "—".into(),
-            method: "No hi ha dataset històric obert de circulació real per tren".into(),
+            method: "No existe un conjunto de datos histórico abierto de circulación real por tren".into(),
             precision: "No disponible".into(),
             level: "nd".into(),
         },
@@ -384,11 +384,11 @@ pub fn analyze_line(
     let dt = if dt.is_finite() && dt > 0.0 { dt.clamp(0.02, 1.0) } else { 0.1 };
 
     let Some(itin) = schedules::itinerary(net, line, dir_key) else {
-        return empty_error(line, "No s'ha trobat l'itinerari d'aquesta línia/sentit al GTFS.");
+        return empty_error(line, "No se ha encontrado el itinerario de esta línea/sentido en el GTFS.");
     };
     let canonical_len = itin.stops.len();
     if canonical_len < 2 {
-        return empty_error(line, "L'itinerari té menys de 2 estacions.");
+        return empty_error(line, "El itinerario tiene menos de 2 estaciones.");
     }
 
     // Horarios.
@@ -419,7 +419,7 @@ pub fn analyze_line(
                 (Some(la), Some(lo), Some(lc), Some(ld)) => haversine_m(la, lo, lc, ld),
                 _ => {
                     anomalies.push(format!(
-                        "Estació sense coordenades entre «{}» i «{}» → distància del tram = 0.",
+                        "Estación sin coordenadas entre «{}» y «{}» → distancia del tramo = 0.",
                         a.name, s.name
                     ));
                     0.0
@@ -437,9 +437,9 @@ pub fn analyze_line(
                     let m = dwell_map.get(&s.stop_id).map(|d| d.median_s).unwrap_or(0);
                     (m, "GTFS (mediana)".to_string())
                 }
-                DwellMode::Fixed(v) => (*v, "fix".to_string()),
+                DwellMode::Fixed(v) => (*v, "fijo".to_string()),
                 DwellMode::Custom(map) => {
-                    (map.get(&s.stop_id).copied().unwrap_or(0), "personalitzat".to_string())
+                    (map.get(&s.stop_id).copied().unwrap_or(0), "personalizado".to_string())
                 }
             }
         };
@@ -470,13 +470,13 @@ pub fn analyze_line(
 
         if dist_km > 0.0 && dist_km < 0.15 {
             anomalies.push(format!(
-                "Tram molt curt {:.0} m ({} → {}): possible parada tècnica o dades GTFS.",
+                "Tramo muy corto {:.0} m ({} → {}): posible parada técnica o dato GTFS.",
                 dist_km * 1000.0, a.name, b.name
             ));
         }
         if dist_km > 25.0 {
             anomalies.push(format!(
-                "Tram molt llarg {:.1} km ({} → {}): revisar dades.",
+                "Tramo muy largo {:.1} km ({} → {}): revisar datos.",
                 dist_km, a.name, b.name
             ));
         }
@@ -601,9 +601,9 @@ pub fn analyze_line(
     // Anomalías de comparación con lo programado.
     if programmed_stat.n > 0 && (programmed_stat.min as f64) < fastest_total - 1.0 {
         anomalies.push(format!(
-            "⚠ El temps programat MÍNIM ({}) és inferior al mínim físic més ràpid ({}). \
-             Revisar dades o supòsits del model (probablement el model és massa optimista \
-             o el servei programat salta parades).",
+            "El tiempo programado MÍNIMO ({}) es inferior al mínimo físico más rápido ({}). \
+             Revisar datos o supuestos del modelo (probablemente el modelo es demasiado optimista \
+             o el servicio programado se salta paradas).",
             fmt_ms(programmed_stat.min as f64),
             fmt_ms(fastest_total)
         ));
@@ -611,29 +611,29 @@ pub fn analyze_line(
 
     // Calidad por variable (independiente).
     let dwell_level = match dwell {
-        DwellMode::Auto => ("oficial", "Dwell real de GTFS (mediana per estació)."),
-        DwellMode::Fixed(_) => ("suposicion", "Dwell fix triat per l'usuari (no mesurat)."),
-        DwellMode::Custom(_) => ("suposicion", "Dwell personalitzat per l'usuari."),
+        DwellMode::Auto => ("oficial", "Dwell real de GTFS (mediana por estación)."),
+        DwellMode::Fixed(_) => ("suposicion", "Dwell fijo elegido por el usuario (no medido)."),
+        DwellMode::Custom(_) => ("suposicion", "Dwell personalizado por el usuario."),
     };
     let (vinfra_lvl, vinfra_note) = if adif_available {
         (
             "oficial",
             format!(
-                "CVM real d'ADIF (DesignSpeed, IDEADIF) aplicada · cobertura {:.0}%.",
+                "CVM real de ADIF (DesignSpeed, IDEADIF) aplicada · cobertura {:.0}%.",
                 coverage_pct
             ),
         )
     } else {
-        ("nd", "Sense CVM d'Adif → límit = Vmax del tren.".to_string())
+        ("nd", "Sin CVM de Adif → límite = Vmax del tren.".to_string())
     };
     let (dist_lvl, dist_note) = if adif_available {
-        ("secundaria", "GTFS + comparació amb geometria ADIF (projecció).".to_string())
+        ("secundaria", "GTFS + comparación con geometría ADIF (proyección).".to_string())
     } else {
-        ("secundaria", "Polilínia d'estacions GTFS (aproximada, no PK d'Adif).".to_string())
+        ("secundaria", "Polilínea de estaciones GTFS (aproximada, sin PK de Adif).".to_string())
     };
     let quality = vec![
         QualityItem {
-            variable: "Distància".into(),
+            variable: "Distancia".into(),
             level: dist_lvl.into(),
             note: dist_note,
         },
@@ -643,24 +643,24 @@ pub fn analyze_line(
             note: vinfra_note,
         },
         QualityItem {
-            variable: "Parades".into(),
+            variable: "Paradas".into(),
             level: dwell_level.0.into(),
             note: dwell_level.1.into(),
         },
         QualityItem {
-            variable: "Horari programat".into(),
+            variable: "Horario programado".into(),
             level: "oficial".into(),
             note: "GTFS oficial.".into(),
         },
         QualityItem {
-            variable: "Circulació observada".into(),
+            variable: "Circulación observada".into(),
             level: "nd".into(),
-            note: "No hi ha dataset obert de circulació real per tren.".into(),
+            note: "No existe un conjunto de datos abierto de circulación real por tren.".into(),
         },
         QualityItem {
-            variable: "Acceleració/frenada".into(),
+            variable: "Aceleración/frenada".into(),
             level: "suposicion".into(),
-            note: "Model (no publicat per cap font).".into(),
+            note: "Modelo (no publicado por ninguna fuente).".into(),
         },
     ];
 
@@ -682,13 +682,13 @@ pub fn analyze_line(
         programmed: stat_to_out(
             &programmed_stat,
             format!(
-                "GTFS Rodalies — {} serveis d'itinerari complet del sentit",
+                "GTFS Rodalies — {} servicios de itinerario completo del sentido",
                 programmed_stat.n
             ),
         ),
         observed_available: false,
-        observed_note: "No s'han trobat dades obertes de circulació real per a aquest \
-                        anàlisi. S'utilitza l'horari programat de GTFS."
+        observed_note: "No se han encontrado datos abiertos de circulación real para este \
+                        análisis. Se utiliza el horario programado del GTFS."
             .into(),
         anomalies,
         quality,
@@ -723,7 +723,7 @@ mod tests {
     #[test]
     fn dwell_mode_labels() {
         assert!(DwellMode::Auto.label().contains("Auto"));
-        assert_eq!(DwellMode::Fixed(30).label(), "Fix 30 s");
+        assert_eq!(DwellMode::Fixed(30).label(), "Fijo 30 s");
         assert!(custom(&[("a", 10)]).label().contains("Personal"));
     }
 

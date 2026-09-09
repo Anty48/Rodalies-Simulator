@@ -27,7 +27,9 @@ fn esc(s: &str) -> String {
 /// Color determinista por línea (hue a partir del nombre).
 fn line_color(line: &str) -> String {
     let h: u32 = line.bytes().fold(0u32, |a, b| a.wrapping_mul(31).wrapping_add(b as u32));
-    format!("hsl({}, 70%, 60%)", h % 360)
+    // Lightness moderada (45 %) para que los marcadores de tren contrasten sobre el
+    // fondo claro del mapa (librea Rodalies: base blanca/gris).
+    format!("hsl({}, 65%, 45%)", h % 360)
 }
 
 pub fn network_map_svg(net: &Network, params: &SimParams) -> String {
@@ -40,7 +42,7 @@ pub fn network_map_svg(net: &Network, params: &SimParams) -> String {
         }
     }
     if coords.len() < 2 {
-        return "<p class=\"muted\">Sense coordenades a l'stops.txt per dibuixar el mapa.</p>".into();
+        return "<p class=\"muted\">Sin coordenadas en stops.txt para dibujar el mapa.</p>".into();
     }
 
     // 2. Proyección equirectangular con corrección de longitud por latitud media.
@@ -179,13 +181,13 @@ pub fn network_map_svg(net: &Network, params: &SimParams) -> String {
             // Autobús de substitució per obres: marcador quadrat gris.
             trains.push_str(&format!(
                 "<rect x=\"-3\" y=\"-3\" width=\"6\" height=\"6\" rx=\"1\" fill=\"#9aa4b2\" \
-                 stroke=\"#0e1116\" stroke-width=\"0.6\"><title>🚌 BUS {} ({}) · substitució</title>{anim}</rect>",
+                 stroke=\"#1b2127\" stroke-width=\"0.6\"><title>Autobús {} ({}) · sustitución</title>{anim}</rect>",
                 esc(&svc.train_number), esc(&svc.route_short_name)
             ));
         } else {
             let color = line_color(&svc.route_short_name);
             trains.push_str(&format!(
-                "<circle r=\"3.4\" fill=\"{color}\" stroke=\"#0e1116\" stroke-width=\"0.6\">\
+                "<circle r=\"3.4\" fill=\"{color}\" stroke=\"#1b2127\" stroke-width=\"0.6\">\
                  <title>Tren {} ({})</title>{anim}</circle>",
                 esc(&svc.train_number), esc(&svc.route_short_name), color = color
             ));
@@ -193,7 +195,7 @@ pub fn network_map_svg(net: &Network, params: &SimParams) -> String {
     }
 
     format!(
-        r##"<svg viewBox="0 0 {W} {H}" preserveAspectRatio="xMidYMid meet" class="map" role="img" aria-label="Mapa de la xarxa Rodalies">
+        r##"<svg viewBox="0 0 {W} {H}" preserveAspectRatio="xMidYMid meet" class="map" role="img" aria-label="Mapa de la red de Rodalies">
   <style>
     .mapedge {{ stroke:var(--border); stroke-width:1.1; }}
     .mapstop {{ fill:var(--muted); }}
