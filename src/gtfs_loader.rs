@@ -134,6 +134,11 @@ pub struct Network {
     pub routes: HashMap<String, String>,
     /// route_short_name -> color hex del feed GTFS (con '#', p. ej. "#7DBCEC"). Color oficial.
     pub line_colors: HashMap<String, String>,
+    /// route_short_name de líneas de TREN definidas en `routes.txt` (route_type=2), aunque
+    /// el feed no tenga ningún viaje programado ahora mismo (p. ej. R7 durante una supresión
+    /// temporal por obras). La línea existe como infraestructura/definición; que circule algún
+    /// tren depende solo de si `services` tiene itinerarios reales para ella.
+    pub rail_lines: std::collections::HashSet<String>,
     pub services: Vec<TrainService>,
 }
 
@@ -266,6 +271,7 @@ pub fn load(dir: &Path) -> Result<Network, Box<dyn Error>> {
     let mut routes: HashMap<String, String> = HashMap::new();
     let mut line_colors: HashMap<String, String> = HashMap::new();
     let mut route_is_bus: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut rail_lines: std::collections::HashSet<String> = std::collections::HashSet::new();
     {
         let mut rdr = reader(&dir.join("routes.txt"))?;
         for rec in rdr.deserialize() {
@@ -277,8 +283,11 @@ pub fn load(dir: &Path) -> Result<Network, Box<dyn Error>> {
             };
             let short = short.trim().to_string();
             let rid = r.route_id.trim().to_string();
-            if r.route_type.as_deref().map(|t| t.trim()) == Some("3") {
+            let is_bus_route = r.route_type.as_deref().map(|t| t.trim()) == Some("3");
+            if is_bus_route {
                 route_is_bus.insert(rid.clone());
+            } else {
+                rail_lines.insert(short.clone());
             }
             // Color oficial de la línea (hex del feed). Se guarda por route_short_name,
             // normalizado con '#' delante; se ignoran valores vacíos.
@@ -452,6 +461,7 @@ pub fn load(dir: &Path) -> Result<Network, Box<dyn Error>> {
         node_of_stop,
         routes,
         line_colors,
+        rail_lines,
         services,
     })
 }

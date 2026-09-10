@@ -12,7 +12,7 @@
 <body>
 <header class="bar">
   <a class="menu" href="/" title="Volver al panel">← Menú</a>
-  <div class="brand"><span class="mark">R</span> Rodalies Simulator</div>
+  <div class="brand"><span class="mark">R</span> Rodalies Simulator <span style="font-size:10px;opacity:.55;font-weight:400">v2.0</span></div>
   <div class="clock" id="clock">05:00</div>
   <div class="speeds" id="speeds">
     <button data-speed="PAUSA" class="active">Pausa</button>
@@ -53,6 +53,20 @@
     </section>
 
     <section class="block">
+      <h2>Actualizar GTFS</h2>
+      <div class="muted" id="gtfsStatus">Fuente: <a href="https://data.renfe.com/dataset/horarios-cercanias" target="_blank" rel="noopener">data.renfe.com</a></div>
+      <div class="btns">
+        <button id="gtfsUpdate">Actualizar al feed de hoy</button>
+      </div>
+      <div class="form" style="margin-top:8px">
+        <label>O sube un GTFS manualmente (.zip)
+          <input type="file" id="gtfsFile" accept=".zip">
+        </label>
+        <div class="btns"><button id="gtfsUpload">Subir GTFS</button></div>
+      </div>
+    </section>
+
+    <section class="block">
       <h2>Generador de incidencias</h2>
       <div class="form">
         <label>Tipo
@@ -83,6 +97,7 @@
       <div class="muted" id="stMeta"></div>
       <div id="stNext" class="muted"></div>
       <div id="stTracks" class="tracks"></div>
+      <div id="stDiagrams" class="diagrams"></div>
     </section>
 
     <section class="block">

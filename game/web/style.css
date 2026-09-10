@@ -72,6 +72,7 @@ h2 { font-size:.76rem; text-transform:uppercase; letter-spacing:.05em; color:var
 .trenes-list .badge { font-weight:700; color:#fff; border-radius:4px; padding:1px 6px; font-size:.72rem; }
 .trenes-list .late { color:var(--rojo); font-weight:700; font-variant-numeric:tabular-nums; }
 .trenes-list .goto { border:1px solid var(--border); background:var(--panel2); border-radius:5px; padding:2px 8px; cursor:pointer; font-size:.75rem; }
+.trenes-list .t.esperando { background:rgba(197,34,31,.08); border-left:3px solid var(--rojo); }
 
 .findia { position:fixed; inset:0; background:rgba(38,39,45,.6); display:flex; align-items:center; justify-content:center; z-index:1500; }
 .findia-inner { background:var(--panel); border-radius:10px; border-top:5px solid var(--morado); padding:22px 26px; min-width:320px; }
@@ -81,3 +82,8 @@ h2 { font-size:.76rem; text-transform:uppercase; letter-spacing:.05em; color:var
 
 .leaflet-container { background:#0b0e13; }
 @media (max-width:820px){ .panel{display:none;} .trenes{right:8px;} }
+
+.diagrams { display:flex; flex-wrap:wrap; gap:8px; margin-top:10px; }
+.diagrams a { display:block; }
+.diagrams img { max-width:150px; max-height:100px; border:1px solid var(--border); border-radius:5px; background:#fff; object-fit:contain; }
+.diagrams .cap { font-size:.7rem; color:var(--muted); text-align:center; margin-top:2px; }

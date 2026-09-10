@@ -11,6 +11,7 @@ mod calculator;
 mod exporter;
 mod game;
 mod gtfs_loader;
+mod gtfs_update;
 mod map;
 mod optimizer;
 mod passenger_model;
@@ -120,13 +121,14 @@ async fn main() {
         None => println!("· LTV no trobades. Deixa el ZIP diari a raw/ltv/ o executa scripts/fetch_adif_ltv.py"),
     }
     let state = Arc::new(server::ServerState {
-        net: Arc::new(net),
+        net: std::sync::RwLock::new(Arc::new(net)),
         load_ms,
-        lines,
+        lines: std::sync::RwLock::new(lines),
         line_cache: std::sync::Mutex::new(std::collections::HashMap::new()),
         adif,
         ltv: std::sync::RwLock::new(ltv.map(std::sync::Arc::new)),
         opt: Arc::new(std::sync::Mutex::new(server::OptJob::default())),
+        gtfs_job: Arc::new(std::sync::Mutex::new(server::GtfsJob::default())),
     });
     let url = format!("http://127.0.0.1:{}", PORT);
     if !no_open {

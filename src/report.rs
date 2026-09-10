@@ -338,7 +338,7 @@ h4 { margin:16px 0 8px; font-size:.98rem; }
 const HEADER: &str = r#"<header class="top">
     <div class="logo">R</div>
     <div>
-      <h1>Rodalies Simulator <span class="sub">· panel de análisis</span></h1>
+      <h1>Rodalies Simulator <span class="sub">· panel de análisis</span> <span style="font-size:10px;opacity:.5;font-weight:400">v2.0</span></h1>
       <div class="sub">Simulación de tráfico ferroviario e incidencias · red de Rodalies de Catalunya · modelo construido a partir de datos GTFS</div>
     </div>
   </header>"#;

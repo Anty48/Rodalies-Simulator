@@ -73,6 +73,11 @@ pub fn distinct_lines(net: &Network) -> Vec<String> {
     for s in &net.services {
         *counts.entry(s.route_short_name.as_str()).or_insert(0) += 1;
     }
+    // Líneas de tren definidas en routes.txt sin ningún viaje activo ahora mismo (p. ej. una
+    // supresión temporal por obras): la línea existe igualmente, solo con 0 servicios.
+    for l in &net.rail_lines {
+        counts.entry(l.as_str()).or_insert(0);
+    }
     let mut v: Vec<(String, usize)> =
         counts.into_iter().map(|(k, c)| (k.to_string(), c)).collect();
     v.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
