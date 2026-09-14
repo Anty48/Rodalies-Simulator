@@ -33,3 +33,9 @@ raw/ltv/*
 
 # ZIPs de datos crudos en la raíz (feed nacional, no versionar)
 /fomento_transit*.zip
+
+# Artefactos de prueba del navegador (Playwright MCP: capturas y logs de consola)
+/.playwright-mcp/
+
+# Ajustes locales de Claude Code (permisos por máquina, no compartir)
+.claude/settings.local.json

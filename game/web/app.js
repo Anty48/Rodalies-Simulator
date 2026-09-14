@@ -18,12 +18,68 @@ const VELOCIDADES = { "PAUSA": 0, "X0.05": 1 / 30, "X0.5": 10 / 30, "X1": 20 / 3
 const PERFIL = [[5, .05], [6, .3], [7, .9], [8, 1], [9, .8], [9.5, .4], [12, .35], [15, .35], [17, .6], [18, .9], [18.5, 1], [19.5, .7], [21, .3], [22.5, .15], [24, .03]];
 const NOMINAL_PAX = 300;   // pasajeros nominales por tren para el KPI (Godot usa la ocupación real por lotes)
 
+// ---- Señalización por BLOQUES FIJOS -------------------------------------------------------
+// Cada cantón (tramo entre dos estaciones) se subdivide en N sub-bloques de vía por DISTANCIA.
+// Cada bloque admite UN solo tren (como en la señalización real de bloque fijo): su señal se
+// pone en ROJO en cuanto hay un tren dentro, y no vuelve a verde hasta que el tren libera el
+// bloque cruzando la señal siguiente. Un bloque libre cuya señal SIGUIENTE está en rojo muestra
+// ÁMBAR (aviso de "próxima en rojo", sin detener).
+//
+// DENSIDAD (petición del usuario, sesión 2026-09-12): la señalización de tramo NO debe ser
+// excesiva. Se coloca ~1 señal cada `SIGNAL_SPACING_KM`, con un TOPE DURO de señales por tramo:
+// 3 como máximo en tramos normales, hasta 5 en tramos muy largos (>7 km). Referencia del usuario:
+// Fabra i Puig ↔ Torre Baró (≈3,4 km) = 2 señales → 3 bloques (round(3.4/1.6)=2). Se ELIMINA la
+// densidad adaptativa por nº de líneas (`BLOCK_KM/√nLines`) de la versión anterior, que en el
+// tronco (R2, muchas líneas) generaba muchísimas señales.
+const SIGNAL_SPACING_KM = 1.6;   // separación objetivo entre señales de tramo (vía doble)
+const MARGIN_KM = 0.5;           // no colocar una señal de tramo a menos de esto de una estación
+// Distancia entre dos estaciones (km), Haversine.
+function distKm(a, b) {
+  const R = 6371, toR = Math.PI / 180;
+  const dLat = (b.lat - a.lat) * toR, dLon = (b.lon - a.lon) * toR;
+  const s = Math.sin(dLat / 2) ** 2 + Math.cos(a.lat * toR) * Math.cos(b.lat * toR) * Math.sin(dLon / 2) ** 2;
+  return 2 * R * Math.asin(Math.min(1, Math.sqrt(s)));
+}
+// Nº de sub-bloques de un cantón a→b: SIEMPRE 1 en vía única (no hay señales de tramo, solo las
+// de estación — ver la lógica de vía única). En vía doble, nº de señales de tramo = distancia /
+// SIGNAL_SPACING_KM, ACOTADO a [0..maxSig] (maxSig = 3, o 5 si el tramo es muy largo). m sub-bloques
+// ⇒ m-1 señales de tramo. Se reduce m si algún bloque quedaría más corto que MARGIN (señal pegada
+// al andén). Independiente del nº de líneas: la densidad la fija la longitud, no el tráfico.
+function calcSubBlocks(a, b, unica) {
+  if (unica || !a || !b) return 1;
+  const d = distKm(a, b);
+  const maxSig = d > 7 ? 5 : 3;
+  let signals = Math.max(0, Math.min(maxSig, Math.round(d / SIGNAL_SPACING_KM)));
+  let m = signals + 1;
+  while (m > 1 && d / m < MARGIN_KM) m--;
+  return m;
+}
+
+// Logotipos oficiales de cada línea (game/web/lines/), usados en la leyenda y las listas en vez
+// de un simple recuadro de color. Las variantes (R2N/R2S, R3a) caen en su línea madre.
+const LINE_IMG = {
+  R1: "R1_barcelona.svg.webp", R2: "R2_barcelona.svg.webp", R2N: "R2_Nord_Rodalies.png",
+  R2S: "R2_Sud_Rodalies.png", R3: "R3.jpg", R3a: "R3.jpg", R4: "R4.jpg", R7: "R7.png",
+  R8: "R8_barcelona.svg.webp", R11: "R11.jpg", R13: "R13_Rodalies_de_Catalunya.svg.png",
+  R14: "R14.jpg", R15: "R15_Rodalies_de_Catalunya.svg.png", R16: "R16_Rodalies_de_Catalunya.svg.png",
+  R17: "R17_Rodalies_de_Catalunya.svg.webp", RG1: "RG1_rodalies.png", RL3: "RL3.png",
+  RL4: "RL4_Rodalies_de_Catalunya.svg.png", RT1: "RT1_tarragona.svg.webp", RT2: "RT2_tarragona.svg.webp",
+};
+// <img> del logo de una línea (o cadena vacía si no hay). `cls` = clase CSS de tamaño.
+function lineImg(line, cls) {
+  const f = LINE_IMG[line];
+  return f ? `<img class="${cls}" src="/game/lines/${f}" alt="${line}" title="${line}" loading="lazy">` : "";
+}
+
 // ---- Estado -------------------------------------------------------------------------------
 const S = {
   net: null, trains: [], stationById: new Map(), edgeLines: new Map(),
   simT: DIA_INICIO, speedKey: "PAUSA", speed: 0,
-  cantonMode: new Map(),   // "A>B" -> 'AUTO'|'MV'|'MR'
-  occ: new Map(),          // clave de recurso (canton dirigido o cantón único no dirigido) -> id_tren
+  cantonMode: new Map(),   // "A>B" -> 'AUTO'|'MV'|'MR' (manual por cantón entero, afecta a todos sus bloques)
+  occ: new Map(),          // clave de bloque -> [id_tren...] (UN tren por bloque; vía única = clave canónica)
+  subBlocks: new Map(),    // key(from,to) -> nº de sub-bloques del cantón en ese sentido (≥1)
+  dwell: new Map(),        // id_estacion -> tiempo de parada reglamentario (s de juego), por densidad GTFS
+  sigMarkers: [],          // señales de tramo dibujadas ahora (para repintar solo el aspecto por fotograma)
   interlocks: new Map(),   // id_estacion -> {tracks,mainA,mainB,green[[A,B]],occ[]}
   incidentes: [],          // {tipo,nombre,kind,scope,target,label,whenSec,durSec,estado}
   singleTrack: new Set(),  // claves canónicas "idA|idB" (idA<idB) de tramos de vía única
@@ -31,8 +87,28 @@ const S = {
   singleTrackUsers: new Map(), // clave de recurso -> [{t,j}] trenes que la recorren (para prioridad)
   units: new Map(),        // id_unidad_física -> {line, parked:bool, atStation, freeAt}
   parked: [],              // unidades físicas actualmente apartadas (para dibujar)
-  kpi: 0, activos: 0, selSt: null, finished: false,
+  kpi: 0, activos: 0, selSt: null, selSig: null, finished: false,
+  terminals: new Set(),    // estaciones que solo son cabecera/fin de línea (nunca paso): apartadero
 };
+
+// CORREDORES (como en Godot): en ciertas estaciones las vías se reparten en grupos
+// INDEPENDIENTES de líneas, cada uno con SU vía principal por lado (dos líneas que no se
+// estorban → dos vías principales por dirección). Config del lado juego (el GTFS no lo trae);
+// Montcada-Bifurcació ya viene con corredores del backend.
+const CORREDORES = {
+  "71801": [["R2", "R2N", "R2S"], ["R1", "R4"], ["R11", "R13", "R14", "R15", "R16", "R17"]], // Barcelona-Sants
+  "79009": [["R1", "R11"], ["R2", "R2N"]],   // Barcelona El Clot
+  "72210": [["R4"], ["R8"]],                 // Castellbisbal
+  "72503": [["R7"], ["R8"]],                 // Cerdanyola Universitat
+};
+// Grupos de corredor de una estación (config JS, o los del backend, o uno solo por defecto).
+function corredoresDe(stId, st) {
+  if (CORREDORES[stId]) return CORREDORES[stId].map((lines) => ({ lines }));
+  if (st && st.corridors && st.corridors.length) return st.corridors.map((c) => ({ lines: c.lines }));
+  return [{ lines: st ? st.lines : [] }];
+}
+function tieneCorredores(stId) { const st = S.stationById.get(stId); return !!(CORREDORES[stId] || (st && st.corridors && st.corridors.length > 1)); }
+function corredorDe(stId, line) { return corrIdx(interlock(stId), line); }
 const $ = (id) => document.getElementById(id);
 
 // ---- Mapa ---------------------------------------------------------------------------------
@@ -40,6 +116,10 @@ const map = L.map("map", { minZoom: 8, maxZoom: 15, zoomControl: true });
 L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
   { maxZoom: 19, attribution: "Esri, Maxar, Earthstar Geographics · GTFS Rodalies" }).addTo(map);
 map.setView([41.7, 1.9], 8);
+// Panes de vía: la FRANJA gris (casing) va debajo del color, y ambas debajo de las estaciones
+// (overlayPane, zIndex 400) para que el punto de la estación no quede tapado por la línea.
+map.createPane("trackCasing"); map.getPane("trackCasing").style.zIndex = 380;
+map.createPane("trackLine"); map.getPane("trackLine").style.zIndex = 390;
 const lineLayer = L.layerGroup().addTo(map);
 const stationLayer = L.layerGroup().addTo(map);
 const signalLayer = L.layerGroup().addTo(map);
@@ -47,6 +127,8 @@ const trainLayer = L.layerGroup().addTo(map);
 const parkedLayer = L.layerGroup().addTo(map);
 const trainMarkers = new Map();
 const parkedMarkers = new Map();
+// Solo para el aislado visual de líneas de la nueva UI (chrome, no afecta a la simulación).
+const linePolys = [];
 
 // ---- Utilidades ---------------------------------------------------------------------------
 const hhmm = (s) => { s = Math.floor(s) % 86400; return String(Math.floor(s / 3600)).padStart(2, "0") + ":" + String(Math.floor(s % 3600 / 60)).padStart(2, "0"); };
@@ -75,27 +157,24 @@ async function cargarRed() {
   // Cizallamientos: ocupar un cantón retiene en rojo el cantón con el que se cruza
   // físicamente (p. ej. el ramal único de R7 invadiendo la vía de R4 en Cerdanyola).
   S.shearMap.clear();
-  const addShear = (k1, k2) => { if (!S.shearMap.has(k1)) S.shearMap.set(k1, []); S.shearMap.get(k1).push(k2); };
-  for (const [[a1, b1], [a2, b2]] of S.net.shears || []) {
-    const k1 = resKey(a1, b1), k2 = resKey(a2, b2);
-    addShear(k1, k2); addShear(k2, k1);
-  }
+  // shearMap: key(from,to) -> [[c,d]…] pares de estación de los cantones que se cruzan con este.
+  const addShear = (a, b, c, d) => {
+    for (const [x, y] of [[a, b], [b, a]]) { const k = key(x, y); if (!S.shearMap.has(k)) S.shearMap.set(k, []); S.shearMap.get(k).push([c, d]); }
+  };
+  for (const [[a1, b1], [a2, b2]] of S.net.shears || []) { addShear(a1, b1, a2, b2); addShear(a2, b2, a1, b1); }
 
-  // Trazado por CANTONES: cada arista se pinta como su propio segmento con el color de su
-  // línea (o la primera si varias) — cubre toda sección con tráfico y evita rectas erróneas.
-  // Vía única: trazo discontinuo (bastón único, sin cruces posibles en plena vía).
-  lineLayer.clearLayers();
-  const bounds = [];
+  // Sub-bloques por cantón y sentido: cada uno es un bloque de UN tren. Vía única = 1 (testigo).
+  S.subBlocks.clear();
   for (const e of S.net.edges) {
     const a = S.stationById.get(e.from), b = S.stationById.get(e.to);
-    if (!a || !b) continue;
-    const unica = S.singleTrack.has(canon(e.from, e.to));
-    L.polyline([[a.lat, a.lon], [b.lat, b.lon]], {
-      color: colorLinea(e.lines[0]), weight: unica ? 2.5 : 3, opacity: .9,
-      dashArray: unica ? "6,5" : null,
-    }).addTo(lineLayer);
-    bounds.push([a.lat, a.lon], [b.lat, b.lon]);
+    S.subBlocks.set(key(e.from, e.to), calcSubBlocks(a, b, S.singleTrack.has(canon(e.from, e.to))));
   }
+
+  // Trazado por CANTONES (ver `dibujarLineas`): franja gris de fondo + color; vía doble = dos
+  // líneas paralelas al acercar el zoom; vía única = una sola.
+  dibujarLineas();
+  const bounds = [];
+  for (const s of S.stationById.values()) bounds.push([s.lat, s.lon]);
   // Estaciones.
   stationLayer.clearLayers();
   for (const s of S.stationById.values()) {
@@ -110,6 +189,56 @@ async function cargarRed() {
   $("netInfo").textContent = `${S.net.n_stations} estaciones · ${S.net.n_lines} líneas · ${S.net.edges.length} cantones · GTFS.`;
 }
 
+// ---- Trazado de vías (franja gris de fondo + color; doble = 2 líneas al acercar) -----------
+const LINE_SPLIT_ZOOM = 12;   // zoom a partir del cual la vía DOBLE se desdobla en 2 líneas y el
+                              // tren circula por SU vía (coincide con la aparición de semáforos).
+const TRACK_OFFSET = 0.0003;  // separación perpendicular (grados) entre las 2 vías de un tramo doble.
+// Desplazamiento perpendicular a la DERECHA del sentido de marcha a→b (grados lat/lon). Los dos
+// sentidos de un mismo tramo dan lados opuestos ⇒ dos vías paralelas. Lo COMPARTEN el trazado de
+// vías, los semáforos de tramo y la posición del tren, así que todo cae exactamente sobre su vía.
+function perpOffset(a, b) {
+  const dLat = b.lat - a.lat, dLon = b.lon - a.lon, len = Math.hypot(dLat, dLon) || 1;
+  return [(dLon / len) * TRACK_OFFSET, -(dLat / len) * TRACK_OFFSET];
+}
+// Dibuja una vía: una FRANJA gris oscura de fondo (para que el color resalte sobre el satélite al
+// hacer zoom) y encima el trazo de color de la línea. Vía única = trazo discontinuo (bastón).
+function trazarVia(p0, p1, color, unica, entry) {
+  const casing = L.polyline([p0, p1], { pane: "trackCasing", color: "#0c0c10", weight: unica ? 5 : 5.5, opacity: 0.5, lineCap: "round" }).addTo(lineLayer);
+  const linea = L.polyline([p0, p1], { pane: "trackLine", color, weight: unica ? 2.5 : 3, opacity: 0.95, dashArray: unica ? "6,5" : null, lineCap: "round" }).addTo(lineLayer);
+  entry.casing.push(casing); entry.color.push(linea);
+}
+// (Re)dibuja todas las vías. A zoom bajo: una sola línea centrada por cantón (rápido y legible).
+// A zoom ≥ LINE_SPLIT_ZOOM: la vía doble se desdobla en DOS líneas paralelas (una por sentido),
+// mientras la vía única sigue siendo UNA sola. Se llama al cargar la red y al cruzar el umbral.
+let lineasDesdobladas = null;
+function dibujarLineas() {
+  if (!S.net) return;
+  const split = map.getZoom() >= LINE_SPLIT_ZOOM;
+  lineasDesdobladas = split;
+  lineLayer.clearLayers();
+  linePolys.length = 0;
+  const vistos = new Set();
+  for (const e of S.net.edges) {
+    const c = canon(e.from, e.to);
+    if (vistos.has(c)) continue; vistos.add(c);
+    const a = S.stationById.get(e.from), b = S.stationById.get(e.to);
+    if (!a || !b) continue;
+    const unica = S.singleTrack.has(c);
+    const lines = S.edgeLines.get(key(e.from, e.to)) || S.edgeLines.get(key(e.to, e.from)) || e.lines;
+    const color = colorLinea(lines[0]);
+    const entry = { lines, unica, casing: [], color: [] };   // para el aislado visual (chrome UI)
+    if (unica || !split) {
+      trazarVia([a.lat, a.lon], [b.lat, b.lon], color, unica, entry);
+    } else {
+      const off = perpOffset(a, b);        // vía del sentido a→b (derecha) y la del sentido opuesto
+      trazarVia([a.lat + off[0], a.lon + off[1]], [b.lat + off[0], b.lon + off[1]], color, false, entry);
+      trazarVia([a.lat - off[0], a.lon - off[1]], [b.lat - off[0], b.lon - off[1]], color, false, entry);
+    }
+    linePolys.push(entry);
+  }
+}
+map.on("zoomend", () => { if ((map.getZoom() >= LINE_SPLIT_ZOOM) !== lineasDesdobladas) dibujarLineas(); });
+
 // ---- Máquina de estados del material rodante: flota física persistente ---------------------
 // Encadena servicios GTFS consecutivos del mismo origen/línea en unidades físicas con ID
 // estable (aproximación greedy: mismo criterio que Godot — reutiliza la unidad libre más
@@ -117,11 +246,21 @@ async function cargarRed() {
 const GIRO_MINIMO_SEG = 5 * 60;
 function encadenarFlota() {
   S.units.clear();
+  S.rutaLinea = new Map();
   const porLinea = new Map();
   for (const t of S.trains) { if (!porLinea.has(t.line)) porLinea.set(t.line, []); porLinea.get(t.line).push(t); }
   let nextId = 1;
   for (const [line, trs] of porLinea) {
     trs.sort((a, b) => a.pts[0].d - b.pts[0].d);
+    // Ruta canónica de la línea (para la dispersión `_buscar_deposito_cercano`): el servicio con
+    // más paradas, con los tiempos de tramo — recorriéndola a los dos lados se busca el depósito
+    // más cercano con apartadero libre.
+    let best = null; for (const t of trs) if (!best || t.pts.length > best.pts.length) best = t;
+    if (best) {
+      const ids = best.pts.map((p) => p.id), tiempos = [];
+      for (let i = 0; i < best.pts.length - 1; i++) tiempos.push(Math.max(60, best.pts[i + 1].a - best.pts[i].d));
+      S.rutaLinea.set(line, { ids, tiempos });
+    }
     const libres = []; // {id, atStation, freeAt}
     for (const t of trs) {
       const origen = t.pts[0].id, salida = t.pts[0].d;
@@ -142,15 +281,44 @@ function encadenarFlota() {
     for (const [unitId, servicios] of porUnidad) {
       servicios.sort((a, b) => a.pts[0].d - b.pts[0].d);
       const unit = S.units.get(unitId); if (!unit) continue;
+      // Hueco INICIAL: la unidad ya EXISTE al empezar la jornada (05:00), durmiendo en el
+      // origen de su primer servicio hasta que le toca salir. Así toda la flota está desde el
+      // principio (ningún tren se crea a mitad del día), como en Godot.
+      const pri = servicios[0];
+      if (pri.pts[0].d > DIA_INICIO) unit.huecos.push({ station: pri.pts[0].id, from: DIA_INICIO, to: pri.pts[0].d, svc: pri });
       for (let i = 0; i < servicios.length - 1; i++) {
         const fin = servicios[i], ini = servicios[i + 1];
         const finSt = fin.pts[fin.pts.length - 1].id, finT = fin.pts[fin.pts.length - 1].a;
         const iniSt = ini.pts[0].id, iniT = ini.pts[0].d;
-        if (finSt === iniSt && iniT > finT) unit.huecos.push({ station: finSt, from: finT, to: iniT });
+        if (finSt === iniSt && iniT > finT) unit.huecos.push({ station: finSt, from: finT, to: iniT, svc: ini });
       }
       const ult = servicios[servicios.length - 1];
-      unit.huecos.push({ station: ult.pts[ult.pts.length - 1].id, from: ult.pts[ult.pts.length - 1].a, to: DIA_FIN });
+      unit.huecos.push({ station: ult.pts[ult.pts.length - 1].id, from: ult.pts[ult.pts.length - 1].a, to: DIA_FIN, svc: null });
     }
+  }
+  dispersarFlota();
+}
+
+// Reparte la flota durmiente por APARTADEROS (vías no principales) respetando la capacidad de
+// cada estación (= nº de vías no principales, como plazas de parking). Si una estación se
+// satura, el sobrante (los menos urgentes) se dispersa a la estación con apartadero libre MÁS
+// CERCANA de su línea (`_buscar_deposito_cercano` de Godot: recorre la ruta a los dos lados y
+// compara el tiempo de viaje real). Último recurso: se queda donde estaba (marcado overflow).
+function dispersarFlota() {
+  const slots = new Map();   // stId -> Array<freeAt> (una por apartadero)
+  const slotsDe = (stId) => { let a = slots.get(stId); if (!a) { a = new Array(sidingsDe(stId)).fill(-Infinity); slots.set(stId, a); } return a; };
+  const slotLibre = (stId, t0) => { const a = slotsDe(stId); for (let i = 0; i < a.length; i++) if (a[i] <= t0) return i; return -1; };
+  const todos = [];
+  for (const [unitId, u] of S.units) for (const h of u.huecos) todos.push({ unitId, line: u.line, h });
+  // Urgentes primero (salida más próxima) → cogen el apartadero local; los menos urgentes se dispersan.
+  todos.sort((a, b) => (a.h.from - b.h.from) || (a.h.to - b.h.to));
+  for (const { line, h } of todos) {
+    let st = h.station, i = slotLibre(st, h.from);
+    if (i < 0) {
+      const dep = buscarDepositoCercano(line, st, (s) => slotLibre(s, h.from) >= 0);
+      if (dep) { h.depositoDe = h.station; h.station = dep; st = dep; i = slotLibre(dep, h.from); }
+    }
+    if (i >= 0) { slotsDe(st)[i] = h.to; } else { h.overflow = true; }
   }
 }
 
@@ -161,12 +329,23 @@ async function cargarHorarios() {
   S.trains = [];
   for (const t of data.trains) {
     const pts = [];
-    for (const st of t.stops) { const s = S.stationById.get(st.s); if (s) pts.push({ id: st.s, lat: s.lat, lon: s.lon, a: st.a, d: st.d }); }
+    for (const st of t.stops) { const s = S.stationById.get(st.s); if (s) pts.push({ id: st.s, lat: s.lat, lon: s.lon, a: st.a, d: st.d, pass: !!st.pass }); }
     if (pts.length < 2) continue;
     const lat0 = pts[0].lat, latN = pts[pts.length - 1].lat;
-    S.trains.push({ id: t.train, line: t.line, color: colorLinea(t.line), pts, shift: 0, side: latN >= lat0 ? "A" : "B", pax: 0, unit: null, esperando: false, esperaDesde: null, esperaHacia: null, esperaMotivo: null, cantonConcedido: null });
+    S.trains.push({ id: t.train, line: t.line, color: colorLinea(t.line), pts, shift: 0, side: latN >= lat0 ? "A" : "B", pax: 0, unit: null, esperando: false, esperaDesde: null, esperaHacia: null, esperaMotivo: null, seq: null, cb: 0 });
   }
+  imponerParadaMinima();
   encadenarFlota();
+  // Terminales: estaciones que SOLO aparecen como extremo de recorrido (nunca de paso). Los
+  // trenes que finalizan allí se apartan a vías no principales, así que no bloquean a los que
+  // siguen (Vilafranca, Martorell, Maçanet…). Se deduce del propio horario.
+  const extremo = new Set(), paso = new Set();
+  for (const t of S.trains) {
+    for (let j = 0; j < t.pts.length; j++) {
+      if (j === 0 || j === t.pts.length - 1) extremo.add(t.pts[j].id); else paso.add(t.pts[j].id);
+    }
+  }
+  S.terminals = new Set([...extremo].filter((id) => !paso.has(id)));
   // Índice de vía única: qué trenes recorren cada recurso de vía única (para la prioridad
   // de cruce Regionals > cercanías, sin recorrer todos los trenes en cada comprobación).
   S.singleTrackUsers.clear();
@@ -178,6 +357,7 @@ async function cargarHorarios() {
       S.singleTrackUsers.get(rk).push({ t, j });
     }
   }
+  construirSecuenciaBloques();
   trainLayer.clearLayers(); trainMarkers.clear();
   parkedLayer.clearLayers(); parkedMarkers.clear();
   S.kpi = 0; actualizarKpi();
@@ -190,13 +370,54 @@ function interlock(id) {
   let il = S.interlocks.get(id);
   if (!il) {
     const st = S.stationById.get(id); const n = st ? Math.max(1, st.tracks) : 1;
-    il = { tracks: n, mainA: 0, mainB: Math.min(1, n - 1), green: [], occ: [] };
+    const grupos = corredoresDe(id, st), nc = grupos.length;
+    // Reparto de vías en bloques consecutivos entre corredores; cada corredor tiene su vía
+    // principal por lado (las dos primeras del grupo) → varias vías principales por dirección.
+    const corrDeVia = new Array(n).fill(0), corr = [];
+    let cursor = 0;
+    for (let c = 0; c < nc; c++) {
+      const cuantas = Math.max(1, Math.floor(n / nc) + (c < n % nc ? 1 : 0));
+      const vias = [];
+      for (let k = 0; k < cuantas && cursor < n; k++) { vias.push(cursor); corrDeVia[cursor] = c; cursor++; }
+      corr.push({ lines: grupos[c].lines || [], vias, mainA: vias[0] || 0, mainB: vias[1] != null ? vias[1] : (vias[0] || 0) });
+    }
+    while (cursor < n) { corrDeVia[cursor] = nc - 1; corr[nc - 1].vias.push(cursor); cursor++; }
+    const corrDeLinea = {};
+    corr.forEach((g, c) => (g.lines || []).forEach((l) => { corrDeLinea[l] = c; }));
+    il = { tracks: n, corr, corrDeVia, corrDeLinea, green: [], occ: [] };
     for (let i = 0; i < n; i++) { il.green.push({ A: true, B: true }); il.occ.push(null); }
     S.interlocks.set(id, il);
   }
   return il;
 }
-function internoRojo(stId, side) { const il = interlock(stId); const via = side === "A" ? il.mainA : il.mainB; return !il.green[via][side]; }
+function corrIdx(il, line) { return il.corrDeLinea[line] != null ? il.corrDeLinea[line] : 0; }
+// Vía principal hacia `side` para `line` (la de su corredor: cada corredor tiene la suya).
+function viaPrincipal(il, side, line) { const g = il.corr[corrIdx(il, line)] || il.corr[0]; return side === "A" ? g.mainA : g.mainB; }
+// Semáforo interno de salida: rojo si el manual de la vía principal (del corredor de la línea)
+// hacia ese lado está en rojo (verde por defecto → automático via bloque/destino en el gating).
+function internoRojo(stId, side, line) { const il = interlock(stId); const via = viaPrincipal(il, side, line); return !il.green[via][side]; }
+// Vías NO principales (apartaderos/plazas de depósito) de una estación: las que no son la
+// principal de ningún corredor y lado. Su número = capacidad de trenes durmiendo (parking).
+function sidingTracksDe(stId) {
+  const il = interlock(stId); const mains = new Set();
+  for (const g of il.corr) { mains.add(g.mainA); mains.add(g.mainB); }
+  const out = []; for (let v = 0; v < il.tracks; v++) if (!mains.has(v)) out.push(v);
+  return out;
+}
+function sidingsDe(stId) { return sidingTracksDe(stId).length; }
+// Depósito más cercano de `line` con apartadero libre (`tieneHueco`), recorriendo la ruta
+// canónica a los dos lados desde `stSat` y comparando tiempo de viaje real (como Godot).
+function buscarDepositoCercano(line, stSat, tieneHueco) {
+  const ruta = S.rutaLinea.get(line); if (!ruta) return null;
+  const idx = ruta.ids.indexOf(stSat); if (idx < 0) return null;
+  let candIzq = null, tIzq = Infinity, t = 0;
+  for (let i = idx; i > 0;) { t += ruta.tiempos[i - 1]; i--; if (tieneHueco(ruta.ids[i])) { candIzq = ruta.ids[i]; tIzq = t; break; } }
+  let candDer = null, tDer = Infinity; t = 0;
+  for (let j = idx; j < ruta.ids.length - 1;) { t += ruta.tiempos[j]; j++; if (tieneHueco(ruta.ids[j])) { candDer = ruta.ids[j]; tDer = t; break; } }
+  if (!candIzq) return candDer;
+  if (!candDer) return candIzq;
+  return tIzq <= tDer ? candIzq : candDer;
+}
 
 // ---- Semáforos de tramo -------------------------------------------------------------------
 function incidenteEdge(k, kind) { const now = S.simT; return S.incidentes.some((i) => i.estado === "activa" && i.kind === kind && i.scope === "edge" && i.target === k && now < i.whenSec + i.durSec); }
@@ -215,41 +436,148 @@ function regionalEntrandoPronto(rk, exceptId) {
   return false;
 }
 
-// ¿El cantón A→B está en rojo para `id_tren` (línea `line`)? Cubre: modo manual/incidencia,
-// ocupación física (compartida entre sentidos en vía única, ver `resKey`), cizallamiento
-// (cantones que se cruzan físicamente) y prioridad Regionals>cercanías en vía única.
-function cantonRojo(a, b, id_tren, line) {
-  const k = key(a, b);
-  const mode = S.cantonMode.get(k) || "AUTO";
-  if (mode === "MR") return true;
-  if (incidenteEdge(k, "block")) return true;         // avería mecánica: bloqueo total
-  if (mode === "MV") return false;
-  const rk = resKey(a, b);
-  const o = S.occ.get(rk);
-  if (o != null && o !== id_tren) return true;         // AUTO: rojo si otro tren lo ocupa
-  for (const otroRk of S.shearMap.get(rk) || []) {
-    const oo = S.occ.get(otroRk);
-    if (oo != null && oo !== id_tren) return true;      // cizallamiento: el cruce está tomado
+// Nº de sub-bloques del cantón a→b (≥1) y clave del BLOQUE físico (sub-bloque `sb`): en vía
+// única ambos sentidos comparten el MISMO bloque-testigo (clave canónica, sin sentido ni `sb`).
+function subM(a, b) { return S.subBlocks.get(key(a, b)) || 1; }
+function sbRes(a, b, sb) { return S.singleTrack.has(canon(a, b)) ? canon(a, b) : key(a, b) + "#" + sb; }
+
+// Tiempo de parada reglamentario por estación, derivado de la DENSIDAD de servicio del GTFS (nº
+// de paradas reales al día ∝ demanda de pasajeros): 20 s en las de menor afluencia, hasta 60 s
+// en los grandes intercambiadores. Rebaquea los horarios imponiendo esa parada mínima en cada
+// estación real intermedia (los puntos de paso sintéticos de los exprés NO paran); el retraso se
+// propaga a las paradas siguientes, como en la explotación real. Los tiempos del tren PASAN a
+// ser su horario (el KPI mide el retraso contra este, no contra el feed). Sin esto los trenes
+// apenas se detenían (el feed lista muchas paradas con llegada≈salida).
+const DWELL_MIN = 20, DWELL_MAX = 60;
+function imponerParadaMinima() {
+  const freq = new Map(); let maxFreq = 1;
+  for (const t of S.trains) for (const p of t.pts) if (!p.pass) { const c = (freq.get(p.id) || 0) + 1; freq.set(p.id, c); if (c > maxFreq) maxFreq = c; }
+  S.dwell.clear();
+  for (const [id, c] of freq) S.dwell.set(id, Math.round(DWELL_MIN + (DWELL_MAX - DWELL_MIN) * Math.sqrt(c / maxFreq)));
+  for (const t of S.trains) {
+    let delta = 0;
+    for (let i = 0; i < t.pts.length; i++) {
+      const p = t.pts[i]; p.a += delta; p.d += delta;
+      if (i > 0 && i < t.pts.length - 1 && !p.pass) {
+        const need = S.dwell.get(p.id) || DWELL_MIN, have = p.d - p.a;
+        if (have < need) { const extra = need - have; p.d += extra; delta += extra; }
+      }
+    }
   }
-  if (line && !esRegional(line) && S.singleTrack.has(canon(a, b)) && regionalEntrandoPronto(rk, id_tren)) return true;
+}
+
+// Secuencia ordenada de BLOQUES de vía que recorre cada tren. CLAVE: el ANDÉN de una estación
+// es la cola del ÚLTIMO sub-bloque del cantón que llega a ella (los tramos acaban en la SALIDA
+// de la estación, no en la entrada; las dos señales internas por vía son de SALIDA). Por eso un
+// tren parado en un andén sigue ocupando el bloque anterior (su señal sigue en rojo) hasta que
+// arranca cruzando la señal de salida. `first` = sub-bloque 0 (salir de una estación → gating de
+// salida). Un centinela de origen (índice 0) rige la salida de la primera estación. `tEnter` =
+// tiempo efectivo al que el tren alcanza la señal de ese bloque.
+function construirSecuenciaBloques() {
+  for (const t of S.trains) {
+    const p = t.pts, seq = [{ origin: true, st: p[0].id, tEnter: p[0].a }];
+    for (let i = 0; i < p.length - 1; i++) {
+      const m = subM(p[i].id, p[i + 1].id), run = Math.max(1, p[i + 1].a - p[i].d);
+      for (let sb = 0; sb < m; sb++)
+        seq.push({ from: p[i].id, to: p[i + 1].id, sb, m, first: sb === 0, last: sb === m - 1, dest: p[i + 1].id, arrIdx: i + 1, tEnter: p[i].d + run * sb / m });
+    }
+    t.seq = seq; t.cb = 0;   // cb = índice del bloque en el que el tren está comprometido ahora
+  }
+}
+
+// Vías de andén por SENTIDO de una estación (para la capacidad del último sub-bloque, que
+// incluye el andén). Una estación de 2 vías (1 por sentido) → 1: un tren parado llena el bloque
+// y su señal anterior queda en rojo. Un gran intercambiador → varias: caben varios trenes
+// andanados a la vez sin colapsar el tronco (varias líneas comparten el cantón de entrada).
+function platCap(b) { const st = S.stationById.get(b); return Math.max(1, Math.floor((st ? st.tracks : 2) / 2)); }
+
+// ¿El bloque físico (sub-bloque `sb` del cantón a→b) está OCUPADO/cerrado? Capacidad 1 en vía
+// abierta; el ÚLTIMO sub-bloque (incluye el andén de `b`) admite `platCap(b)` trenes. Rojo si el
+// bloque está lleno, o manual rojo, o avería de bloqueo, o el cruce (cizallamiento) está tomado.
+function bloqueOcupado(a, b, sb, exceptId) {
+  const k = key(a, b), mode = S.cantonMode.get(k) || "AUTO";
+  if (mode === "MR" || incidenteEdge(k, "block")) return true;
+  if (mode === "MV") return false;
+  // Vía única: capacidad SIEMPRE 1 (un tren en la vía, en cualquier sentido — es el bastón/testigo;
+  // no aplica la capacidad de andén, porque la estación es un apartadero que se libera al parar).
+  // Vía doble: el ÚLTIMO sub-bloque incluye el andén de `b`, con capacidad platCap(b); el resto, 1.
+  const unica = S.singleTrack.has(canon(a, b));
+  const cap = unica ? 1 : (sb === subM(a, b) - 1 ? platCap(b) : 1);
+  const occ = S.occ.get(sbRes(a, b, sb));
+  if (occ && occ.filter((x) => x !== exceptId).length >= cap) return true;
+  for (const [c, d] of S.shearMap.get(k) || []) if (edgeOcupadoRes(c, d, exceptId)) return true;
+  return false;
+}
+// ¿Algún bloque del cantón c→d (o su testigo de vía única) está ocupado? (para el cizallamiento).
+function edgeOcupadoRes(c, d, exceptId) {
+  if (S.singleTrack.has(canon(c, d))) { const o = S.occ.get(canon(c, d)); return !!(o && o.some((x) => x !== exceptId)); }
+  const m = subM(c, d);
+  for (let s = 0; s < m; s++) { const o = S.occ.get(key(c, d) + "#" + s); if (o && o.some((x) => x !== exceptId)) return true; }
   return false;
 }
 
-// Corredor de estación lleno (Montcada Bifurcació: R3 aislada / R4+R7 comparten vías): un
-// tren no puede entrar si su corredor ya tiene tantos trenes parados como vías asignadas.
-function corredorLleno(stId, line, exceptId) {
-  const st = S.stationById.get(stId);
-  if (!st || !st.corridors || !st.corridors.length) return false;
-  const c = st.corridors.find((c) => c.lines.includes(line));
-  if (!c) return false;
-  let n = 0;
-  for (const t of S.trains) {
-    if (t.id === exceptId || !c.lines.includes(t.line)) continue;
-    const te = S.simT - t.shift, seg = segmentoDe(t, te);
-    if (seg && !seg.moving && t.pts[seg.i].id === stId) n++;
-  }
-  return n >= c.tracks;
+// Añade/quita al tren `t` de la ocupación del sub-bloque de vía `b` (S.occ). Se usa al conceder
+// un bloque en `paso` para que la ocupación quede EN VIVO dentro del mismo fotograma (los trenes
+// evaluados después ya lo ven ocupado/libre). El centinela de origen no ocupa vía.
+function ocuparBloque(t, b, add) {
+  if (!b || b.origin) return;
+  const k = sbRes(b.from, b.to, b.sb);
+  let arr = S.occ.get(k);
+  if (add) { if (!arr) { arr = []; S.occ.set(k, arr); } if (!arr.includes(t.id)) arr.push(t.id); }
+  else if (arr) { const i = arr.indexOf(t.id); if (i >= 0) arr.splice(i, 1); }
 }
+
+// ¿Puede el tren `t` ENTRAR en el sub-bloque `nb`? {ok:true} o {ok:false, motivo}. `first` = el
+// sub-bloque 0 de un cantón ⇒ es SALIR de una estación: se aplica el semáforo interno de salida
+// y las averías de estación. El resto = señales de tramo (bloque libre + prioridad de vía única).
+function bloqueEntrada(t, nb) {
+  if (nb.first) {
+    if (estacionParada(nb.from)) return { ok: false, motivo: "averia" };
+    if (internoRojo(nb.from, t.side, t.line)) return { ok: false, motivo: "interno" };
+  }
+  if (bloqueOcupado(nb.from, nb.to, nb.sb, t.id)) return { ok: false, motivo: "semaforo" };
+  if (!esRegional(t.line) && S.singleTrack.has(canon(nb.from, nb.to)) && regionalEntrandoPronto(sbRes(nb.from, nb.to, nb.sb), t.id))
+    return { ok: false, motivo: "semaforo" };
+  return { ok: true };
+}
+
+// Aspecto de la señal del bloque `sb` del cantón a→b (misma regla en tramo y en estación):
+//   ROJO  = su propio bloque ocupado/cerrado.  ÁMBAR = su bloque libre pero el SIGUIENTE en
+//   rojo (solo aviso, no detiene).  VERDE = su bloque libre y el siguiente libre.
+function aspectoBloque(a, b, sb, m, line) {
+  if (bloqueOcupado(a, b, sb, null)) return "red";
+  if ((S.cantonMode.get(key(a, b)) || "AUTO") === "MV") return "green";
+  return siguienteRojo(a, b, sb, m, line) ? "amber" : "green";
+}
+// ¿El bloque SIGUIENTE (mismo sentido) está en rojo? Es el sub-bloque sb+1 del mismo cantón o,
+// si es el último (el que incluye el andén destino), la señal de SALIDA de esa estación.
+function siguienteRojo(a, b, sb, m, line) {
+  if (sb < m - 1) return bloqueOcupado(a, b, sb + 1, null);
+  return salidaOcupada(b, a);
+}
+// ¿La SALIDA de la estación `stId` está ocupada? = el primer sub-bloque de alguna vía de salida
+// (excluida la de vuelta por donde se vino) tiene un tren. Es la señal que ve un tren que llega.
+function salidaOcupada(stId, cameFrom) {
+  for (const e of S.net.edges) {
+    if (e.from !== stId || e.to === cameFrom) continue;
+    if (bloqueOcupado(e.from, e.to, 0, null)) return true;
+  }
+  return false;
+}
+// Estado del bloque de SALIDA de una estación por lado (A=norte, B=sur), para las señales
+// internas del panel: rojo si el primer sub-bloque de alguna vía de salida de ese lado está
+// ocupado; ámbar si están libres pero la señal siguiente aguas abajo está en rojo.
+function salidaBloqueada(stId, lado) {
+  let rojo = false, ambar = false;
+  for (const e of S.net.edges) {
+    if (e.from !== stId || ladoEdge(e.from, e.to) !== lado) continue;
+    if (bloqueOcupado(e.from, e.to, 0, null)) rojo = true;
+    else if (siguienteRojo(e.from, e.to, 0, subM(e.from, e.to), e.lines[0])) ambar = true;
+  }
+  return { rojo, ambar };
+}
+// Sentido geométrico de una arista (A = hacia el norte, B = hacia el sur), para el semáforo interno.
+function ladoEdge(a, b) { const A = S.stationById.get(a), B = S.stationById.get(b); return (A && B && B.lat >= A.lat) ? "A" : "B"; }
 
 function estacionParada(stId) { const now = S.simT; return S.incidentes.some((i) => i.estado === "activa" && i.kind === "stop" && i.scope === "station" && i.target === stId && now < i.whenSec + i.durSec); }
 function edgeLento(k) { const now = S.simT; return S.incidentes.some((i) => i.estado === "activa" && i.kind === "slow" && i.scope === "edge" && i.target === k && now < i.whenSec + i.durSec); }
@@ -259,8 +587,13 @@ function segmentoDe(t, te) {
   const p = t.pts;
   if (te < p[0].d || te > p[p.length - 1].a) return null;
   for (let i = 0; i < p.length - 1; i++) {
-    if (te >= p[i].a && te <= p[i].d) return { i, moving: false };
-    if (te >= p[i].d && te <= p[i + 1].a) return { i, moving: true };
+    if (te >= p[i].a && te <= p[i].d) return { i, moving: false };   // parado en la estación i
+    // En marcha SOLO estrictamente entre la salida de i y la llegada a i+1. El límite superior
+    // debe ser EXCLUSIVO: si te == p[i+1].a el tren YA HA LLEGADO a i+1 (parado), no sigue en el
+    // tramo. Con `<=` un tren clavado en una estación de dwell 0 (a==d, p. ej. punto de paso de un
+    // exprés) se contaba como "aún circulando" y NO liberaba el bloque anterior en vía única →
+    // deadlock (dos trenes de frente que no llegaban a hacer el cruce). Ver segmentoDe/Pass 1.
+    if (te > p[i].d && te < p[i + 1].a) return { i, moving: true };
   }
   return { i: p.length - 1, moving: false };
 }
@@ -270,97 +603,98 @@ function posDe(t, seg, te) {
   const A = p[seg.i], B = p[seg.i + 1], f = B.a > A.d ? (te - A.d) / (B.a - A.d) : 0;
   return [A.lat + (B.lat - A.lat) * f, A.lon + (B.lon - A.lon) * f];
 }
+// Rumbo del tren (grados clockwise desde el norte = arriba en pantalla) según el cantón que
+// recorre; parado, usa la dirección del cantón siguiente (o el anterior si es terminal). Solo
+// se usa para ORIENTAR el triángulo en el mapa — no interviene en la física.
+function bearingDe(t, seg) {
+  const p = t.pts; let a, b;
+  if (seg.i < p.length - 1) { a = p[seg.i]; b = p[seg.i + 1]; }
+  else if (seg.i > 0) { a = p[seg.i - 1]; b = p[seg.i]; }
+  else return 0;
+  return bearing(a, b);
+}
+function bearing(a, b) {
+  const latR = a.lat * Math.PI / 180;
+  const dy = b.lat - a.lat, dx = (b.lon - a.lon) * Math.cos(latR);
+  return Math.atan2(dx, dy) * 180 / Math.PI;
+}
 
 // ---- Paso de simulación -------------------------------------------------------------------
-// El bloqueo por semáforo se comprueba SIEMPRE contra la posición SIN BLOQUEAR de este
-// fotograma (`teLibre`), no contra la posición ya clavada de fotogramas anteriores. A
-// velocidades altas (×25) un solo fotograma puede avanzar varios segundos de juego — más que
-// de sobra para saltarse por completo una ventana de comprobación estrecha, que es como un
-// tren podía "atravesar" un semáforo en rojo sin que el motor llegase a mirarlo. Por eso aquí
-// NO se usa el `moving`/`dwelling` de fotogramas anteriores para decidir si toca comprobar:
-// se recalcula la clasificación de la posición libre y, si el semáforo de salida de la
-// ÚLTIMA parada tocada está en rojo, el tren se clava exactamente ahí (fin de andén),
-// cualquiera que sea la distancia que el salto de este fotograma pretendiera cubrir.
-function paso(dtReal) {
-  const dtGame = dtReal * FACTOR_BASE * S.speed;
+// Modelo de BLOQUES FIJOS. Cada tren recorre su secuencia de bloques (`t.seq`) y el motor se
+// los concede de uno en uno: en cuanto su tiempo efectivo SIN BLOQUEAR (`teLibre`) alcanza la
+// señal del bloque siguiente, se comprueba si ese bloque está libre; si lo está, entra (se
+// COMPROMETE: no rebota, recorre el bloque entero); si no, se clava EXACTAMENTE frente a esa
+// señal. Así una señal se pone en rojo en cuanto un tren ocupa su bloque y no libera al
+// siguiente hasta que el tren cruza la señal de más allá. Se comprueba contra `teLibre` (no
+// contra la posición clavada de fotogramas previos). Además el bucle lo llama en SUB-PASOS de
+// tiempo acotado (`dtGame` ≤ PASO_MAX_S), de modo que a ×25 (o si un fotograma tarda) el avance
+// se trocea y la señalización/ocupación se resuelven exactas en cada tramo — ni se salta señales
+// ni la congestión depende de la tasa de fotogramas.
+function paso(dtGame) {
   S.simT += dtGame;
   if (S.simT >= DIA_FIN && !S.finished) { S.simT = DIA_FIN; finDelDia(); }
   activarIncidencias();
 
-  // Pass 1: posición SIN BLOQUEAR de cada tren este fotograma (a partir de su `shift`
-  // acumulado hasta el fotograma ANTERIOR), ocupación de cantones y qué estación/lado está
-  // ocupado por un tren parado (para el bloqueo "tren delante del semáforo, incluida la
-  // estación siguiente").
+  // Pass 1: ocupación de sub-bloques según el bloque COMPROMETIDO de cada tren (t.cb), no según
+  // su fracción geométrica: un tren clavado frente a una señal ocupa el bloque que tiene DETRÁS
+  // (el que recorre), no el que le niegan. Un tren parado en un andén ocupa el ÚLTIMO sub-bloque
+  // del cantón de llegada (el andén es su cola), así su señal anterior sigue en rojo.
   S.occ.clear();
-  const dwellBySide = new Map(); // "stationId|side" -> id_tren
   const est = [];
   for (const t of S.trains) {
     const teLibre = S.simT - t.shift;
     const seg = segmentoDe(t, teLibre);
-    if (!seg) { est.push(null); continue; }
-    est.push({ teLibre, seg });
-    if (seg.moving) {
-      const rk = resKey(t.pts[seg.i].id, t.pts[seg.i + 1].id);
-      if (!S.occ.has(rk)) S.occ.set(rk, t.id);
-    } else {
-      dwellBySide.set(t.pts[seg.i].id + "|" + t.side, t.id);
-    }
+    if (!seg || !t.seq) { est.push(null); continue; }
+    est.push({ teLibre });
+    const b = t.seq[t.cb];
+    if (!b || b.origin) continue;   // el centinela de origen no ocupa vía
+    // Un tren que FINALIZA en una terminal se aparta a vía secundaria: no retiene el bloque.
+    if (b.last && b.arrIdx === t.pts.length - 1 && S.terminals.has(b.dest)) continue;
+    // VÍA ÚNICA: la estación es un APARTADERO fuera de la vía; un tren que YA HA LLEGADO a la
+    // estación destino del bloque la LIBERA para que el sentido contrario pueda cruzar. (En vía
+    // doble el andén sí es cola del bloque — «andén ∈ bloque anterior» —, así que ahí no se libera.)
+    // Se comprueba con `teLibre >= llegada` (NO con seg.moving): un tren clavado frente a la señal
+    // de salida tiene teLibre ≈ holdT + dt (desfase de un sub-paso al fijar shift en Pass 2), que
+    // SOBREPASA una estación de dwell 0 (punto de paso exprés, a==d) y caería en el bloque siguiente
+    // como "en marcha" → no liberaba → DEADLOCK de dos trenes de frente que nunca cruzaban.
+    if (b.last && S.singleTrack.has(canon(b.from, b.to)) && teLibre >= t.pts[b.arrIdx].a) continue;
+    const rk = sbRes(b.from, b.to, b.sb);
+    let arr = S.occ.get(rk); if (!arr) { arr = []; S.occ.set(rk, arr); } arr.push(t.id);
   }
-  // ¿La estación destino ya tiene otro tren de este lado parado (ocupando la vía por la que
-  // entraría)? Si la estación tiene corredores definidos, se comprueba por corredor/línea en
-  // `corredorLleno`; aquí cubrimos el caso general (pool único, la mayoría de estaciones).
-  const destinoOcupado = (stId, side, exceptId) => {
-    const o = dwellBySide.get(stId + "|" + side);
-    return o != null && o !== exceptId;
-  };
 
-  // Pass 2: gating. IMPORTANTE — el semáforo de salida (interno/cantón/corredor/destino) solo
-  // se valida en el instante en que el tren INTENTA entrar en un cantón nuevo; una vez
-  // concedido, no se revalida cada fotograma (si no, un tren ya circulando por el cantón
-  // podría "rebotar" hacia atrás porque la estación destino se ocupó DESPUÉS de que saliera,
-  // lo cual no tiene sentido físico — el hueco se reservó al partir). Solo las incidencias a
-  // mitad de trayecto (rojo manual, catenaria, avería) se comprueban en todo momento, como es
-  // real: sí pueden detener a un tren que ya está circulando.
+  // Pass 2: compuertas de bloque. Avanza el bloque comprometido mientras el siguiente ya toque
+  // y esté libre; si topa con uno ocupado, clava el tren frente a su señal y acumula retraso.
   let n = 0;
   for (let idx = 0; idx < S.trains.length; idx++) {
     const t = S.trains[idx], e = est[idx]; if (!e) continue;
     n++;
-    const p = t.pts;
-    // `i` = índice de la ÚLTIMA parada que el tren ya tocó (según su posición libre): si va
-    // "moving", es el origen del cantón que cruza; si va "dwelling", es donde está parado.
-    const i = e.seg.i;
-    let bloqueado = false, motivo = null;
-    if (!e.seg.moving && estacionParada(p[i].id)) { bloqueado = true; motivo = "averia"; }
-    // `quiereSalir`: el reloj SIN BLOQUEAR ya alcanzó o pasó la hora de salida de i — en
-    // dwell normal (aún no toca salir) no se evalúa nada, para no adelantar la salida.
-    const quiereSalir = i < p.length - 1 && e.teLibre >= p[i].d;
-    if (!bloqueado && quiereSalir) {
-      const destino = p[i + 1].id, k = key(p[i].id, destino);
-      if (t.cantonConcedido === k) {
-        // Cantón ya concedido: solo incidencias/manual a mitad de trayecto pueden pararlo.
-        if (S.cantonMode.get(k) === "MR" || incidenteEdge(k, "block")) { bloqueado = true; motivo = "semaforo"; }
-        else if (edgeLento(k) && (Math.floor(S.simT) % 2 === 0)) { bloqueado = true; motivo = "catenaria"; }
-      } else if (internoRojo(p[i].id, t.side)) { bloqueado = true; motivo = "interno"; }
-      else if (cantonRojo(p[i].id, destino, t.id, t.line)) { bloqueado = true; motivo = "semaforo"; }
-      else if (corredorLleno(destino, t.line, t.id)) { bloqueado = true; motivo = "corredor"; }
-      else if (destinoOcupado(destino, t.side, t.id)) { bloqueado = true; motivo = "destino"; }
-      else {
-        t.cantonConcedido = k; // semáforo verde: concede el cantón, no se revalida hasta el siguiente
-      }
+    let bloqueado = false, motivo = null, holdT = null;
+    while (t.cb < t.seq.length - 1) {
+      const nb = t.seq[t.cb + 1];
+      if (e.teLibre < nb.tEnter) break;              // aún no ha alcanzado esa señal
+      const r = bloqueEntrada(t, nb);
+      if (!r.ok) { bloqueado = true; motivo = r.motivo; holdT = nb.tEnter; break; }
+      ocuparBloque(t, t.seq[t.cb], false);            // libera el bloque actual…
+      t.cb++;                                          // …concede el siguiente (compromiso, sin rebote)
+      ocuparBloque(t, t.seq[t.cb], true);             // ocupación en vivo: la ven los trenes de después
     }
-    if (bloqueado && S.speed > 0) {
-      // Clava el tren EXACTAMENTE en el instante de salida de la parada i (frente al
-      // semáforo, no a mitad de cantón), sea cual sea la distancia que este fotograma
-      // pretendía avanzar.
-      t.shift = S.simT - p[i].d;
-      t.cantonConcedido = null;
-      const pax = Math.round(NOMINAL_PAX * demanda(S.simT));
-      S.kpi += (dtGame / 60) * pax;
+    // Catenaria (velocidad reducida) en el sub-bloque de vía que recorre ahora: congela fotogramas
+    // alternos ⇒ ~mitad de velocidad, sin detenerlo del todo.
+    const bCur = t.seq[t.cb];
+    let caten = false;
+    if (!bloqueado && bCur && !bCur.origin && edgeLento(key(bCur.from, bCur.to)) && (Math.floor(S.simT) % 2 === 0)) caten = true;
+    if (S.speed > 0) {
+      if (bloqueado) t.shift = S.simT - holdT;        // clavado frente a la señal en rojo
+      else if (caten) t.shift += dtGame;              // ralentizado (congela este fotograma)
+      if (bloqueado || caten) { const pax = Math.round(NOMINAL_PAX * demanda(S.simT)); S.kpi += (dtGame / 60) * pax; }
     }
-    t.esperando = bloqueado && motivo !== "averia";
-    t.esperaDesde = t.esperando ? p[i].id : null;
-    t.esperaHacia = t.esperando && i < p.length - 1 ? p[i + 1].id : null;
-    t.esperaMotivo = t.esperando ? motivo : null;
+    t.esperando = bloqueado;
+    if (bloqueado) {
+      const nb = t.seq[t.cb + 1];
+      // La señal que lo retiene está a la ENTRADA de `nb`: si `nb` es la salida de una estación
+      // (first), es la señal de salida de nb.from; si no, la señal de tramo nb.from→nb.to.
+      t.esperaDesde = nb.from; t.esperaHacia = nb.to; t.esperaMotivo = motivo;
+    } else { t.esperaDesde = t.esperaHacia = t.esperaMotivo = null; }
   }
   S.activos = n;
 }
@@ -371,38 +705,36 @@ function render() {
   for (const t of S.trains) {
     const te = S.simT - t.shift, seg = segmentoDe(t, te);
     if (!seg) continue;
+    // Un tren PARADO en una estación está DENTRO de ella: no se dibuja (así su triángulo no
+    // tapa el marcador de la estación y esta se puede clicar). Solo se ven los que circulan.
+    if (!seg.moving) continue;
     vivos.add(t.id);
     const pos = posDe(t, seg, te), late = t.shift > 90;
+    // Al desdoblar la vía doble (zoom ≥ umbral), el tren circula por SU vía: mismo desplazamiento
+    // perpendicular a la derecha del sentido de marcha que usa el trazado. Vía única: centrado.
+    const p = t.pts;
+    if (lineasDesdobladas && !S.singleTrack.has(canon(p[seg.i].id, p[seg.i + 1].id))) {
+      const off = perpOffset(p[seg.i], p[seg.i + 1]);
+      pos[0] += off[0]; pos[1] += off[1];
+    }
     let m = trainMarkers.get(t.id);
-    if (!m) { m = L.circleMarker(pos, { radius: 4.5, color: late ? "#ec6e15" : "#26272d", weight: 1.4, fillColor: t.color, fillOpacity: 1 }); m.bindTooltip(""); m.addTo(trainLayer); trainMarkers.set(t.id, m); }
-    else m.setLatLng(pos);
-    // Esperando en un semáforo: aro rojo grueso (bien distinguible de un simple retraso).
-    if (t.esperando) m.setStyle({ color: "#c5221f", weight: 3, radius: 5.5 });
-    else m.setStyle({ color: late ? "#ec6e15" : "#26272d", weight: 1.4, radius: 4.5 });
+    if (!m) {
+      m = L.marker(pos, { icon: L.divIcon({ className: "trn-ic", html: '<span class="trn-tri"></span>', iconSize: [18, 18], iconAnchor: [9, 9] }), keyboard: false });
+      m._line = t.line; m.bindTooltip(""); m.addTo(trainLayer); trainMarkers.set(t.id, m);
+    } else m.setLatLng(pos);
+    // Triángulo orientado según el SENTIDO DE MARCHA; relleno = color de línea; estado por clase.
+    const elm = m.getElement();
+    if (elm && elm.firstChild) {
+      const tri = elm.firstChild;
+      tri.style.setProperty("--c", t.color);
+      tri.style.transform = "rotate(" + bearingDe(t, seg).toFixed(1) + "deg)";
+      elm.classList.toggle("late", late && !t.esperando);
+      elm.classList.toggle("hold", t.esperando);
+    }
     const esperaTxt = t.esperando ? `<br><b>⏸ Esperando ${MOTIVO_LABEL[t.esperaMotivo] || t.esperaMotivo}</b> en ${nombre(t.esperaDesde)}` : "";
     m.setTooltipContent(`${t.line} · tren ${t.id}<br>Destino: ${nombre(t.pts[t.pts.length - 1].id)}<br>Retraso: ${t.shift > 60 ? "+" + Math.round(t.shift / 60) + " min" : "puntual"}${esperaTxt}`);
   }
   for (const [id, m] of trainMarkers) if (!vivos.has(id)) { trainLayer.removeLayer(m); trainMarkers.delete(id); }
-
-  // Unidades apartadas (pernocta/reposicionamiento): al terminar un servicio, la unidad
-  // física no desaparece — se aparta a una vía secundaria del terminal hasta su próximo
-  // servicio (o hasta el fin de la jornada, si no tiene ninguno más asignado).
-  const aparcados = new Set();
-  for (const [unitId, u] of S.units) {
-    const hueco = u.huecos.find((h) => S.simT >= h.from && S.simT < h.to);
-    if (!hueco) continue;
-    const st = S.stationById.get(hueco.station); if (!st) continue;
-    aparcados.add(unitId);
-    const ang = (hashStr(unitId) % 360) * Math.PI / 180, r = 0.0018;
-    const pos = [st.lat + Math.sin(ang) * r, st.lon + Math.cos(ang) * r];
-    let m = parkedMarkers.get(unitId);
-    if (!m) {
-      m = L.circleMarker(pos, { radius: 3.5, color: "#26272d", weight: 1, dashArray: "2,2", fillColor: colorLinea(u.line), fillOpacity: .85 });
-      m.bindTooltip(""); m.addTo(parkedLayer); parkedMarkers.set(unitId, m);
-    }
-    m.setTooltipContent(`Unidad ${unitId} (${u.line}) apartada en ${st.name}<br>Próximo servicio: ${hueco.to >= DIA_FIN ? "fin de jornada" : hhmm(hueco.to)}`);
-  }
-  for (const [id, m] of parkedMarkers) if (!aparcados.has(id)) { parkedLayer.removeLayer(m); parkedMarkers.delete(id); }
 
   $("kActive").textContent = S.activos;
   $("clock").textContent = hhmm(S.simT);
@@ -410,17 +742,34 @@ function render() {
 const nombre = (id) => { const s = S.stationById.get(id); return s ? s.name : id; };
 function hashStr(s) { let h = 0; for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0; return h; }
 
+// ---- Flota DURMIENDO en apartaderos (vías no principales) ----------------------------------
+// La flota es FINITA: toda unidad existe de 05:00 a 00:00 y, cuando no da servicio, DUERME en
+// una vía no principal (apartadero) de una estación. NO se dibuja en el mapa: los durmientes se
+// ven en la INTERFAZ de la estación, aparcados en sus vías no principales (ver el HUD).
+// Unidades durmiendo ahora mismo en `stId` (su hueco activo las sitúa aquí, ya dispersadas).
+function durmientesEn(stId) {
+  const out = [];
+  for (const [unitId, u] of S.units) {
+    const h = u.huecos.find((h) => S.simT >= h.from && S.simT < h.to);
+    if (h && h.station === stId) out.push({ unitId, line: u.line, h });
+  }
+  return out;
+}
+
 // ---- Semáforos de tramo en el mapa (LOD: sólo al acercar y dentro de vista) ----------------
 // Vía doble: un semáforo POR SENTIDO, desplazado perpendicularmente a cada lado de la vía
 // (como en la realidad — no pueden compartir posición ni estado, cada sentido se gestiona por
 // separado). Vía única: un único semáforo en el centro (el bastón/testigo es un recurso
 // físico compartido, no tiene sentido un semáforo independiente por sentido).
-function offsetPerp(a, b, lado) {
-  const dLat = b.lat - a.lat, dLon = b.lon - a.lon;
-  const len = Math.hypot(dLat, dLon) || 1;
-  const OFFSET = 0.00035; // grados: separación visual entre las dos vías/semáforos
-  const mid = [(a.lat + b.lat) / 2, (a.lon + b.lon) / 2];
-  return [mid[0] + (dLon / len) * OFFSET * lado, mid[1] - (dLat / len) * OFFSET * lado];
+// Geometría de las señales de tramo: se dibujan en CONJUNTOS (los dos sentidos juntos, uno a
+// cada lado de la vía), usando el MISMO desplazamiento perpendicular (`TRACK_OFFSET`) que el
+// trazado de las dos vías, de modo que cada semáforo cae exactamente sobre su vía.
+// Punto a fracción `f` del cantón a→b, con desplazamiento perpendicular `lado` (0 = sin él).
+function posEnArista(a, b, f, lado) {
+  const lat = a.lat + (b.lat - a.lat) * f, lon = a.lon + (b.lon - a.lon) * f;
+  if (!lado) return [lat, lon];
+  const dLat = b.lat - a.lat, dLon = b.lon - a.lon, len = Math.hypot(dLat, dLon) || 1;
+  return [lat + (dLon / len) * TRACK_OFFSET * lado, lon - (dLat / len) * TRACK_OFFSET * lado];
 }
 // Trenes actualmente retenidos (t.esperando) en el cantón A→B — para el indicador visual y
 // el tooltip del semáforo ("interfaz de trenes esperando en semáforo").
@@ -431,37 +780,134 @@ function trenesEsperandoEn(a, b) {
   }
   return out;
 }
-const MOTIVO_LABEL = { semaforo: "semáforo en rojo", interno: "semáforo interno", corredor: "corredor lleno", destino: "vía destino ocupada", catenaria: "catenaria (velocidad reducida)" };
+const MOTIVO_LABEL = { semaforo: "bloque ocupado", interno: "semáforo interno", corredor: "corredor lleno", destino: "vía destino ocupada", catenaria: "catenaria (velocidad reducida)" };
 
-function pintarSemaforos() {
+// Crea el MARKER de una señal de bloque (triángulo) que guarda el sub-bloque `sb` (de `m`) del
+// sentido from→to, y lo registra en `S.sigMarkers`. El COLOR (aspecto) NO se fija aquí: lo
+// repinta `actualizarSemaforosAspecto` cada fotograma (barato). El tooltip se calcula al vuelo
+// (función) para que salga siempre fresco sin coste por fotograma.
+function crearSemaforo(from, to, sb, m, pos, brg) {
+  const k = key(from, to), lines = S.edgeLines.get(k) || S.edgeLines.get(key(to, from)) || [];
+  const mk = L.marker(pos, { icon: L.divIcon({ className: "sig-ic green", html: `<span class="sig-tri" style="transform:rotate(${brg.toFixed(1)}deg)"></span>`, iconSize: [16, 16], iconAnchor: [8, 8] }), keyboard: false });
+  mk.bindTooltip(() => {
+    const asp = aspectoBloque(from, to, sb, m, lines[0]);
+    const esperando = trenesEsperandoEn(from, to);
+    const listaEspera = esperando.length ? "<br><b>Detenido:</b> " + esperando.map((t) => `${t.line} ${t.id}`).join(", ") : "";
+    const aspTxt = asp === "red" ? "ROJO — bloque ocupado" : asp === "amber" ? "ÁMBAR — próxima señal en rojo" : "VERDE — vía libre";
+    return `${lines.join(",")} · ${nombre(from)} → ${nombre(to)} · bloque ${sb + 1}/${m}<br>${aspTxt} · ${MODO_LABEL[S.cantonMode.get(k) || "AUTO"]}${listaEspera}<br><span style="opacity:.7">Clic: panel del semáforo</span>`;
+  });
+  mk.on("click", () => abrirSemaforo({ from, to, k, sb, m, lines, unica: S.singleTrack.has(canon(from, to)) }));
+  mk.addTo(signalLayer);
+  S.sigMarkers.push({ mk, from, to, sb, m, k, line: lines[0], cls: "" });
+}
+
+// Reconstruye los MARKERS de señal visibles. Solo se llama al mover/zoom o al (des)activar las
+// señales — NO por fotograma.
+//   · VÍA DOBLE: señales de TRAMO = fronteras INTERNAS de cada cantón (sb=1..m-1), una por sentido,
+//     cada una sobre su vía (mismo desplazamiento perpendicular que el trazado). Calibrado por
+//     distancia (Fabra i Puig ↔ Torre Baró = 2 señales), con tope de densidad (ver calcSubBlocks).
+//   · VÍA ÚNICA: SIN señales de tramo. Se dibujan las dos señales de SALIDA de estación (una en
+//     cada extremo del tramo), centradas sobre la vía única. Cada una gobierna la entrada al bastón
+//     en su sentido y se pone en rojo si hay un tren en el tramo EN CUALQUIER SENTIDO — así los
+//     trenes se esperan en la estación para hacer el cruce sin chocar.
+function construirSemaforos() {
   signalLayer.clearLayers();
+  S.sigMarkers = [];
   if (!$("showSignals").checked || map.getZoom() < 12 || !S.net) return;
   const vb = map.getBounds();
+  const vistos = new Set();
   for (const e of S.net.edges) {
+    const c = canon(e.from, e.to);
+    if (vistos.has(c)) continue; vistos.add(c);
     const a = S.stationById.get(e.from), b = S.stationById.get(e.to); if (!a || !b) continue;
-    const unica = S.singleTrack.has(canon(e.from, e.to));
-    const pos = unica ? [(a.lat + b.lat) / 2, (a.lon + b.lon) / 2] : offsetPerp(a, b, 1);
-    if (!vb.contains(pos)) continue;
-    const k = key(e.from, e.to), rojo = cantonRojo(e.from, e.to, null, e.lines[0]), manual = (S.cantonMode.get(k) || "AUTO") !== "AUTO";
-    const esperando = trenesEsperandoEn(e.from, e.to);
-    const m = L.circleMarker(pos, {
-      radius: esperando.length ? (unica ? 8 : 7) : (unica ? 6 : 5),
-      color: esperando.length ? "#ec6e15" : (manual ? "#ffd43b" : (unica ? "#26272d" : "#fff")),
-      weight: esperando.length ? 3 : (manual ? 2 : (unica ? 1.5 : 1)),
-      fillColor: rojo ? "#c5221f" : "#2f9e44", fillOpacity: 1,
-    });
-    const listaEspera = esperando.length
-      ? "<br><b>Esperando aquí:</b><br>" + esperando.map((t) => `${t.line} tren ${t.id} (${MOTIVO_LABEL[t.esperaMotivo] || t.esperaMotivo}, +${Math.round(t.shift / 60)} min)`).join("<br>")
-      : "";
-    m.bindTooltip(`${e.lines.join(",")} · ${nombre(e.from)} → ${nombre(e.to)}${unica ? " · vía única (testigo compartido)" : " · sentido " + nombre(e.from) + "→" + nombre(e.to)}<br>${({ AUTO: "Automático", MV: "Manual verde", MR: "Manual rojo" })[S.cantonMode.get(k) || "AUTO"]}${listaEspera}`);
-    m.on("click", () => { const cur = S.cantonMode.get(k) || "AUTO"; S.cantonMode.set(k, cur === "AUTO" ? "MV" : cur === "MV" ? "MR" : "AUTO"); pintarSemaforos(); });
-    m.addTo(signalLayer);
+    if (S.singleTrack.has(c)) {
+      // Señales de salida de estación (bloque-testigo único: sb=0, m=1), una cerca de cada extremo.
+      for (const [from, to, gf] of [[e.from, e.to, 0.14], [e.to, e.from, 0.86]]) {
+        const pos = posEnArista(a, b, gf, 0);
+        if (!vb.contains(pos)) continue;
+        crearSemaforo(from, to, 0, 1, pos, bearing(S.stationById.get(from), S.stationById.get(to)));
+      }
+      continue;
+    }
+    const dirs = [];
+    if (S.edgeLines.has(key(e.from, e.to))) dirs.push([e.from, e.to, 1]);
+    if (S.edgeLines.has(key(e.to, e.from))) dirs.push([e.to, e.from, -1]);
+    for (const [from, to, lado] of dirs) {
+      const m = subM(from, to), brg = bearing(S.stationById.get(from), S.stationById.get(to));
+      for (let sb = 1; sb < m; sb++) {
+        const gf = lado > 0 ? sb / m : 1 - sb / m;            // fracción medida desde a=e.from
+        const pos = posEnArista(a, b, gf, lado);
+        if (!vb.contains(pos)) continue;
+        crearSemaforo(from, to, sb, m, pos, brg);
+      }
+    }
+  }
+  actualizarSemaforosAspecto();
+}
+// Repinta SOLO el color de las señales visibles — barato (O(trenes)+O(señales)) → cada fotograma,
+// por eso a ×25 los cambios rojo/ámbar/verde son inmediatos y no un espectáculo de luces con retardo.
+function actualizarSemaforosAspecto() {
+  if (!S.sigMarkers.length) return;
+  const waitSet = new Set();
+  for (const t of S.trains) if (t.esperando && t.esperaDesde && t.esperaHacia) waitSet.add(t.esperaDesde + ">" + t.esperaHacia);
+  for (const s of S.sigMarkers) {
+    const asp = aspectoBloque(s.from, s.to, s.sb, s.m, s.line);
+    const manual = (S.cantonMode.get(s.k) || "AUTO") !== "AUTO";
+    const wait = waitSet.has(s.from + ">" + s.to);
+    const cls = asp + (manual ? " manual" : "") + (wait ? " wait" : "");
+    if (cls === s.cls) continue;                 // sin cambios → no toca el DOM
+    s.cls = cls;
+    const el = s.mk.getElement(); if (!el) continue;
+    el.classList.remove("green", "amber", "red", "manual", "wait");
+    el.classList.add(asp);
+    if (manual) el.classList.add("manual");
+    if (wait) el.classList.add("wait");
   }
 }
-map.on("moveend zoomend", pintarSemaforos);
+map.on("moveend zoomend", construirSemaforos);
+
+// ---- Panel del semáforo de tramo (dock derecho, exclusivo con estación/incidencias) --------
+function abrirSemaforo(sig) { S.selSig = sig; cerrarDocks("signal"); $("signalBox").hidden = false; buildSignalPanel(); }
+const MODO_LABEL = { AUTO: "Automático", MV: "Manual verde", MR: "Manual rojo" };
+function buildSignalPanel() {
+  const g = S.selSig; if (!g) return;
+  $("sigTitle").textContent = nombre(g.from) + " → " + nombre(g.to);
+  $("sigMeta").innerHTML = `<span class="st-logos">${g.lines.map((l) => lineImg(l, "line-logo sm")).join("")}</span>` +
+    `<span>${g.unica ? "vía única · " : ""}bloque ${(g.sb || 0) + 1} de ${g.m || 1}</span>`;
+  const cur = S.cantonMode.get(g.k) || "AUTO";
+  $("sigModes").innerHTML = ["AUTO", "MV", "MR"].map((mo) =>
+    `<button class="sigmode ${mo === cur ? "active" : ""} ${mo.toLowerCase()}" data-mode="${mo}">${MODO_LABEL[mo]}</button>`).join("");
+  $("sigModes").querySelectorAll("button").forEach((btn) => btn.onclick = () => {
+    S.cantonMode.set(g.k, btn.dataset.mode); buildSignalPanel(); actualizarSemaforosAspecto();
+  });
+  actualizarSemaforoDinamico();
+}
+// Refresca solo lo que cambia con el tiempo: aspecto actual y el tren detenido (uno como máx).
+function actualizarSemaforoDinamico() {
+  const g = S.selSig; if (!g || $("signalBox").hidden) return;
+  const asp = aspectoBloque(g.from, g.to, g.sb || 0, g.m || 1, g.lines[0]);
+  $("sigAspect").className = "sig-aspect " + asp;
+  $("sigAspect").textContent = asp === "red" ? "● ROJO — bloque ocupado" : asp === "amber" ? "● ÁMBAR — próxima señal en rojo" : "● VERDE — vía libre";
+  const det = trenesEsperandoEn(g.from, g.to)[0];   // por semáforo solo puede haber UN tren detenido
+  if (det) {
+    $("sigHeld").innerHTML = `<div class="held-card">
+      ${lineImg(det.line, "line-logo big") || `<span class="badge" style="background:${det.color}">${det.line}</span>`}
+      <div class="held-info"><b>Tren ${det.id}</b><span>→ ${nombre(det.pts[det.pts.length - 1].id)}</span>
+      <span class="held-motivo">⏸ ${MOTIVO_LABEL[det.esperaMotivo] || det.esperaMotivo} · +${Math.round(det.shift / 60)} min</span></div></div>`;
+  } else {
+    $("sigHeld").innerHTML = `<div class="held-empty">Sin tren detenido tras este semáforo.</div>`;
+  }
+}
 
 // ---- Panel de enclavamiento de estación ---------------------------------------------------
-function abrirEstacion(s) { S.selSt = s; $("stationBox").hidden = false; buildStationPanel(); }
+// Los tres paneles (estación, semáforo e incidencias) comparten el MISMO rincón derecho y
+// NUNCA se solapan: abrir uno cierra los otros dos. `keep` = el que se está abriendo.
+function cerrarDocks(keep) {
+  if (keep !== "station") { const s = $("stationBox"); if (s) { s.hidden = true; S.selSt = null; } }
+  if (keep !== "signal") { const g = $("signalBox"); if (g) { g.hidden = true; S.selSig = null; } }
+  if (keep !== "inc") { const inc = $("incPanel"); if (inc) { inc.classList.remove("open"); inc.setAttribute("aria-hidden", "true"); } }
+}
+function abrirEstacion(s) { S.selSt = s; cerrarDocks("station"); $("stationBox").hidden = false; buildStationPanel(); }
 
 // Construye el panel UNA vez (o al cambiar un ajuste): crea el DOM y engancha los manejadores.
 // No debe llamarse cada fotograma (destruiría los botones justo al pulsarlos).
@@ -469,25 +915,40 @@ function buildStationPanel() {
   const s = S.selSt; if (!s) return;
   const il = interlock(s.id);
   $("stName").textContent = s.name;
-  $("stMeta").textContent = `${il.tracks} vía(s) · líneas ${s.lines.join(", ")}`;
-  let html = `<div class="form" style="display:flex;gap:8px;margin:8px 0">
-      <label style="flex:1">Ppal. A<select id="selMainA"></select></label>
-      <label style="flex:1">Ppal. B<select id="selMainB"></select></label></div>`;
-  for (let v = 0; v < il.tracks; v++) {
-    const ga = il.green[v].A, gb = il.green[v].B;
-    const tags = [il.mainA === v ? "◀A" : "", il.mainB === v ? "B▶" : ""].filter(Boolean).join(" ");
-    html += `<div class="trackrow">
-      <button class="sig ${ga ? "green" : "red"}" data-v="${v}" data-lado="A">A</button>
-      <div class="viac ${(il.mainA === v || il.mainB === v) ? "main" : ""}" data-v="${v}">Vía ${v + 1} ${tags}<span class="occ-label"></span></div>
-      <button class="sig ${gb ? "green" : "red"}" data-v="${v}" data-lado="B">B</button>
-    </div>`;
+  const nDep = sidingsDe(s.id);
+  $("stMeta").innerHTML = `<span class="st-logos">${s.lines.map((l) => lineImg(l, "line-logo sm")).join("")}</span><span>${il.tracks} vía(s)${il.corr.length > 1 ? " · " + il.corr.length + " corr." : ""} · <b id="parkCount">0</b>/${nDep} plazas depósito</span>`;
+  // Semáforos INTERNOS de salida: uno por vía y sentido (A/B). Verde por defecto (automáticos);
+  // se ponen en rojo solos cuando retienen a un tren (bloque/destino ocupado) y se pueden tocar
+  // (clic = forzar/soltar). No se dibujan en el mapa: el tren esperando se queda DENTRO. En
+  // estaciones con corredores, cada corredor (grupo de líneas) tiene su propia vía principal por
+  // lado → varias vías principales por dirección (dos líneas que no se estorban). Clic en la vía:
+  // reasigna la principal de su corredor (1º lado A, 2º lado B).
+  let html = "";
+  for (let c = 0; c < il.corr.length; c++) {
+    const g = il.corr[c];
+    if (il.corr.length > 1) {
+      const et = g.lines.length ? g.lines.map((l) => lineImg(l, "line-logo sm")).join("") : "Corredor " + (c + 1);
+      html += `<div class="corr-head">${et}<span class="corr-tag">vía ppal. propia</span></div>`;
+    }
+    for (const v of g.vias) {
+      const esMain = g.mainA === v || g.mainB === v;
+      const tags = esMain ? [g.mainA === v ? "◀A" : "", g.mainB === v ? "B▶" : ""].filter(Boolean).join(" ") : '<span class="dep-tag">🅿 depósito</span>';
+      html += `<div class="trackrow${esMain ? "" : " siding"}">
+        <button class="sig" data-v="${v}" data-lado="A">A</button>
+        <div class="viac ${esMain ? "main" : "dep"}" data-v="${v}" data-corr="${c}">Vía ${v + 1} ${tags}<span class="occ-label"></span></div>
+        <button class="sig" data-v="${v}" data-lado="B">B</button>
+      </div>`;
+    }
   }
   const box = $("stTracks"); box.innerHTML = html;
-  const opt = (sel, val) => { let o = ""; for (let v = 0; v < il.tracks; v++) o += `<option value="${v}"${v === val ? " selected" : ""}>Vía ${v + 1}</option>`; sel.innerHTML = o; };
-  opt($("selMainA"), il.mainA); opt($("selMainB"), il.mainB);
-  $("selMainA").onchange = (e) => { il.mainA = +e.target.value; buildStationPanel(); };
-  $("selMainB").onchange = (e) => { il.mainB = +e.target.value; buildStationPanel(); };
-  box.querySelectorAll(".sig").forEach((b) => b.onclick = () => { const v = +b.dataset.v, l = b.dataset.lado; il.green[v][l] = !il.green[v][l]; buildStationPanel(); });
+  // Clic en la señal interna: fuerza/suelta el manual de esa vía y sentido.
+  box.querySelectorAll(".sig").forEach((b) => b.onclick = () => { const v = +b.dataset.v, l = b.dataset.lado; il.green[v][l] = !il.green[v][l]; actualizarEstacionDinamico(); });
+  // Clic en la vía: reasigna la principal de su corredor (1er clic → lado A, 2º → lado B).
+  box.querySelectorAll(".viac").forEach((cell) => cell.onclick = () => {
+    const v = +cell.dataset.v, g = il.corr[+cell.dataset.corr];
+    if (g.mainA !== v) g.mainA = v; else if (g.mainB !== v) g.mainB = v;
+    buildStationPanel();
+  });
 
   // Esquema(s) de vías real(es) (trenscat.com, ver reference/trenscat/) si los hay para esta
   // estación — referencia visual de cantones/agujas reales, clic para ver a tamaño completo.
@@ -503,14 +964,60 @@ function actualizarEstacionDinamico() {
   const s = S.selSt; if (!s || $("stationBox").hidden) return;
   const il = interlock(s.id);
   for (let v = 0; v < il.tracks; v++) il.occ[v] = null;
-  for (const t of S.trains) { const te = S.simT - t.shift, seg = segmentoDe(t, te); if (seg && !seg.moving && t.pts[seg.i].id === s.id) il.occ[t.side === "A" ? il.mainA : il.mainB] = t.id; }
+  const esperaSalida = new Set();       // "corredor|lado": un servicio espera salir por ahí (vía ppal.)
+  const dormidoSalida = new Set();      // "v|lado": un durmiente saldrá por ahí (señal roja hasta que salga)
+  const etiqueta = new Map();           // v -> texto de ocupación
+  // Servicios EN CURSO parados aquí → en su vía principal (corredor + lado).
+  for (const t of S.trains) {
+    const te = S.simT - t.shift, seg = segmentoDe(t, te);
+    if (!(seg && !seg.moving && t.pts[seg.i].id === s.id)) continue;
+    const c = corrIdx(il, t.line);
+    let via = viaPrincipal(il, t.side, t.line);
+    if (il.occ[via] != null) { const libre = il.corr[c].vias.find((v) => il.occ[v] == null); if (libre != null) via = libre; }
+    il.occ[via] = t.id; etiqueta.set(via, t.line + " " + t.id);
+    // Un tren que solo PARA (recoge pasajeros) NO pone su señal de salida en rojo; solo la pone
+    // roja si está realmente RETENIDO por el bloque de delante (t.esperando). El tiempo de parada
+    // reglamentario se cumple igual: no saldrá antes aunque la señal esté verde.
+    if (t.esperando) esperaSalida.add(c + "|" + t.side);
+  }
+  // Flota DURMIENDO aquí → aparcada en las PLAZAS DE DEPÓSITO (vías no principales) libres, con
+  // su id y su próximo itinerario; su semáforo de salida en rojo hasta su hora.
+  const durm = durmientesEn(s.id).sort((a, b) => (a.h.svc ? a.h.svc.pts[0].d : DIA_FIN) - (b.h.svc ? b.h.svc.pts[0].d : DIA_FIN));
+  const sidings = sidingTracksDe(s.id);
+  let park = 0;
+  for (const d of durm) {
+    const via = sidings.find((v) => il.occ[v] == null);
+    if (via == null) break;   // depósito lleno (la dispersión lo evita salvo desborde)
+    il.occ[via] = d.unitId; park++;
+    const svc = d.h.svc;
+    const itin = svc ? "→ " + nombre(svc.pts[svc.pts.length - 1].id) + " · sale " + hhmm(svc.pts[0].d) : "pernocta";
+    etiqueta.set(via, `🅿 ${d.unitId} · ${d.line} ${itin}${d.h.depositoDe ? " · reubicado de " + nombre(d.h.depositoDe) : ""}`);
+    if (svc) dormidoSalida.add(via + "|" + svc.side);
+  }
+  const pc = $("parkCount"); if (pc) pc.textContent = park;
   let prox = null, mejor = Infinity;
   for (const t of S.trains) { const te = S.simT - t.shift, seg = segmentoDe(t, te); if (!seg) continue; for (let j = Math.max(seg.i, 0); j < t.pts.length; j++) { if (t.pts[j].id === s.id) { const eta = t.pts[j].a - te; if (eta >= 0 && eta < mejor) { mejor = eta; prox = t; } break; } } }
   $("stNext").innerHTML = prox ? `<span class="stNextline">Próximo: <b>${prox.line}</b> tren ${prox.id} en ~${Math.round(mejor / 60)} min</span>` : `<span class="muted">Sin trenes próximos.</span>`;
+  // Aspecto EFECTIVO de cada señal interna (misma regla que las de tramo): ROJO si está forzada
+  // a mano, si el primer bloque de vía de salida de ese lado está ocupado, si retiene a un
+  // servicio que espera salir o a un durmiente en su plaza; ÁMBAR si su bloque está libre pero
+  // la señal SIGUIENTE (aguas abajo) está en rojo; VERDE en otro caso.
+  document.querySelectorAll("#stTracks .sig").forEach((btn) => {
+    const v = +btn.dataset.v, l = btn.dataset.lado, c = il.corrDeVia[v], g = il.corr[c];
+    const manualRojo = !il.green[v][l];
+    const esMain = (l === "A" ? g.mainA : g.mainB) === v;
+    const sal = salidaBloqueada(s.id, l);
+    const autoRojo = (esMain && (esperaSalida.has(c + "|" + l) || sal.rojo)) || dormidoSalida.has(v + "|" + l);
+    const rojo = manualRojo || autoRojo;
+    const ambar = !rojo && esMain && sal.ambar;
+    btn.classList.toggle("red", rojo); btn.classList.toggle("amber", ambar); btn.classList.toggle("green", !rojo && !ambar);
+    btn.classList.toggle("auto", autoRojo && !manualRojo);
+    btn.title = manualRojo ? "Rojo (forzado a mano) — clic para soltar" : autoRojo ? "Rojo automático — bloque de salida ocupado — clic para forzar" : ambar ? "Ámbar — próxima señal en rojo" : "Verde — clic para cerrar a mano";
+  });
   document.querySelectorAll("#stTracks .viac").forEach((cell) => {
     const v = +cell.dataset.v, occ = il.occ[v];
     cell.classList.toggle("occ", !!occ);
-    const lbl = cell.querySelector(".occ-label"); if (lbl) lbl.textContent = occ ? " · " + occ : "";
+    const lbl = cell.querySelector(".occ-label"); if (lbl) lbl.textContent = occ ? " · " + (etiqueta.get(v) || occ) : "";
   });
 }
 
@@ -546,7 +1053,7 @@ async function pollGtfsStatus() {
       gtfsPolling = false; $("gtfsUpdate").disabled = false; $("gtfsUpload").disabled = false;
       const st = j.stats;
       if (st) $("gtfsStatus").textContent = `Actualizado: ${st.n_routes} líneas · ${st.n_trips} viajes · ${st.n_stops} estaciones. Recargando…`;
-      await cargarRed(); await cargarHorarios(); pintarSemaforos();
+      await cargarRed(); await cargarHorarios(); construirSemaforos();
       return;
     }
     setTimeout(tick, 1000);
@@ -594,8 +1101,10 @@ function activarIncidencias() {
   }
 }
 function refrescarIncidencias() {
-  $("incList").innerHTML = S.incidentes.slice().reverse().map((i) =>
-    `<li class="${i.estado === "finalizada" ? "done" : ""}">${hhmm(i.whenSec)} · ${i.nombre} · ${i.label} <span class="muted">[${i.estado}]</span></li>`).join("");
+  $("incList").innerHTML = S.incidentes.length
+    ? S.incidentes.slice().reverse().map((i) =>
+        `<li class="${i.estado === "finalizada" ? "done" : ""}">${hhmm(i.whenSec)} · ${i.nombre} · ${i.label} <span class="muted">[${i.estado}]</span></li>`).join("")
+    : '<li class="empty">Sin incidencias programadas.</li>';
 }
 
 // ---- Panel de trenes ----------------------------------------------------------------------
@@ -612,7 +1121,7 @@ function refrescarTrenes() {
   }
   filas.sort((x, y) => (y.t.esperando - x.t.esperando) || (sort === "delay" ? y.retr - x.retr : x.t.line.localeCompare(y.t.line)));
   $("trenesList").innerHTML = filas.slice(0, 200).map((f) =>
-    `<div class="t${f.t.esperando ? " esperando" : ""}"><span class="badge" style="background:${f.t.color}">${f.t.line}</span>
+    `<div class="t${f.t.esperando ? " esperando" : ""}">${lineImg(f.t.line, "line-logo") || `<span class="badge" style="background:${f.t.color}">${f.t.line}</span>`}
       <span>${f.t.esperando ? "⏸ " : ""}${f.ubic} → ${nombre(f.t.pts[f.t.pts.length - 1].id)}${f.t.esperando ? ` <span class="muted">(${MOTIVO_LABEL[f.t.esperaMotivo] || f.t.esperaMotivo})</span>` : ""}</span>
       <span class="late">${f.retr > 0 ? "+" + f.retr + "m" : "·"}</span>
       <button class="goto" data-id="${f.t.id}">Ir</button></div>`).join("");
@@ -637,7 +1146,7 @@ function finDelDia() {
 
 // ---- KPI, leyenda -------------------------------------------------------------------------
 function actualizarKpi() { $("kDelay").textContent = Math.round(S.kpi).toLocaleString("es-ES"); }
-function pintarLeyenda() { $("legend").innerHTML = S.net.lines.map((l) => `<div class="row"><span class="sw" style="background:${l.color}"></span>${l.line}</div>`).join(""); }
+function pintarLeyenda() { $("legend").innerHTML = S.net.lines.map((l) => `<div class="row" data-line="${l.line}">${lineImg(l.line, "line-logo") || `<span class="sw" style="background:${l.color}"></span>`}<span>${l.line}</span></div>`).join(""); }
 
 // ---- Controles ----------------------------------------------------------------------------
 function setSpeed(k) { S.speedKey = k; S.speed = VELOCIDADES[k]; document.querySelectorAll("#speeds button").forEach((b) => b.classList.toggle("active", b.dataset.speed === k)); }
@@ -647,7 +1156,7 @@ $("gtfsUpdate").addEventListener("click", iniciarActualizacionGtfs);
 $("gtfsUpload").addEventListener("click", subirGtfs);
 $("source").addEventListener("change", cargarHorarios);
 $("lineFilter").addEventListener("change", cargarHorarios);
-$("showSignals").addEventListener("change", pintarSemaforos);
+$("showSignals").addEventListener("change", construirSemaforos);
 $("incScope").addEventListener("change", rellenarDonde);
 $("incNow").addEventListener("click", () => programarIncidencia(true));
 $("incSchedule").addEventListener("click", () => programarIncidencia(false));
@@ -658,13 +1167,19 @@ $("finRepetir").addEventListener("click", () => location.reload());
 window.addEventListener("resize", () => map.invalidateSize());
 
 // ---- Bucle --------------------------------------------------------------------------------
+const PASO_MAX_S = 6;   // s de juego por sub-paso: acota el salto por fotograma (señalización exacta a ×25)
 let ultimo = performance.now(), acumUI = 0;
 function bucle(now) {
   const dt = Math.min(0.1, (now - ultimo) / 1000); ultimo = now;
-  if (S.speed > 0 && !S.finished) paso(dt);
+  if (S.speed > 0 && !S.finished) {
+    let rem = dt * FACTOR_BASE * S.speed;              // segundos de juego a avanzar este fotograma
+    while (rem > 1e-6 && !S.finished) { const st = Math.min(PASO_MAX_S, rem); paso(st); rem -= st; }
+  }
   render();
+  actualizarSemaforosAspecto();      // color de las señales del mapa: CADA fotograma (fluido a ×25)
+  actualizarSemaforoDinamico();      // aspecto del panel de señal abierto: también por fotograma
   acumUI += dt;
-  if (acumUI > 0.5) { acumUI = 0; actualizarKpi(); refrescarIncidencias(); refrescarTrenes(); actualizarEstacionDinamico(); pintarSemaforos(); }
+  if (acumUI > 0.5) { acumUI = 0; actualizarKpi(); refrescarIncidencias(); refrescarTrenes(); actualizarEstacionDinamico(); }
   requestAnimationFrame(bucle);
 }
 
@@ -672,8 +1187,124 @@ function bucle(now) {
 async function iniciar() {
   const src = new URLSearchParams(location.search).get("source");
   if (src === "optimized" || src === "gtfs") $("source").value = src;
-  try { await cargarRed(); await cargarHorarios(); pintarSemaforos(); setTimeout(() => map.invalidateSize(), 120); }
+  try { await cargarRed(); await cargarHorarios(); construirSemaforos(); setTimeout(() => map.invalidateSize(), 120); }
   catch (e) { $("netInfo").textContent = "Error cargando datos: " + e; }
   requestAnimationFrame(bucle);
 }
 iniciar();
+
+// ══════════════════════════════════════════════════════════════════════════
+//  CHROME DE UI (rediseño CTC) — SOLO PRESENTACIÓN.
+//  Este bloque no altera la física de la simulación: únicamente gestiona el
+//  layout flotante (paneles colapsables, HUD de estación, cajón inferior con
+//  pestañas), el sparkline/alerta del KPI y el aislado visual de líneas. Lee el
+//  estado `S` ya calculado por el motor; nunca lo modifica.
+// ══════════════════════════════════════════════════════════════════════════
+(function chromeUI() {
+  const el = (id) => document.getElementById(id);
+
+  // ── Paneles laterales colapsables ────────────────────────────────────────
+  const leftPanel = el("leftPanel"), incPanel = el("incPanel");
+  const openPanel = (p, on) => { p.classList.toggle("open", on); p.setAttribute("aria-hidden", on ? "false" : "true"); };
+  const toggle = (p) => openPanel(p, !p.classList.contains("open"));
+  el("leftTab").addEventListener("click", () => toggle(leftPanel));
+  // Estación, semáforo e incidencias comparten el dock derecho → nunca solapan (cerrarDocks).
+  el("incTab").addEventListener("click", () => { const abriendo = !incPanel.classList.contains("open"); if (abriendo) cerrarDocks("inc"); toggle(incPanel); });
+  el("leftClose").addEventListener("click", () => openPanel(leftPanel, false));
+  el("incClose").addEventListener("click", () => openPanel(incPanel, false));
+
+  // ── Botones de cierre del HUD de estación y del panel de semáforo ────────
+  el("stClose").addEventListener("click", () => { el("stationBox").hidden = true; S.selSt = null; });
+  el("sigClose").addEventListener("click", () => { el("signalBox").hidden = true; S.selSig = null; });
+
+  // ── Aislado visual de línea desde la leyenda ─────────────────────────────
+  // Atenúa los cantones que no son de la línea elegida (las líneas pintadas no
+  // las repinta el bucle, así que el efecto persiste) y sincroniza el filtro
+  // del cajón de trenes con esa línea, reutilizando el cableado existente.
+  let isoLine = null;
+  function aplicarAislado() {
+    const legend = el("legend");
+    legend.classList.toggle("has-iso", !!isoLine);
+    legend.querySelectorAll(".row").forEach((r) => r.classList.toggle("iso-active", r.dataset.line === isoLine));
+    el("legendReset").hidden = !isoLine;
+    for (const { lines, unica, color, casing } of linePolys) {
+      const on = !isoLine || lines.includes(isoLine);
+      for (const poly of color) poly.setStyle({ opacity: on ? 0.95 : 0.12, weight: on ? (unica ? 2.5 : 3) : 1 });
+      for (const cas of casing) cas.setStyle({ opacity: on ? 0.5 : 0.06 });
+    }
+  }
+  el("legend").addEventListener("click", (e) => {
+    const row = e.target.closest(".row"); if (!row) return;
+    isoLine = (isoLine === row.dataset.line) ? null : row.dataset.line;
+    aplicarAislado();
+    const f = el("tFiltLine"); f.value = isoLine || ""; f.dispatchEvent(new Event("change"));
+  });
+  el("legendReset").addEventListener("click", () => {
+    isoLine = null; aplicarAislado();
+    const f = el("tFiltLine"); f.value = ""; f.dispatchEvent(new Event("change"));
+  });
+
+  // ── Cajón inferior: pestañas Trenes / Registro CTC ───────────────────────
+  const tabTrains = () => el("drawerTabs").querySelector('[data-tab="trains"]').classList.contains("active");
+  el("drawerTabs").addEventListener("click", (e) => {
+    const b = e.target.closest(".dtab"); if (!b) return;
+    el("drawerTabs").querySelectorAll(".dtab").forEach((x) => x.classList.toggle("active", x === b));
+    const trains = b.dataset.tab === "trains";
+    el("trenesList").hidden = !trains; el("ctcLog").hidden = trains;
+    el("trainFilters").style.visibility = trains ? "visible" : "hidden";
+    if (!trains) pintarRegistro();
+  });
+
+  // Registro CTC: derivado en vivo del estado (incidencias + retenciones actuales).
+  function pintarRegistro() {
+    const filas = [];
+    for (const i of S.incidentes) {
+      filas.push({ ts: i.whenSec, tag: "inc", cls: "inc", txt: `${i.nombre} · ${i.label} <span class="muted">[${i.estado}]</span>` });
+    }
+    for (const t of S.trains) {
+      if (!t.esperando) continue;
+      const st = S.stationById.get(t.esperaDesde);
+      filas.push({ ts: S.simT, tag: "hold", cls: "hold", txt: `<b>${t.line}</b> tren ${t.id} retenido en ${st ? st.name : t.esperaDesde} <span class="muted">(${MOTIVO_LABEL[t.esperaMotivo] || t.esperaMotivo})</span>` });
+    }
+    filas.sort((a, b) => b.ts - a.ts);
+    el("ctcLog").innerHTML = filas.length
+      ? filas.slice(0, 80).map((f) => `<div class="logline"><span class="ts">${hhmm(f.ts)}</span><span class="tagx ${f.cls}">${f.tag === "inc" ? "INCID" : "RETEN"}</span><span>${f.txt}</span></div>`).join("")
+      : `<div class="empty">Sin eventos. La red circula según horario.</div>`;
+  }
+
+  // ── Sparkline + estado de alerta del KPI de retraso ──────────────────────
+  const spark = el("kpiSparkLine"), chip = el("kpiChip"), trend = el("kpiTrend");
+  const hist = [];
+  function pintarSpark() {
+    hist.push(S.kpi);
+    if (hist.length > 48) hist.shift();
+    if (hist.length < 2) return;
+    const min = Math.min(...hist), max = Math.max(...hist), span = (max - min) || 1;
+    const pts = hist.map((v, i) => `${(i / (hist.length - 1) * 96).toFixed(1)},${(32 - (v - min) / span * 28).toFixed(1)}`).join(" ");
+    spark.setAttribute("points", pts);
+    // Ritmo de crecimiento reciente (pax·min por muestra ~0.6s) → color de alerta.
+    const n = hist.length, rate = n >= 6 ? (hist[n - 1] - hist[n - 6]) / 5 : 0;
+    chip.classList.toggle("warn", rate > 8 && rate <= 40);
+    chip.classList.toggle("crit", rate > 40);
+    trend.textContent = rate > 8 ? "▲" : (rate < -8 ? "▼" : "");
+  }
+
+  // ── Contador del asa del cajón (trenes retenidos ahora) ──────────────────
+  function refrescarAsa() {
+    let hold = 0; for (const t of S.trains) if (t.esperando) hold++;
+    const h = el("handleCount"); h.textContent = hold;
+    h.style.background = hold ? "var(--rojo)" : "rgba(255,255,255,.14)";
+    h.style.color = hold ? "#fff" : "var(--muted)";
+  }
+
+  // Tic presentacional propio (independiente del bucle de simulación).
+  setInterval(() => {
+    pintarSpark();
+    refrescarAsa();
+    aplicarAislado();
+    if (!el("trenesPanel").hidden && !tabTrains()) pintarRegistro();
+  }, 620);
+
+  // Abrir el panel de red por defecto para orientar al usuario en el primer arranque.
+  setTimeout(() => openPanel(leftPanel, true), 400);
+})();

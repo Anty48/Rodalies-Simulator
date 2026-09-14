@@ -1,5 +1,6 @@
 //! Servidor web local (tokio) para la UI interactiva. Sirve:
-//!   * `GET /`                    → página con controles + dashboard inicial + JS.
+//!   * `GET /`                    → menú principal (el juego como pieza central + lanzadores).
+//!   * `GET /panel`               → página con controles + dashboard inicial + JS.
 //!   * `GET /api/render`          → fragmento HTML del dashboard para unos parámetros.
 //!   * `GET /api/optimize/start`  → lanza la optimización de una línea en segundo plano.
 //!   * `GET /api/optimize/status` → progreso en vivo (JSON) de la optimización.
@@ -135,7 +136,8 @@ async fn handle(mut stream: TcpStream, state: Arc<ServerState>) -> std::io::Resu
     }
 
     let (status, ctype, body): (&str, &str, Vec<u8>) = match path {
-        "/" => ("200 OK", "text/html", render_page(&state).into_bytes()),
+        "/" => ("200 OK", "text/html", report::render_menu_page().into_bytes()),
+        "/panel" | "/panel/" => ("200 OK", "text/html", render_page(&state).into_bytes()),
         "/api/render" => ("200 OK", "text/html", render_fragment(&state, query).into_bytes()),
         "/api/mintime" => ("200 OK", "text/html", render_mintime(&state, query).into_bytes()),
         "/api/lines" => ("200 OK", "application/json", lines_json(&state).into_bytes()),
@@ -346,6 +348,10 @@ fn lines_json(state: &ServerState) -> String {
     let lines = state.lines.read().unwrap();
     let mut out: Vec<LineOut> = Vec::new();
     for line in lines.iter() {
+        // La R3a se pliega sobre el R3 (tramo aislado en obras): no se ofrece como línea propia.
+        if crate::topology::display_line(line) != line {
+            continue;
+        }
         let dirs = crate::calculator::schedules::line_directions(net, line);
         if dirs.is_empty() {
             continue; // línea sin servicios de tren (p.ej. sólo buses)

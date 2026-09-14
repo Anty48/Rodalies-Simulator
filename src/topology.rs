@@ -154,62 +154,73 @@ const PLATFORM_TRACKS: &[(&str, u32)] = &[
 /// patrones truncados que no lleguen a tocar ninguno de los dos extremos).
 const SINGLE_TRACK: &[(&str, &str, &str)] = &[];
 
-/// Vía única por ZONA: `(línea, [estaciones de la zona (subcadena)])`. Un cantón se marca
-/// vía única si AMBOS extremos están en la lista de su línea. Más robusto que ancla+terminal
-/// cuando el GTFS solo tiene patrones truncados que no llegan a tocar la estación de anclaje
-/// real (caso actual: R3 circula hoy solo dentro de la zona norte, sin ningún viaje que pase
-/// por Montcada Bifurcació — probablemente por las obras de remodelación de la bifurcación).
-/// Lista de estaciones: trenscat.com + confirmación del usuario (toda la R3 desde Montcada
-/// Bif es vía única con apartaderos; sesión 2026-09-10).
-const SINGLE_TRACK_ZONE: &[(&str, &[&str])] = &[
-    (
-        "R3",
-        &[
-            "montcada bifurcació", "montcada bifurcacio",
-            "granollers-canovelles", "montmeló nord", "montmelo nord",
-            "les franqueses del vallès", "les franqueses del valles", "llerona",
-            "la garriga", "figaró", "figaro",
-            "sant martí de centelles", "sant marti de centelles",
-            "centelles", "balenyà", "balenya",
-            "vic", "ripoll", "ribes de freser", "puigcerdà", "puigcerda",
-            "la tor de querol",
-        ],
-    ),
-    (
-        // R3a: continuación física de la vía única de R3 más al norte.
-        "R3a",
-        &["vic", "ripoll", "ribes de freser", "puigcerdà", "puigcerda", "la tor de querol"],
-    ),
-    (
-        // R13: ramal interior Lleida—Reus (vía única confirmada; PAET en Vimbodí-Vinaixa y
-        // Vinaixa-La Floresta). El servicio activo varía (hoy: Les Borges Blanques↔Lleida-
-        // Pirineus), así que se usa zona en vez de ancla+terminal fijos.
-        "R13",
-        &[
-            "lleida", "vinaixa", "les borges blanques", "juneda",
-            "puigverd de lleida", "la floresta", "vimbodí", "vimbodi",
-        ],
-    ),
+/// Vía única por ZONA de `stop_id`: `(línea, [stop_ids de la zona de vía única])`. Un cantón
+/// (par de paradas consecutivas de un trayecto de esa línea) se marca vía única si AMBOS
+/// extremos están en la lista de su línea. Se indexa por `stop_id` (no por nombre) para evitar
+/// ambigüedades de codificación/acentos y ser exacto respecto al GTFS. La lista se construye
+/// SIEMPRE incluyendo la estación-ancla (p. ej. Reus, La Garriga): así el PRIMER tramo desde el
+/// ancla hacia el ramal ya sale vía única, mientras que su tramo hacia el núcleo (Barcelona)
+/// queda doble porque el otro extremo NO está en la zona. Fuente: usuario (sesión 2026-09-12) +
+/// topología GTFS verificada segmento a segmento.
+///
+/// Zonas confirmadas por el usuario:
+///   R1  desde Arenys de Mar hacia Maçanet-Massanes (costa norte).
+///   R3  desde La Garriga hacia Puigcerdà / La Tor de Querol (antes arrancaba en Montcada Bif.).
+///   R13 desde Sant Vicenç de Calders hacia Lleida por el interior (Valls–Picamoixons–Montblanc).
+///   R14 desde Reus hacia Lleida por el interior (Selva del Camp–Alcover–Picamoixons).
+///   R15 desde Reus hacia Zaragoza por el interior (Falset–Móra–Flix–Casp–Zaida…).
+///   R17 y RT2 comparten el único tramo Salou-Port Aventura ↔ Tarragona.
+///   RL3 y RL4 desde Manresa hacia Lleida por el interior (Calaf–Cervera–Tàrrega).
+///   R7  ramal Cerdanyola del Vallès ↔ Cerdanyola Universitat.
+/// El resto de la red se asume vía doble (incluidas todas las estaciones, que hacen de
+/// apartadero/cruce), como pidió el usuario.
+const SINGLE_TRACK_ZONE_IDS: &[(&str, &[&str])] = &[
+    // R1: costa norte desde Arenys de Mar (79600) hasta Maçanet-Massanes (79200).
+    ("R1", &["79600", "79601", "79602", "79603", "79604", "79608", "79605", "79606", "79607", "79200"]),
+    // R3 (y variante sintética R3a): desde La Garriga (77102) hasta La Tor de Querol (77310).
+    ("R3", &[
+        "77102", "77103", "77104", "77105", "77106", "77107", "77109", "77110", "77111",
+        "77112", "77113", "77114", "77200", "77301", "77303", "77304", "77305", "77306",
+        "77307", "77309", "77310",
+    ]),
+    ("R3a", &[
+        "77109", "77110", "77111", "77112", "77113", "77114", "77200", "77301", "77303",
+        "77304", "77305", "77306", "77307", "77309", "77310",
+    ]),
+    // R13: desde Sant Vicenç de Calders (71600) por el interior (Valls–Picamoixons) hasta Lleida.
+    ("R13", &[
+        "71600", "72101", "76001", "76002", "76003", "76004", "73100", "73010", "73009",
+        "73008", "73007", "73006", "73005", "73004", "73003", "73002", "73001", "78400",
+    ]),
+    // R14: desde Reus (71400) por el interior (Selva del Camp–Alcover) hasta Picamoixons.
+    ("R14", &["71400", "73102", "73101", "73100"]),
+    // R15: desde Reus (71400) hacia Zaragoza por el interior (Falset–Móra–Flix–Casp–Zaida).
+    ("R15", &[
+        "71400", "71307", "71306", "71305", "71304", "71303", "71302", "71300", "71211",
+        "71210", "71209", "71208", "71207", "71206", "71205", "71204", "71201", "71200",
+        "71108", "71105", "71103",
+    ]),
+    // R17 y RT2: único tramo Salou-Port Aventura (65411) ↔ Tarragona (71500).
+    ("R17", &["65411", "71500"]),
+    ("RT2", &["65411", "71500"]),
+    // RL3: todo su recorrido Lleida (78400) ↔ Cervera (78500) es vía única (interior de Lleida).
+    ("RL3", &["78400", "78402", "78403", "78404", "78405", "78406", "78407", "78408", "78500"]),
+    // RL4: desde Manresa (78600) por el interior (Calaf–Cervera–Tàrrega) hasta Lleida (78400).
+    ("RL4", &[
+        "78400", "78402", "78403", "78404", "78405", "78406", "78407", "78408", "78500",
+        "78501", "78502", "78503", "78504", "78505", "78506", "78600",
+    ]),
+    // R7: ramal de vía única Cerdanyola del Vallès (78706) ↔ Cerdanyola Universitat (72503).
+    ("R7", &["72503", "78706"]),
 ];
 
-/// Pares de estaciones (por nombre, subcadena) fijados directamente como vía única,
-/// independientes de si el GTFS tiene ahora mismo algún viaje activo para esa línea (p. ej.
-/// el ramal de R7 a Cerdanyola Universitat, con servicio reducido/suprimido según el feed).
-/// Confirmado por fuente (cerdanyola.info, sesión 2026-09-10): ramal de vía única real.
-const SINGLE_TRACK_FIXED: &[(&str, &str)] = &[
-    ("cerdanyola del vallès", "cerdanyola universitat"),
-];
-
-/// Cizallamientos: pares de cantones (cada uno como sus dos estaciones) que se cruzan
-/// físicamente — ocupar uno obliga a retener el otro en rojo. Cerdanyola (confirmado,
-/// cerdanyola.info): el ramal único de R7 hacia Cerdanyola Universitat invade la vía
-/// contraria de R4 a la altura de Cerdanyola del Vallès.
-pub const SHEAR_CONFLICTS: &[((&str, &str), (&str, &str))] = &[
-    (
-        ("montcada i reixac-santa maria", "cerdanyola del vallès"), // cantón de R4
-        ("cerdanyola del vallès", "cerdanyola universitat"),        // ramal único de R7
-    ),
-];
+/// Cizallamientos: pares de cantones que se cruzan físicamente — ocupar uno obliga a retener el
+/// otro en rojo. DESACTIVADO (usuario, sesión 2026-09-12): el cizallamiento configurado (ramal
+/// único de R7 ↔ cantón de R4 en Cerdanyola) hacía que el semáforo de la vía única de R7
+/// obedeciera al tramo Cerdanyola↔Montcada-Santa Maria, poniéndose en rojo cada vez que pasaba
+/// un R4 por al lado; eso NO es correcto y colapsaba Cerdanyola/Montcada (nudo del tronco → el
+/// atasco se propagaba a toda la red). El semáforo de vía única solo debe obedecer a SU tramo.
+pub const SHEAR_CONFLICTS: &[((&str, &str), (&str, &str))] = &[];
 
 /// Líneas de Rodalies metropolitanas (cercanías, paran en todas las estaciones de su
 /// itinerario). Todo lo que no esté aquí (R11, R13-R17, RG1, RL3/4, RT1/2…) se trata como
@@ -221,6 +232,33 @@ const RODALIES_METROPOLITANAS: &[&str] = &["R1", "R2", "R2N", "R2S", "R3", "R3a"
 /// `true` si `line` es un servicio Regionals/media distancia (prioridad alta en vía única).
 pub fn is_regional_line(line: &str) -> bool {
     !RODALIES_METROPOLITANAS.contains(&line)
+}
+
+/// Etiqueta de línea que se muestra al usuario. La R3a es el tramo aislado del R3 (Vic–La Tor
+/// de Querol): el resto del R3 está en obras y Renfe le ha dado nombre propio en el GTFS, pero
+/// operativamente sigue siendo el R3. Se muestra con la identidad del R3 (icono, color, nombre)
+/// aunque sus trenes sigan circulando. Los ficheros GTFS conservan "R3a" intactos: esta es la
+/// ÚNICA regla de canonicalización, aplicada en las fronteras de la API (juego y calculador).
+pub fn display_line(short: &str) -> &str {
+    match short {
+        "R3a" => "R3",
+        other => other,
+    }
+}
+
+#[cfg(test)]
+mod display_line_tests {
+    use super::display_line;
+    #[test]
+    fn r3a_se_pliega_sobre_r3() {
+        assert_eq!(display_line("R3a"), "R3");
+    }
+    #[test]
+    fn otras_lineas_intactas() {
+        for l in ["R3", "R2", "R2N", "RG1", "RT1"] {
+            assert_eq!(display_line(l), l);
+        }
+    }
 }
 
 /// Conjunto de segmentos (pares de nodos NO dirigidos) que son de vía única.
@@ -249,24 +287,16 @@ pub fn single_track_pairs(net: &Network) -> HashSet<(NodeIndex, NodeIndex)> {
             }
         }
     }
-    for (line, zone) in SINGLE_TRACK_ZONE {
-        let in_zone = |stop_id: &str| {
-            let name = net.stop_name(stop_id).to_lowercase();
-            zone.iter().any(|z| name.contains(z))
-        };
+    for (line, zone) in SINGLE_TRACK_ZONE_IDS {
+        let in_zone = |stop_id: &str| zone.contains(&stop_id);
         for svc in net.services.iter().filter(|s| &s.route_short_name == line && !s.is_bus) {
             for w in svc.schedule.windows(2) {
-                if in_zone(&w[0].stop_id) && in_zone(&w[1].stop_id) {
+                if in_zone(w[0].stop_id.as_str()) && in_zone(w[1].stop_id.as_str()) {
                     if let (Some(a), Some(b)) = (net.node(&w[0].stop_id), net.node(&w[1].stop_id)) {
                         set.insert(unordered(a, b));
                     }
                 }
             }
-        }
-    }
-    for (a_sub, b_sub) in SINGLE_TRACK_FIXED {
-        if let (Some(a), Some(b)) = (node_by_name(net, a_sub), node_by_name(net, b_sub)) {
-            set.insert(unordered(a, b));
         }
     }
     set

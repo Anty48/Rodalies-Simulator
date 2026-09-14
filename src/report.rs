@@ -333,6 +333,76 @@ h4 { margin:16px 0 8px; font-size:.98rem; }
 .subtab { background:var(--panel2); border:1px solid var(--border); color:var(--muted); border-radius:4px; padding:6px 12px; cursor:pointer; font-size:.85rem; }
 .subtab.active { color:var(--accent); border-color:var(--accent); }
 .leaflet-popup-content { color:#111; }
+
+/* ---- Tema oscuro (se activa con data-theme="dark" en <html>, lo pone el script
+   THEME_INIT antes de pintar para evitar parpadeo). Mantiene la identidad Renfe/Rodalies
+   subiendo la luminosidad de los acentos para que contrasten sobre fondo oscuro. ---- */
+:root[data-theme="dark"] {
+  --bg:#17181c; --panel:#212228; --panel2:#2a2c33; --border:#383a43;
+  --text:#ece9e4; --muted:#9d9aa4; --ink:#ece9e4;
+  --accent:#d072b8; --accent-soft:rgba(208,114,184,.14); --accent2:#ff8a3d;
+  --accent2-soft:rgba(255,138,61,.14);
+  --arr:#3fbf6a; --dep:#5aa0ff; --late:#ff6b68; --warn:#e0a03a;
+  --grid:#2f313a;
+}
+:root[data-theme="dark"] .logo { color:#fff; }
+
+/* ---- Menú principal ---- */
+.menu-wrap { max-width:1040px; margin:0 auto; padding:40px 20px 60px; }
+.menu-top { display:flex; align-items:center; justify-content:space-between; gap:16px; margin-bottom:40px; }
+.menu-brand { display:flex; align-items:center; gap:16px; }
+.gear { background:var(--panel); border:1px solid var(--border); color:var(--text);
+  width:42px; height:42px; border-radius:8px; font-size:20px; cursor:pointer;
+  display:flex; align-items:center; justify-content:center; transition:border-color .15s,transform .3s; }
+.gear:hover { border-color:var(--accent); }
+.gear:hover svg { transform:rotate(45deg); }
+.gear svg { transition:transform .3s; }
+.hero { margin-bottom:22px; }
+.hero-card { display:block; position:relative; overflow:hidden; text-decoration:none; color:var(--text);
+  background:var(--panel); border:1px solid var(--border); border-left:5px solid var(--accent);
+  border-radius:10px; padding:34px 32px; transition:transform .15s,box-shadow .15s,border-color .15s; }
+.hero-card:hover { transform:translateY(-3px); box-shadow:0 12px 30px rgba(0,0,0,.14); border-left-color:var(--accent2); }
+.hero-badge { display:inline-block; font-size:.72rem; font-weight:700; letter-spacing:.08em;
+  text-transform:uppercase; color:#fff; background:var(--accent); padding:3px 10px; border-radius:20px; margin-bottom:14px; }
+.hero-card h2 { font-size:1.9rem; margin:0 0 8px; letter-spacing:-.02em; text-transform:none; color:var(--text); }
+.hero-card p { color:var(--muted); font-size:.98rem; margin:0 0 18px; max-width:60ch; }
+.hero-cta { font-weight:700; color:var(--accent); font-size:1.02rem; }
+.hero-card:hover .hero-cta { color:var(--accent2); }
+.tiles { display:grid; grid-template-columns:1fr 1fr; gap:18px; }
+@media (max-width:720px) { .tiles { grid-template-columns:1fr; } }
+.tile { display:block; text-decoration:none; color:var(--text); background:var(--panel);
+  border:1px solid var(--border); border-top:3px solid var(--ink); border-radius:8px; padding:24px 24px;
+  transition:transform .15s,box-shadow .15s,border-top-color .15s; }
+.tile:hover { transform:translateY(-3px); box-shadow:0 10px 24px rgba(0,0,0,.12); border-top-color:var(--accent2); }
+.tile-ic { font-size:1.8rem; line-height:1; margin-bottom:12px; }
+.tile h3 { margin:0 0 6px; font-size:1.15rem; }
+.tile p { color:var(--muted); font-size:.9rem; margin:0; }
+.menu-more { text-align:center; margin-top:26px; font-size:.9rem; }
+.menu-more a { color:var(--accent); text-decoration:none; font-weight:600; }
+.menu-more a:hover { text-decoration:underline; }
+
+/* ---- Barra del panel (volver al menú + configuración) ---- */
+.panel-bar { display:flex; align-items:center; justify-content:space-between; gap:12px; margin:-8px 0 18px; }
+.back-link { color:var(--muted); text-decoration:none; font-size:.9rem; font-weight:600; display:inline-flex; align-items:center; gap:6px; }
+.back-link:hover { color:var(--accent); }
+
+/* ---- Modal de configuración ---- */
+.settings { display:none; position:fixed; inset:0; background:rgba(20,20,26,.55); z-index:2000;
+  align-items:center; justify-content:center; padding:5vh 5vw; }
+.settings.open { display:flex; }
+.settings-inner { background:var(--panel); border:1px solid var(--border); border-radius:10px;
+  width:100%; max-width:440px; padding:26px 26px 22px; position:relative; }
+.settings-inner h2 { margin:0 0 18px; }
+.settings-inner .settings-close { position:absolute; top:16px; right:18px; background:none; border:none;
+  color:var(--muted); font-size:22px; cursor:pointer; line-height:1; }
+.set-row { margin-bottom:20px; }
+.set-row > label { display:block; font-size:.78rem; font-weight:700; letter-spacing:.05em;
+  text-transform:uppercase; color:var(--muted); margin-bottom:8px; }
+.seg { display:inline-flex; border:1px solid var(--border); border-radius:8px; overflow:hidden; }
+.seg button { background:var(--panel2); border:none; color:var(--muted); padding:8px 16px; cursor:pointer;
+  font-size:.9rem; font-weight:600; border-right:1px solid var(--border); }
+.seg button:last-child { border-right:none; }
+.seg button.active { background:var(--accent); color:#fff; }
 </style>"#;
 
 const HEADER: &str = r#"<header class="top">
@@ -433,6 +503,19 @@ document.querySelectorAll('.tab').forEach(t=>t.addEventListener('click',()=>{
   t.classList.add('active');
   document.getElementById(t.dataset.pane).classList.add('active');
 }));
+</script>"#;
+
+/// Enlaces profundos desde el menú principal: `/panel#calc`, `/panel#opt`, `/panel#game`
+/// activan la pestaña correspondiente. Se ejecuta el ÚLTIMO (tras CALC2_SCRIPT) para que el
+/// `click()` sintético dispare también el listener que inicializa el mapa del calculador.
+const HASH_TAB_SCRIPT: &str = r#"<script>
+(function(){
+  const m={'#calc':'pane-calc','#game':'pane-game','#opt':'pane-sim'};
+  const pane=m[location.hash]; if(!pane) return;
+  const btn=document.querySelector('.tab[data-pane="'+pane+'"]');
+  if(btn) btn.click();
+  if(location.hash==='#opt'){ const el=document.getElementById('o_run'); if(el) setTimeout(()=>el.scrollIntoView({behavior:'smooth',block:'center'}),80); }
+})();
 </script>"#;
 
 /// Lógica del calculador de tiempo mínimo (fetch a /api/mintime).
@@ -662,6 +745,10 @@ const CALC2_SCRIPT: &str = r#"<script>
 fn controls_html(lines: &[String], c: &Controls) -> String {
     let mut opts = String::from("<option value=\"\">Todas las líneas</option>");
     for l in lines {
+        // La R3a se pliega sobre el R3 (tramo aislado en obras): no se lista como línea propia.
+        if crate::topology::display_line(l) != l {
+            continue;
+        }
         let sel = if c.line.as_deref() == Some(l.as_str()) { " selected" } else { "" };
         opts.push_str(&format!("<option value=\"{0}\"{1}>{0}</option>", esc(l), sel));
     }
@@ -705,9 +792,88 @@ fn document(head: &str, body: &str) -> String {
     format!(
         "<!doctype html>\n<html lang=\"es\">\n<head>\n<meta charset=\"utf-8\">\n\
          <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n\
-         <meta name=\"color-scheme\" content=\"light\">\n{head}\n</head>\n<body>\n{body}\n</body>\n</html>\n"
+         <meta name=\"color-scheme\" content=\"light dark\">\n{THEME_INIT}\n{head}\n</head>\n<body>\n{body}\n</body>\n</html>\n"
     )
 }
+
+/// Aplica el tema guardado ANTES de pintar el cuerpo (evita el parpadeo de pasar de claro a
+/// oscuro). Lee `rod-theme` (light|dark|auto; por defecto auto = preferencia del sistema).
+const THEME_INIT: &str = r#"<script>
+(function(){try{
+  var t=localStorage.getItem('rod-theme')||'auto';
+  var dark=t==='dark'||(t==='auto'&&matchMedia('(prefers-color-scheme:dark)').matches);
+  document.documentElement.setAttribute('data-theme',dark?'dark':'light');
+}catch(e){}})();
+</script>"#;
+
+/// Modal de configuración (tema + fuente de horarios del juego). Compartido por el menú y el
+/// panel; se acompaña de `SETTINGS_SCRIPT`, que lo cablea.
+fn settings_modal() -> String {
+    r#"<div class="settings" id="settingsModal" role="dialog" aria-modal="true" aria-label="Configuración">
+    <div class="settings-inner">
+      <button class="settings-close" id="settingsClose" aria-label="Cerrar">×</button>
+      <h2>Configuración</h2>
+      <div class="set-row">
+        <label>Tema</label>
+        <div class="seg" id="themeSeg" role="group" aria-label="Tema">
+          <button data-theme-choice="light">Claro</button>
+          <button data-theme-choice="dark">Oscuro</button>
+          <button data-theme-choice="auto">Auto</button>
+        </div>
+      </div>
+      <div class="set-row">
+        <label>Horario al lanzar el simulador</label>
+        <div class="seg" id="sourceSeg" role="group" aria-label="Fuente de horarios del juego">
+          <button data-source-choice="gtfs">GTFS programado</button>
+          <button data-source-choice="optimized">Malla optimizada</button>
+        </div>
+      </div>
+      <p class="muted" style="margin:0">La malla optimizada requiere haber ejecutado antes el optimizador; si no existe, el simulador usa el horario programado.</p>
+    </div>
+  </div>"#.to_string()
+}
+
+/// Cableado del engranaje (⚙) y del modal de configuración: abre/cierra, cambia el tema en
+/// caliente (persistido en `rod-theme`) y la fuente de horarios del juego (`rod-game-source`),
+/// que decide a dónde apunta el botón "Lanzar simulador".
+const SETTINGS_SCRIPT: &str = r#"<script>
+(function(){
+ const $=id=>document.getElementById(id);
+ const modal=$('settingsModal'); if(!modal) return;
+ const open=()=>modal.classList.add('open'), close=()=>modal.classList.remove('open');
+ const gear=$('settingsBtn'); if(gear) gear.addEventListener('click',open);
+ const x=$('settingsClose'); if(x) x.addEventListener('click',close);
+ modal.addEventListener('click',e=>{ if(e.target===modal) close(); });
+ document.addEventListener('keydown',e=>{ if(e.key==='Escape') close(); });
+
+ // Tema
+ function applyTheme(t){
+   const dark=t==='dark'||(t==='auto'&&matchMedia('(prefers-color-scheme:dark)').matches);
+   document.documentElement.setAttribute('data-theme',dark?'dark':'light');
+   document.querySelectorAll('#themeSeg button').forEach(b=>b.classList.toggle('active',b.dataset.themeChoice===t));
+ }
+ const curTheme=localStorage.getItem('rod-theme')||'auto';
+ applyTheme(curTheme);
+ document.querySelectorAll('#themeSeg button').forEach(b=>b.addEventListener('click',()=>{
+   const t=b.dataset.themeChoice; localStorage.setItem('rod-theme',t); applyTheme(t);
+ }));
+ // Si el tema es "auto", seguir los cambios del sistema en vivo.
+ matchMedia('(prefers-color-scheme:dark)').addEventListener('change',()=>{
+   if((localStorage.getItem('rod-theme')||'auto')==='auto') applyTheme('auto');
+ });
+
+ // Fuente de horarios del juego → actualiza el enlace "Lanzar simulador".
+ function applySource(s){
+   document.querySelectorAll('#sourceSeg button').forEach(b=>b.classList.toggle('active',b.dataset.sourceChoice===s));
+   const play=$('playCard'); if(play) play.setAttribute('href', s==='optimized' ? '/game?source=optimized' : '/game');
+ }
+ const curSrc=localStorage.getItem('rod-game-source')||'gtfs';
+ applySource(curSrc);
+ document.querySelectorAll('#sourceSeg button').forEach(b=>b.addEventListener('click',()=>{
+   const s=b.dataset.sourceChoice; localStorage.setItem('rod-game-source',s); applySource(s);
+ }));
+})();
+</script>"#;
 
 /// Página estática (offline): estilos + cabecera + cuerpo, sin controles.
 pub fn render_html(
@@ -721,6 +887,58 @@ pub fn render_html(
     let head = format!("<title>Rodalies Simulator · panel de análisis</title>\n{STYLE}");
     let page = format!("<div class=\"wrap\">\n  {HEADER}\n{body}\n</div>");
     document(&head, &page)
+}
+
+/// Menú principal (`/`): el juego es la pieza central (hero), con lanzadores del calculador y
+/// del optimizador y un botón de configuración (tema + fuente de horarios del juego). El juego
+/// se abre en `/game`; el calculador y el optimizador viven en el panel (`/panel#calc`,
+/// `/panel#opt`), que conserva las pestañas de análisis.
+pub fn render_menu_page() -> String {
+    let head = format!("<title>Rodalies Simulator</title>\n{STYLE}");
+    let body = format!(
+        r#"<div class="menu-wrap">
+    <div class="menu-top">
+      <div class="menu-brand">
+        <div class="logo">R</div>
+        <div>
+          <h1>Rodalies Simulator <span style="font-size:11px;opacity:.5;font-weight:400">v2.0</span></h1>
+          <div class="sub">Simulador de tráfico ferroviario · red de Rodalies de Catalunya · modelo construido a partir de datos GTFS</div>
+        </div>
+      </div>
+      <button class="gear" id="settingsBtn" title="Configuración" aria-label="Configuración">
+        <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+      </button>
+    </div>
+
+    <div class="hero">
+      <a class="hero-card" id="playCard" href="/game">
+        <span class="hero-badge">Simulador</span>
+        <h2>Simulador de red</h2>
+        <p>Pon en marcha toda la red de Rodalies sobre el mapa satélite: trenes circulando por su ruta real siguiendo el horario, señalización de bloque, vía única, generador de incidencias y KPI de retraso acumulado. La pieza central.</p>
+        <span class="hero-cta">Lanzar simulador →</span>
+      </a>
+    </div>
+
+    <div class="tiles">
+      <a class="tile" href="/panel#calc">
+        <div class="tile-ic">📐</div>
+        <h3>Calcular tramos</h3>
+        <p>Tiempo mínimo entre estaciones con la física real del material (datos ADIF · LTV): marchas, paradas y márgenes frente al horario programado.</p>
+      </a>
+      <a class="tile" href="/panel#opt">
+        <div class="tile-ic">🧮</div>
+        <h3>Optimizador de horarios</h3>
+        <p>Recocido simulado sobre los desfases de fase de cada línea; minimiza el potencial V(H) del sistema completo y exporta la malla optimizada.</p>
+      </a>
+    </div>
+
+    <p class="menu-more">También disponible: <a href="/panel">Panel de análisis completo →</a></p>
+  </div>
+  {modal}
+  {SETTINGS_SCRIPT}"#,
+        modal = settings_modal(),
+    );
+    document(&head, &body)
 }
 
 /// Página interactiva (servida por el servidor web): cabecera + controles +
@@ -740,7 +958,13 @@ pub fn render_interactive_page(
     let optp = optimizer_panel();
     let head = format!("<title>Rodalies Simulator · panel interactivo</title>\n{STYLE}");
     let page = format!(
-        "<div class=\"wrap\">\n  {HEADER}\n  \
+        "<div class=\"wrap\">\n  \
+         <div class=\"panel-bar\">\
+           <a class=\"back-link\" href=\"/\">← Menú</a>\
+           <button class=\"gear\" id=\"settingsBtn\" title=\"Configuración\" aria-label=\"Configuración\">\
+             <svg viewBox=\"0 0 24 24\" width=\"20\" height=\"20\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><circle cx=\"12\" cy=\"12\" r=\"3\"/><path d=\"M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z\"/></svg>\
+           </button>\
+         </div>\n  {HEADER}\n  \
          <div class=\"tabs\">\
            <button class=\"tab active\" data-pane=\"pane-sim\">Simulador · Optimizador</button>\
            <button class=\"tab\" data-pane=\"pane-calc\">Calculador de tiempo mínimo</button>\
@@ -749,8 +973,9 @@ pub fn render_interactive_page(
          <div id=\"pane-sim\" class=\"tabpane active\">\n  {ctrls}\n  {optp}\n  <div id=\"dashboard\">\n{body}\n  </div>\n  </div>\n  \
          <div id=\"pane-calc\" class=\"tabpane\">\n  {calc_panel}\n  </div>\n  \
          <div id=\"pane-game\" class=\"tabpane\">\n  {game_panel}\n  </div>\n\
-         </div>\n{SCRIPT}\n{OPT_SCRIPT}\n{TAB_SCRIPT}\n{CALC_SCRIPT}\n{CALC2_SCRIPT}",
+         </div>\n  {modal}\n{SCRIPT}\n{OPT_SCRIPT}\n{TAB_SCRIPT}\n{CALC_SCRIPT}\n{CALC2_SCRIPT}\n{SETTINGS_SCRIPT}\n{HASH_TAB_SCRIPT}",
         game_panel = game_panel(),
+        modal = settings_modal(),
     );
     document(&head, &page)
 }

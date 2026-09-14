@@ -284,6 +284,8 @@ fn build_atomic_graph(net: &Network) -> AtomicGraph {
 
 /// Color estable de reserva cuando el feed no trae `route_color` (mismo criterio que el
 /// mapa de la red): tono derivado del nombre, luminosidad moderada para fondo claro.
+use crate::topology::display_line;
+
 fn fallback_color(line: &str) -> String {
     let h: u32 = line
         .bytes()
@@ -310,9 +312,10 @@ pub fn network_json(net: &Network, lines: &[String], generated_at: &str) -> Stri
                     st_meta
                         .entry(st.stop_id.clone())
                         .or_insert_with(|| (node.stop_name.clone(), lat, lon));
+                    let dl = display_line(&svc.route_short_name).to_string();
                     let entry = st_lines.entry(st.stop_id.clone()).or_default();
-                    if !entry.contains(&svc.route_short_name) {
-                        entry.push(svc.route_short_name.clone());
+                    if !entry.contains(&dl) {
+                        entry.push(dl);
                     }
                 }
             }
@@ -321,6 +324,10 @@ pub fn network_json(net: &Network, lines: &[String], generated_at: &str) -> Stri
 
     let mut out_lines: Vec<GameLine> = Vec::new();
     for line in lines {
+        // La R3a se pliega sobre el R3 (ver display_line): no es una línea propia en la UI.
+        if line == "R3a" {
+            continue;
+        }
         let dirs = crate::calculator::schedules::line_directions(net, line);
         let mut directions: Vec<GameDirection> = Vec::new();
         for d in dirs.into_iter().filter(|d| d.n_services >= 2) {
@@ -400,7 +407,7 @@ pub fn network_json(net: &Network, lines: &[String], generated_at: &str) -> Stri
             edge_lines
                 .entry((w[0].stop_id.clone(), w[1].stop_id.clone()))
                 .or_default()
-                .insert(svc.route_short_name.clone());
+                .insert(display_line(&svc.route_short_name).to_string());
         }
     }
     // Descomposición GLOBAL por cantones atómicos: un servicio exprés que salta paradas
@@ -487,6 +494,9 @@ struct GameStop {
     a: u32,
     /// Salida (segundos desde medianoche).
     d: u32,
+    /// `true` = punto de paso SINTÉTICO (un exprés cruza aquí sin parar; interpolado al
+    /// descomponer el salto en cantones reales). El juego NO fuerza tiempo de parada en estos.
+    pass: bool,
 }
 
 #[derive(Serialize)]
@@ -553,7 +563,8 @@ pub fn schedule_json(net: &Network, optimized: bool, line_filter: Option<&str>) 
             continue;
         }
         if let Some(l) = line_filter {
-            if svc.route_short_name != l {
+            // Filtrar por "R3" incluye también los trenes de la R3a (plegada sobre el R3).
+            if display_line(&svc.route_short_name) != l {
                 continue;
             }
         }
@@ -590,17 +601,17 @@ pub fn schedule_json(net: &Network, optimized: bool, line_filter: Option<&str>) 
                             for (i, mid) in path[1..path.len() - 1].iter().enumerate() {
                                 acc += total * (weights[i] / sum_w);
                                 let t = acc.round() as u32;
-                                stops.push(GameStop { s: mid.clone(), a: t, d: t });
+                                stops.push(GameStop { s: mid.clone(), a: t, d: t, pass: true });
                             }
                         }
                     }
                 }
             }
-            stops.push(GameStop { s: st.stop_id.clone(), a: arr, d: dep });
+            stops.push(GameStop { s: st.stop_id.clone(), a: arr, d: dep, pass: false });
         }
         trains.push(GameTrain {
             train: svc.train_number.clone(),
-            line: svc.route_short_name.clone(),
+            line: display_line(&svc.route_short_name).to_string(),
             from: svc.schedule.first().map(|s| s.stop_id.clone()).unwrap_or_default(),
             to: svc.schedule.last().map(|s| s.stop_id.clone()).unwrap_or_default(),
             offset_min: off_min,
