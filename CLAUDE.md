@@ -2,6 +2,14 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+> ## 🗺️ LEE ESTO PRIMERO — mapa de código
+> Antes de explorar o editar una zona caliente, abre **[`docs/CODEMAP.md`](docs/CODEMAP.md)**:
+> un índice **función-por-función con nº de línea** de los *hot paths* (juego web `app.js`,
+> `game.rs`, `simulation_engine.rs`, `signaling.rs`, `topology.rs`, `optimizer/`). Salta directo
+> a `fichero:línea` en vez de releer ficheros enteros (ahorra contexto). Los nº de línea
+> envejecen → re-lee ±20 líneas antes de editar. Regénéralo con la skill **`/codemap`** cuando
+> se desfase. Esta sección (arquitectura por módulos) queda como referencia de segundo nivel.
+
 ## Toolchain (Windows quirk)
 
 Rust was installed via rustup but `cargo`/`rustc` are **not on the shell PATH by default**.
@@ -128,3 +136,36 @@ runtime — there is no hardcoded map. Data flows in one direction: GTFS → `Ne
 - Keep `cargo check` clean: the model structs' fields are deliberately surfaced in reports so
   they aren't dead code — if you add a field, actually use it (in a report or the engine)
   rather than silencing the warning.
+
+## Reglas de código (rendimiento primero, lógica compleja bien estructurada)
+
+Norte del proyecto: un simulador de Rodalies **hiperrealista**. Ante cualquier disyuntiva, elige
+lo físicamente/operativamente correcto; si simplificas un modelo y eso sacrifica realismo,
+decláralo en vez de asumirlo.
+
+**Rendimiento computacional (es un motor de simulación, no una app CRUD):**
+- El coste está en los bucles calientes: el motor de eventos (`simulation_engine`), el barrido de
+  resiliencia y el optimizador (Monte-Carlo), y el bucle de simulación del juego web (`paso()`),
+  que corre por fotograma sobre ~960 trenes. Piensa siempre en la complejidad de lo que metas ahí.
+- Precalcula fuera del bucle: índices/mapas una vez al cargar (p. ej. `edgeLines`, `subBlocks`,
+  `singleTrackUsers`, la secuencia de bloques por tren), no recalcules por fotograma ni por tren.
+- Prefiere estructuras con la complejidad adecuada (`HashMap`/`Set`/`BinaryHeap`) a búsquedas
+  lineales repetidas; evita clonar en caliente (usa referencias/índices) y asignaciones por frame.
+- Paraleliza el trabajo independiente con `rayon` (ya se hace en escenarios/optimizador); mantén
+  el trabajo por fotograma en el cliente O(trenes)+O(señales visibles), no O(trenes×señales).
+- Regla del bucle a velocidad variable: **nada de ventanas de tiempo fijas**; usa sub-pasos
+  acotados y comprobaciones por umbral, y verifica SIEMPRE a ×25 (donde afloran los bugs de salto).
+- Mide antes de optimizar (los tiempos de carga ya se cronometran en ms); no compliques sin dato.
+
+**Estructuración de lógica compleja:**
+- Una responsabilidad por módulo (respeta la arquitectura GTFS→`Network`→`Simulator`; el flujo de
+  datos va en una sola dirección). Nueva lógica de física va en el motor, no en la capa de reporte.
+- Funciones puras y con nombre para cada regla del dominio (atomicidad de cantones por geometría,
+  ocupación de bloque, aspecto de señal, parada mínima…), testeables de forma aislada; nada de
+  condiciones mágicas embebidas: extrae la regla a una función con un comentario del *porqué*.
+- Comenta el **motivo** (la física/operación real), no el *qué*; mantén los invariantes explícitos
+  (p. ej. «dwell extra = 0 con retraso 0», «1 tren por bloque», «vía única = testigo compartido»).
+- Deriva de datos reales (GTFS, ADIF, topología) antes que constantes inventadas; si necesitas una
+  constante operativa, ponla nombrada y con su fuente.
+- Idioma: consola y comentarios en catalán/castellano (convención existente); código y APIs en
+  inglés donde ya lo estén. `cargo check` sin warnings.
