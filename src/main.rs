@@ -8,6 +8,7 @@
 //!   * `--no-open`: no abre el navegador automáticamente.
 
 mod calculator;
+mod engine;
 mod exporter;
 mod game;
 mod gtfs_loader;
@@ -68,6 +69,11 @@ async fn main() {
     let load_ms = t0.elapsed().as_secs_f64() * 1000.0;
     println!("✓ Càrrega completada en {:.1} ms\n", load_ms);
 
+    // Modo motor unificado (Fase 1, headless): `cargo run --release -- simulate`
+    if std::env::args().any(|a| a == "simulate") {
+        run_engine_demo(&net);
+        return;
+    }
     // Modo optimizador del SISTEMA: `cargo run --release -- optimize`
     if std::env::args().any(|a| a == "optimize" || a == "--optimize") {
         run_system_optimizer(&net);
@@ -367,6 +373,39 @@ fn print_res(res: &ResView) {
 // --------------------------------------------------------------------------
 // Dashboard estático + apertura de navegador
 // --------------------------------------------------------------------------
+
+/// Fase 1 del motor unificado (headless): corre la jornada, muestra una foto a mediodía
+/// (camino de VER: `observe`) y las métricas finales (camino de LOTE: `run`/`metrics`). Es el
+/// esqueleto verificable; la señalización/ocupación llegan en la Fase 1b (ver docs/PLAN).
+fn run_engine_demo(net: &Network) {
+    use engine::{Engine, EngineCfg};
+    let cfg = EngineCfg::day();
+    let mut eng = Engine::new(net, cfg);
+
+    let t0 = Instant::now();
+    let noon = 12.0 * 3600.0;
+    while eng.clock() < noon {
+        eng.step(cfg.dt_sec);
+    }
+    let frame = eng.observe();
+    println!("→ Motor (Fase 1) · trens en marxa a les 12:00: {}", frame.len());
+    if let Some(t) = frame.first() {
+        println!(
+            "   ex.: {} ({}) {} → {}  · {:.0}% del cantó · retard {:.0}s",
+            t.id, t.line, t.from, t.to, t.frac * 100.0, t.delay_s
+        );
+    }
+
+    let m = eng.run();
+    let ms = t0.elapsed().as_secs_f64() * 1000.0;
+    println!(
+        "✓ Jornada de {:.0} h · {} trens · retard acumulat {:.0} tren·min · pic {:.0}s · {:.1} ms",
+        m.sim_seconds as f64 / 3600.0, m.n_trains, m.train_min_delay, m.max_delay_s, ms
+    );
+    println!(
+        "   (Fase 1 = paritat per horari, SENSE senyalització/ocupació encara — veure docs/PLAN-motor-unificado.md)"
+    );
+}
 
 fn write_static_dashboard(
     summary: &SummaryView,
