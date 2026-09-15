@@ -145,7 +145,7 @@ pub struct SpeedZone {
 
 /// Límite de infraestructura en la posición `x`. Si no hay zona que la cubra,
 /// devuelve `f64::INFINITY` (sin límite de vía conocido → manda el tren).
-fn infra_limit(zones: &[SpeedZone], x: f64) -> f64 {
+pub fn infra_limit(zones: &[SpeedZone], x: f64) -> f64 {
     for z in zones {
         if x >= z.from && x < z.to {
             return z.vmax;
@@ -157,7 +157,7 @@ fn infra_limit(zones: &[SpeedZone], x: f64) -> f64 {
 /// Velocidad máxima permitida en `x` por el **frenado anticipado**: para cada
 /// restricción futura (incluida la parada final) se calcula la velocidad desde la que
 /// aún se puede frenar a tiempo, `sqrt(v_r² + 2·b·(x_r − x))`, y se toma la menor.
-fn braking_cap(restrictions: &[Restriction], x: f64, decel: f64) -> f64 {
+pub fn braking_cap(restrictions: &[Restriction], x: f64, decel: f64) -> f64 {
     let mut cap = f64::INFINITY;
     for r in restrictions {
         if r.x >= x {

@@ -516,31 +516,6 @@ function edgeOcupadoRes(c, d, exceptId) {
   return false;
 }
 
-// Añade/quita al tren `t` de la ocupación del sub-bloque de vía `b` (S.occ). Se usa al conceder
-// un bloque en `paso` para que la ocupación quede EN VIVO dentro del mismo fotograma (los trenes
-// evaluados después ya lo ven ocupado/libre). El centinela de origen no ocupa vía.
-function ocuparBloque(t, b, add) {
-  if (!b || b.origin) return;
-  const k = sbRes(b.from, b.to, b.sb);
-  let arr = S.occ.get(k);
-  if (add) { if (!arr) { arr = []; S.occ.set(k, arr); } if (!arr.includes(t.id)) arr.push(t.id); }
-  else if (arr) { const i = arr.indexOf(t.id); if (i >= 0) arr.splice(i, 1); }
-}
-
-// ¿Puede el tren `t` ENTRAR en el sub-bloque `nb`? {ok:true} o {ok:false, motivo}. `first` = el
-// sub-bloque 0 de un cantón ⇒ es SALIR de una estación: se aplica el semáforo interno de salida
-// y las averías de estación. El resto = señales de tramo (bloque libre + prioridad de vía única).
-function bloqueEntrada(t, nb) {
-  if (nb.first) {
-    if (estacionParada(nb.from)) return { ok: false, motivo: "averia" };
-    if (internoRojo(nb.from, t.side, t.line)) return { ok: false, motivo: "interno" };
-  }
-  if (bloqueOcupado(nb.from, nb.to, nb.sb, t.id)) return { ok: false, motivo: "semaforo" };
-  if (!esRegional(t.line) && S.singleTrack.has(canon(nb.from, nb.to)) && regionalEntrandoPronto(sbRes(nb.from, nb.to, nb.sb), t.id))
-    return { ok: false, motivo: "semaforo" };
-  return { ok: true };
-}
-
 // Aspecto de la señal del bloque `sb` del cantón a→b (misma regla en tramo y en estación):
 //   ROJO  = su propio bloque ocupado/cerrado.  ÁMBAR = su bloque libre pero el SIGUIENTE en
 //   rojo (solo aviso, no detiene).  VERDE = su bloque libre y el siguiente libre.
@@ -619,120 +594,99 @@ function bearing(a, b) {
   return Math.atan2(dx, dy) * 180 / Math.PI;
 }
 
-// ---- Paso de simulación -------------------------------------------------------------------
-// Modelo de BLOQUES FIJOS. Cada tren recorre su secuencia de bloques (`t.seq`) y el motor se
-// los concede de uno en uno: en cuanto su tiempo efectivo SIN BLOQUEAR (`teLibre`) alcanza la
-// señal del bloque siguiente, se comprueba si ese bloque está libre; si lo está, entra (se
-// COMPROMETE: no rebota, recorre el bloque entero); si no, se clava EXACTAMENTE frente a esa
-// señal. Así una señal se pone en rojo en cuanto un tren ocupa su bloque y no libera al
-// siguiente hasta que el tren cruza la señal de más allá. Se comprueba contra `teLibre` (no
-// contra la posición clavada de fotogramas previos). Además el bucle lo llama en SUB-PASOS de
-// tiempo acotado (`dtGame` ≤ PASO_MAX_S), de modo que a ×25 (o si un fotograma tarda) el avance
-// se trocea y la señalización/ocupación se resuelven exactas en cada tramo — ni se salta señales
-// ni la congestión depende de la tasa de fotogramas.
-function paso(dtGame) {
+// ---- REPRODUCTOR del motor unificado (Rust) -----------------------------------------------
+// El mapa visual deja de calcular física propia: reproduce el TRACE del motor Rust (posición y
+// velocidad de cada tren muestreadas en el tiempo). Así "lo que ves = lo que se simula en masa":
+// los trenes aceleran/frenan de verdad (Vmax de vía + LTV + física del material). Si el trace no
+// carga (binario antiguo), se cae al motor JS de bloques (`paso`).
+async function cargarTrace(seed) {
+  S.traceSeed = seed || 0;
+  const tr = await (await fetch("/api/game/trace?seed=" + S.traceSeed)).json();
+  if (!tr || !tr.trains) throw new Error("trace vacío");
+  tr.byId = new Map();
+  for (const t of tr.trains) tr.byId.set(t.id, t);
+  S.trace = tr; S.repro = true; S.simT = tr.start;
+}
+// Nombre ACORTADO de una estación (para la lista de tramos): quita el prefijo "Barcelona".
+function nombreCorto(id) {
+  const n = nombre(id);
+  return n.replace(/^Barcelona[\s-]+/i, "BCN ").replace(/\s+-\s+/g, " ").trim();
+}
+// Un sub-paso del reproductor: sitúa cada tren interpolando su trace y reconstruye la ocupación de
+// bloques (para colorear las señales del mapa exactamente como el motor). Vía única + parado =
+// apartadero liberado (misma regla que el motor). No recalcula física: la lee.
+function pasoRepro(dtGame) {
   S.simT += dtGame;
   if (S.simT >= DIA_FIN && !S.finished) { S.simT = DIA_FIN; finDelDia(); }
-  activarIncidencias();
-
-  // Pass 1: ocupación de sub-bloques según el bloque COMPROMETIDO de cada tren (t.cb), no según
-  // su fracción geométrica: un tren clavado frente a una señal ocupa el bloque que tiene DETRÁS
-  // (el que recorre), no el que le niegan. Un tren parado en un andén ocupa el ÚLTIMO sub-bloque
-  // del cantón de llegada (el andén es su cola), así su señal anterior sigue en rojo.
+  const tr = S.trace; if (!tr) return;
   S.occ.clear();
-  const est = [];
+  let activos = 0, held = 0;
   for (const t of S.trains) {
-    const teLibre = S.simT - t.shift;
-    const seg = segmentoDe(t, teLibre);
-    if (!seg || !t.seq) { est.push(null); continue; }
-    est.push({ teLibre });
-    const b = t.seq[t.cb];
-    if (!b || b.origin) continue;   // el centinela de origen no ocupa vía
-    // Un tren que FINALIZA en una terminal se aparta a vía secundaria: no retiene el bloque.
-    if (b.last && b.arrIdx === t.pts.length - 1 && S.terminals.has(b.dest)) continue;
-    // VÍA ÚNICA: la estación es un APARTADERO fuera de la vía; un tren que YA HA LLEGADO a la
-    // estación destino del bloque la LIBERA para que el sentido contrario pueda cruzar. (En vía
-    // doble el andén sí es cola del bloque — «andén ∈ bloque anterior» —, así que ahí no se libera.)
-    // Se comprueba con `teLibre >= llegada` (NO con seg.moving): un tren clavado frente a la señal
-    // de salida tiene teLibre ≈ holdT + dt (desfase de un sub-paso al fijar shift en Pass 2), que
-    // SOBREPASA una estación de dwell 0 (punto de paso exprés, a==d) y caería en el bloque siguiente
-    // como "en marcha" → no liberaba → DEADLOCK de dos trenes de frente que nunca cruzaban.
-    if (b.last && S.singleTrack.has(canon(b.from, b.to)) && teLibre >= t.pts[b.arrIdx].a) continue;
-    const rk = sbRes(b.from, b.to, b.sb);
-    let arr = S.occ.get(rk); if (!arr) { arr = []; S.occ.set(rk, arr); } arr.push(t.id);
-  }
-
-  // Pass 2: compuertas de bloque. Avanza el bloque comprometido mientras el siguiente ya toque
-  // y esté libre; si topa con uno ocupado, clava el tren frente a su señal y acumula retraso.
-  let n = 0;
-  for (let idx = 0; idx < S.trains.length; idx++) {
-    const t = S.trains[idx], e = est[idx]; if (!e) continue;
-    n++;
-    let bloqueado = false, motivo = null, holdT = null;
-    while (t.cb < t.seq.length - 1) {
-      const nb = t.seq[t.cb + 1];
-      if (e.teLibre < nb.tEnter) break;              // aún no ha alcanzado esa señal
-      const r = bloqueEntrada(t, nb);
-      if (!r.ok) { bloqueado = true; motivo = r.motivo; holdT = nb.tEnter; break; }
-      ocuparBloque(t, t.seq[t.cb], false);            // libera el bloque actual…
-      t.cb++;                                          // …concede el siguiente (compromiso, sin rebote)
-      ocuparBloque(t, t.seq[t.cb], true);             // ocupación en vivo: la ven los trenes de después
+    t.reproActive = false; t.repro = null; t.reproHeld = false;
+    const rt = tr.byId.get(t.id); if (!rt) continue;
+    const idx = (S.simT - rt.t0) / tr.dt;
+    if (idx < 0 || idx > rt.a.length - 1) continue;
+    const i0 = Math.floor(idx), i1 = Math.min(i0 + 1, rt.a.length - 1), fr = idx - i0;
+    const a = tr.ids[rt.a[i0]], b = tr.ids[rt.b[i0]];
+    // Interpola la fracción sólo si ambos extremos van por el MISMO cantón; si cruzó estación
+    // entre muestras, se queda con la muestra i0 (salto imperceptible a dt=5 s).
+    let frac = (rt.a[i0] === rt.a[i1] && rt.b[i0] === rt.b[i1])
+      ? (rt.f[i0] + (rt.f[i1] - rt.f[i0]) * fr) / 1000
+      : rt.f[i0] / 1000;
+    const v = rt.v[i0] + (rt.v[i1] - rt.v[i0]) * fr;
+    activos++;
+    const stopped = frac >= 0.995, singleHere = S.singleTrack.has(canon(a, b));
+    if (!(stopped && singleHere)) {
+      const m = subM(a, b); let sb = Math.min(Math.floor(frac * m), m - 1); if (sb < 0) sb = 0;
+      const rk = sbRes(a, b, sb); let arr = S.occ.get(rk); if (!arr) { arr = []; S.occ.set(rk, arr); } arr.push(t.id);
     }
-    // Catenaria (velocidad reducida) en el sub-bloque de vía que recorre ahora: congela fotogramas
-    // alternos ⇒ ~mitad de velocidad, sin detenerlo del todo.
-    const bCur = t.seq[t.cb];
-    let caten = false;
-    if (!bloqueado && bCur && !bCur.origin && edgeLento(key(bCur.from, bCur.to)) && (Math.floor(S.simT) % 2 === 0)) caten = true;
-    if (S.speed > 0) {
-      if (bloqueado) t.shift = S.simT - holdT;        // clavado frente a la señal en rojo
-      else if (caten) t.shift += dtGame;              // ralentizado (congela este fotograma)
-      if (bloqueado || caten) { const pax = Math.round(NOMINAL_PAX * demanda(S.simT)); S.kpi += (dtGame / 60) * pax; }
-    }
-    t.esperando = bloqueado;
-    if (bloqueado) {
-      const nb = t.seq[t.cb + 1];
-      // La señal que lo retiene está a la ENTRADA de `nb`: si `nb` es la salida de una estación
-      // (first), es la señal de salida de nb.from; si no, la señal de tramo nb.from→nb.to.
-      t.esperaDesde = nb.from; t.esperaHacia = nb.to; t.esperaMotivo = motivo;
-    } else { t.esperaDesde = t.esperaHacia = t.esperaMotivo = null; }
+    t.repro = { a, b, frac, v };
+    t.reproActive = !stopped;
+    t.reproHeld = v < 1 && frac > 0.02 && frac < 0.98;   // clavado en plena vía = retenido por señal
+    t.esperando = t.reproHeld;
+    if (t.reproHeld) { t.esperaDesde = a; t.esperaHacia = b; t.esperaMotivo = "semaforo"; held++; }
+    else { t.esperaDesde = t.esperaHacia = t.esperaMotivo = null; }
   }
-  S.activos = n;
+  S.activos = activos;
+  if (S.speed > 0 && held > 0) S.kpi += (dtGame / 60) * NOMINAL_PAX * demanda(S.simT) * held;
 }
+
 
 // ---- Render de trenes ---------------------------------------------------------------------
 function render() {
   const vivos = new Set();
   for (const t of S.trains) {
-    const te = S.simT - t.shift, seg = segmentoDe(t, te);
-    if (!seg) continue;
-    // Un tren PARADO en una estación está DENTRO de ella: no se dibuja (así su triángulo no
-    // tapa el marcador de la estación y esta se puede clicar). Solo se ven los que circulan.
-    if (!seg.moving) continue;
-    vivos.add(t.id);
-    const pos = posDe(t, seg, te), late = t.shift > 90;
-    // Al desdoblar la vía doble (zoom ≥ umbral), el tren circula por SU vía: mismo desplazamiento
-    // perpendicular a la derecha del sentido de marcha que usa el trazado. Vía única: centrado.
-    const p = t.pts;
-    if (lineasDesdobladas && !S.singleTrack.has(canon(p[seg.i].id, p[seg.i + 1].id))) {
-      const off = perpOffset(p[seg.i], p[seg.i + 1]);
-      pos[0] += off[0]; pos[1] += off[1];
+    // Posición/orientación/estado del tren, desde el REPRODUCTOR (trace del motor Rust unificado).
+    // El motor visual es ÚNICO: el frontend solo LEE y dibuja el trace; no calcula física.
+    let pos, bearingDeg, late, hold, tip;
+    const r = t.repro;
+    if (!r || !t.reproActive) continue;   // parado en estación (dentro): no se dibuja
+    const A = S.stationById.get(r.a), B = S.stationById.get(r.b);
+    if (!A || !B) continue;
+    pos = [A.lat + (B.lat - A.lat) * r.frac, A.lon + (B.lon - A.lon) * r.frac];
+    if (lineasDesdobladas && !S.singleTrack.has(canon(r.a, r.b))) {
+      const off = perpOffset(A, B); pos[0] += off[0]; pos[1] += off[1];
     }
+    bearingDeg = bearing(A, B);
+    hold = t.reproHeld; late = false;
+    const kmh = Math.round(r.v);
+    tip = `${t.line} · tren ${t.id}<br>Destino: ${nombre(t.pts[t.pts.length - 1].id)}<br>` +
+      (hold ? `<b>⏸ Detenido ante señal</b> en ${nombre(r.a)}` : `Velocidad: <b>${kmh} km/h</b>`);
+    vivos.add(t.id);
     let m = trainMarkers.get(t.id);
     if (!m) {
       m = L.marker(pos, { icon: L.divIcon({ className: "trn-ic", html: '<span class="trn-tri"></span>', iconSize: [18, 18], iconAnchor: [9, 9] }), keyboard: false });
       m._line = t.line; m.bindTooltip(""); m.addTo(trainLayer); trainMarkers.set(t.id, m);
     } else m.setLatLng(pos);
-    // Triángulo orientado según el SENTIDO DE MARCHA; relleno = color de línea; estado por clase.
     const elm = m.getElement();
     if (elm && elm.firstChild) {
       const tri = elm.firstChild;
       tri.style.setProperty("--c", t.color);
-      tri.style.transform = "rotate(" + bearingDe(t, seg).toFixed(1) + "deg)";
-      elm.classList.toggle("late", late && !t.esperando);
-      elm.classList.toggle("hold", t.esperando);
+      tri.style.transform = "rotate(" + bearingDeg.toFixed(1) + "deg)";
+      elm.classList.toggle("late", late && !hold);
+      elm.classList.toggle("hold", !!hold);
     }
-    const esperaTxt = t.esperando ? `<br><b>⏸ Esperando ${MOTIVO_LABEL[t.esperaMotivo] || t.esperaMotivo}</b> en ${nombre(t.esperaDesde)}` : "";
-    m.setTooltipContent(`${t.line} · tren ${t.id}<br>Destino: ${nombre(t.pts[t.pts.length - 1].id)}<br>Retraso: ${t.shift > 60 ? "+" + Math.round(t.shift / 60) + " min" : "puntual"}${esperaTxt}`);
+    m.setTooltipContent(tip);
   }
   for (const [id, m] of trainMarkers) if (!vivos.has(id)) { trainLayer.removeLayer(m); trainMarkers.delete(id); }
 
@@ -1069,13 +1023,11 @@ const INCID = {
   averia_mecanica: { nombre: "Avería mecánica grave", dur: 90 },
 };
 function poblarSelectores() {
-  // Tipos.
-  $("incType").innerHTML = Object.entries(INCID).map(([k, v]) => `<option value="${k}">${v.nombre} (${v.dur} min)</option>`).join("");
-  // Líneas (leyenda + filtros).
+  // Líneas (leyenda + filtros). El antiguo generador de incidencias PROGRAMADAS se sustituyó por
+  // "Lanzar incidencia ahora" (ver el módulo `incidentTemplates`), así que aquí ya no se puebla.
   const ln = S.net.lines.map((l) => `<option value="${l.line}">${l.line}</option>`).join("");
   $("lineFilter").innerHTML = '<option value="">Todas las líneas</option>' + ln;
   $("tFiltLine").innerHTML = '<option value="">Todas</option>' + ln;
-  rellenarDonde();
 }
 function rellenarDonde() {
   const scope = $("incScope").value, sel = $("incWhere");
@@ -1157,9 +1109,6 @@ $("gtfsUpload").addEventListener("click", subirGtfs);
 $("source").addEventListener("change", cargarHorarios);
 $("lineFilter").addEventListener("change", cargarHorarios);
 $("showSignals").addEventListener("change", construirSemaforos);
-$("incScope").addEventListener("change", rellenarDonde);
-$("incNow").addEventListener("click", () => programarIncidencia(true));
-$("incSchedule").addEventListener("click", () => programarIncidencia(false));
 $("btnTrenes").addEventListener("click", () => { const p = $("trenesPanel"); p.hidden = !p.hidden; refrescarTrenes(); });
 $("trenesClose").addEventListener("click", () => $("trenesPanel").hidden = true);
 ["tFiltLine", "tOnlyLate", "tSort"].forEach((id) => $(id).addEventListener("change", refrescarTrenes));
@@ -1173,7 +1122,8 @@ function bucle(now) {
   const dt = Math.min(0.1, (now - ultimo) / 1000); ultimo = now;
   if (S.speed > 0 && !S.finished) {
     let rem = dt * FACTOR_BASE * S.speed;              // segundos de juego a avanzar este fotograma
-    while (rem > 1e-6 && !S.finished) { const st = Math.min(PASO_MAX_S, rem); paso(st); rem -= st; }
+    // Motor visual ÚNICO: siempre el reproductor del trace del motor Rust (no hay motor JS).
+    while (rem > 1e-6 && !S.finished) { const st = Math.min(PASO_MAX_S, rem); pasoRepro(st); rem -= st; }
   }
   render();
   actualizarSemaforosAspecto();      // color de las señales del mapa: CADA fotograma (fluido a ×25)
@@ -1187,8 +1137,20 @@ function bucle(now) {
 async function iniciar() {
   const src = new URLSearchParams(location.search).get("source");
   if (src === "optimized" || src === "gtfs") $("source").value = src;
-  try { await cargarRed(); await cargarHorarios(); construirSemaforos(); setTimeout(() => map.invalidateSize(), 120); }
-  catch (e) { $("netInfo").textContent = "Error cargando datos: " + e; }
+  try {
+    await cargarRed(); await cargarHorarios(); construirSemaforos();
+    setTimeout(() => map.invalidateSize(), 120);
+    // Motor unificado: pide el TRACE físico (el servidor corre la jornada; tarda unos segundos).
+    // El mapa REPRODUCE la física real (acel./frenada). Es el ÚNICO motor visual: no hay respaldo JS.
+    $("netInfo").textContent += " · Calculando la simulación física (motor Rust)…";
+    try {
+      const seed = +(new URLSearchParams(location.search).get("seed")) || 0;
+      await cargarTrace(seed);
+      $("netInfo").textContent = $("netInfo").textContent.replace(" · Calculando la simulación física (motor Rust)…", " · Física del motor Rust (reproductor).");
+    } catch (e) {
+      $("netInfo").textContent = "⚠ No se pudo cargar la simulación del motor Rust (trace): " + e;
+    }
+  } catch (e) { $("netInfo").textContent = "Error cargando datos: " + e; }
   requestAnimationFrame(bucle);
 }
 iniciar();
@@ -1307,4 +1269,127 @@ iniciar();
 
   // Abrir el panel de red por defecto para orientar al usuario en el primer arranque.
   setTimeout(() => openPanel(leftPanel, true), 400);
+})();
+
+// ═══════════════ Creador de incidencias PROBABILÍSTICO + modo headless (Fase C) ═══════════════
+// Módulo AISLADO del motor del juego: solo habla con la API (/api/incidents/templates y
+// /api/simulate) y con su propio DOM. Las plantillas son la fuente única compartida por el modo
+// visual y el modo sin visual (headless). Toggleables/eliminables antes del día.
+(function incidentTemplates() {
+  const $ = (id) => document.getElementById(id);
+  const EFF = { red_one: "Señal roja (1 sentido)", red_both: "Señal roja (2 sentidos)", single: "Tramo → vía única" };
+  let tpls = [];
+
+  async function load() {
+    try { tpls = await (await fetch("/api/incidents/templates")).json(); } catch (e) { tpls = []; }
+    render();
+  }
+  async function save() {
+    try {
+      await fetch("/api/incidents/templates", {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(tpls),
+      });
+    } catch (e) { /* localhost: si falla, se reintenta en el próximo cambio */ }
+  }
+  function render() {
+    const ul = $("tplList"); if (!ul) return;
+    if (!tpls.length) { ul.innerHTML = '<li class="empty">Sin plantillas.</li>'; return; }
+    ul.innerHTML = "";
+    tpls.forEach((t, i) => {
+      const li = document.createElement("li");
+      li.innerHTML =
+        `<label class="chk"><input type="checkbox" ${t.enabled ? "checked" : ""} data-i="${i}" class="tplTgl"></label>` +
+        `<span class="tpl-main"><b>${t.motivo || "(sin motivo)"}</b>` +
+        `<small>${EFF[t.effect] || t.effect} · ${t.dur_min} min · ${Math.round(t.daily_prob * 100)}%/día</small></span>` +
+        `<button class="mini-del" data-i="${i}" title="Eliminar">✕</button>`;
+      ul.appendChild(li);
+    });
+    ul.querySelectorAll(".tplTgl").forEach((c) => (c.onchange = () => { tpls[+c.dataset.i].enabled = c.checked; save(); }));
+    ul.querySelectorAll(".mini-del").forEach((b) => (b.onclick = () => { tpls.splice(+b.dataset.i, 1); save(); render(); }));
+  }
+
+  const addBtn = $("tplAdd");
+  if (addBtn) addBtn.onclick = () => {
+    const motivo = ($("tplMotivo").value || "").trim() || "Incidencia";
+    const effect = $("tplEffect").value;
+    const dur_min = Math.max(1, +$("tplDur").value || 15);
+    const daily_prob = Math.min(1, Math.max(0, (+$("tplProb").value || 0) / 100));
+    tpls.push({ motivo, effect, dur_min, daily_prob, enabled: true });
+    $("tplMotivo").value = "";
+    save(); render();
+  };
+
+  const runBtn = $("simRun");
+  if (runBtn) runBtn.onclick = async () => {
+    const seed = +$("simSeed").value || 0;
+    const out = $("simOut");
+    out.textContent = "Ejecutando la jornada completa…";
+    runBtn.disabled = true;
+    try {
+      const r = await (await fetch("/api/simulate?seed=" + seed)).json();
+      const inc = (r.incidents || [])
+        .map((i) => `• ${i.motivo} (${EFF[i.effect] || i.effect}) ${i.from}→${i.to} · ${Math.floor(i.t0 / 3600)}h`)
+        .join("<br>") || "ninguna hoy";
+      out.innerHTML =
+        `<b>${r.n_trains}</b> trenes · retraso máx <b>${r.max_delay_min.toFixed(0)} min</b> · ` +
+        `pico retenidos <b>${r.peak_waiting}</b> · final <b>${r.final_waiting}</b><br>` +
+        `KPI <b>${Math.round(r.pax_min).toLocaleString()}</b> pax·min<br>` +
+        `<small>Incidencias del día (semilla ${r.seed}):<br>${inc}</small>`;
+    } catch (e) {
+      out.textContent = "Error al simular.";
+    } finally {
+      runBtn.disabled = false;
+    }
+  };
+
+  // ── "Lanzar incidencia AHORA": elige plantilla + tramo → re-simula la jornada con la
+  // incidencia inyectada desde la hora actual (así el mapa visual la refleja de verdad). ──
+  function poblarLive() {
+    const selTpl = $("liveTpl"), selTr = $("liveTramo");
+    if (selTpl) selTpl.innerHTML = tpls.map((t, i) => `<option value="${i}">${t.motivo} · ${EFF[t.effect] || t.effect}</option>`).join("")
+      || '<option value="">(crea plantillas arriba)</option>';
+    // La lista de TRAMOS (nombres acortados) sale de la red; espera a que cargue.
+    const nEdges = (S.net && S.net.edges || []).length;
+    if (selTr && (!selTr.options.length || selTr.dataset.n !== String(nEdges))) {
+      if (nEdges) {
+        const eds = S.net.edges.slice().sort((a, b) => nombreCorto(a.from).localeCompare(nombreCorto(b.from)));
+        selTr.innerHTML = eds.map((e) => `<option value="${e.from}>${e.to}">${nombreCorto(e.from)} → ${nombreCorto(e.to)}</option>`).join("");
+        selTr.dataset.n = String(S.net.edges.length);
+      }
+    }
+  }
+  const launchBtn = $("liveLaunch");
+  if (launchBtn) launchBtn.onclick = async () => {
+    const ti = +$("liveTpl").value, tpl = tpls[ti];
+    const tramo = $("liveTramo").value, st = $("liveStatus");
+    if (!tpl || !tramo) { st.textContent = "Elige una plantilla y un tramo."; return; }
+    const [from, to] = tramo.split(">");
+    const t0 = Math.floor(S.simT);
+    st.textContent = "Recalculando la jornada con la incidencia…";
+    launchBtn.disabled = true;
+    try {
+      const url = `/api/game/trace?seed=${S.traceSeed || 0}&eff=${tpl.effect}&from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}&t0=${t0}&dur=${tpl.dur_min}&motivo=${encodeURIComponent(tpl.motivo)}`;
+      const tr = await (await fetch(url)).json();
+      if (!tr || !tr.trains) throw new Error("trace vacío");
+      tr.byId = new Map();
+      for (const t of tr.trains) tr.byId.set(t.id, t);
+      S.trace = tr; // se conserva S.simT: el trace hasta 'ahora' es idéntico (misma semilla)
+      S.incidentes.push({
+        estado: "activa", nombre: tpl.motivo, kind: "", scope: "edge", target: from + ">" + to,
+        label: nombreCorto(from) + " → " + nombreCorto(to), whenSec: t0, durSec: tpl.dur_min * 60,
+      });
+      if (typeof refrescarIncidencias === "function") refrescarIncidencias();
+      st.textContent = `Incidencia "${tpl.motivo}" activa desde ${hhmm(t0)} en ${nombreCorto(from)} → ${nombreCorto(to)}.`;
+    } catch (e) {
+      st.textContent = "Error al recalcular la jornada.";
+    } finally {
+      launchBtn.disabled = false;
+    }
+  };
+
+  // Rellena los selectores al cargar y reintenta hasta que la red esté disponible.
+  let tries = 0;
+  const _poll = setInterval(() => { poblarLive(); if ((S.net && S.net.edges && S.net.edges.length) || ++tries > 40) clearInterval(_poll); }, 400);
+
+  load().then(poblarLive);
 })();

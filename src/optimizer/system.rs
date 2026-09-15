@@ -1,4 +1,4 @@
-//! Optimización del SISTEMA ENTERO (todas las líneas a la vez).
+//! Optimización del SISTEMA ENTERO (todas las líneas a la vez) sobre el **motor unificado**.
 //!
 //! El problema real no es una línea aislada, sino los **conflictos entre líneas** en los
 //! cantones compartidos (p.ej. el tronco Sants–Passeig lo usan 8-9 líneas) y cómo el
@@ -7,30 +7,29 @@
 //!
 //! Se optimiza un **desfase de fase por línea** (±5 min) para todo un día laborable
 //! (05:00–00:00). Cada candidato se evalúa con varias simulaciones Monte Carlo del
-//! sistema completo, cada una con incidencias aleatorias repartidas por el día, en
-//! paralelo (`rayon`). Se minimiza el potencial V (retraso ponderado por pasajeros +
-//! penalización por conflicto), integrado sobre todo el día.
+//! sistema completo con `src/engine.rs` (la MISMA física que ve el juego): cada run es una
+//! semilla distinta cuya **tirada de incidencias** es reproducible e **independiente del
+//! desfase** (los pesos espaciales/temporales no dependen de la fase) → comparación justa
+//! entre candidatos. Se evalúan en paralelo (`rayon`) y se minimiza el potencial V (retraso
+//! ponderado por pasajeros + penalización por conflicto), integrado sobre todo el día.
 
-use std::collections::{HashMap, HashSet};
-use std::sync::Arc;
+use std::collections::HashMap;
 
-use petgraph::graph::NodeIndex;
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 use rayon::prelude::*;
 
+use crate::calculator::{infrastructure::AdifNet, ltv::LtvSet};
+use crate::engine::{default_templates, Engine, EngineCfg, IncidentTemplate};
 use crate::gtfs_loader::Network;
-use crate::optimizer::potential::{passenger_weighted_delay, PotentialWeights};
-use crate::simulation_engine::{Incident, SimConfig, Simulator};
+use crate::optimizer::potential::{weighted_delay_from_timeline, PotentialWeights};
 
 #[derive(Debug, Clone, Copy)]
 pub struct SystemSearch {
     pub window: (u32, u32),
     pub iters: usize,
     pub mc_runs: usize,
-    pub incidents_per_run: usize,
     pub max_offset_min: i64,
-    pub min_block_headway: u32,
     pub t0: f64,
     pub cooling: f64,
     pub seed: u64,
@@ -42,9 +41,7 @@ impl Default for SystemSearch {
             window: (5 * 3600, 24 * 3600), // 05:00 – 00:00
             iters: 200,
             mc_runs: 8,
-            incidents_per_run: 4,
             max_offset_min: 5,
-            min_block_headway: 100,
             t0: 8.0,
             cooling: 0.985,
             seed: 20260809,
@@ -75,9 +72,12 @@ struct Eval {
     held: f64,
 }
 
-/// Optimiza el sistema completo. `progress(iter, v_actual, v_mejor)` para la UI.
+/// Optimiza el sistema completo con el motor unificado. `adif`/`ltv` = datos de física ya cargados
+/// (si faltan, el motor cae a Vmax de vía por defecto). `progress(iter, v_actual, v_mejor)` para la UI.
 pub fn optimize_system(
     net: &Network,
+    adif: Option<&AdifNet>,
+    ltv: Option<&LtvSet>,
     sc: SystemSearch,
     w: PotentialWeights,
     progress: &(dyn Fn(usize, f64, f64) + Sync),
@@ -86,7 +86,7 @@ pub fn optimize_system(
 
     // Líneas de tren (no bus) con viajes en la ventana, ordenadas por nº de servicios.
     let mut counts: HashMap<String, usize> = HashMap::new();
-    let mut trips: Vec<(String, String)> = Vec::new(); // (trip_id, línea)
+    let mut trips = 0usize;
     for s in &net.services {
         if s.service_id != service_id || s.is_bus {
             continue;
@@ -95,47 +95,27 @@ pub fn optimize_system(
             continue;
         }
         *counts.entry(s.route_short_name.clone()).or_insert(0) += 1;
-        trips.push((s.trip_id.clone(), s.route_short_name.clone()));
+        trips += 1;
     }
-    if trips.is_empty() {
+    if trips == 0 {
         return None;
     }
     let mut lines: Vec<String> = counts.keys().cloned().collect();
     lines.sort_by(|a, b| counts[b].cmp(&counts[a]).then_with(|| a.cmp(b)));
-    let line_idx: HashMap<&str, usize> =
-        lines.iter().enumerate().map(|(i, l)| (l.as_str(), i)).collect();
 
-    let single = Arc::new(crate::topology::single_track_pairs(net));
-    let incidents = build_scenarios(net, &service_id, &sc);
+    let templates = default_templates();
     let max_off = sc.max_offset_min * 60;
 
-    // Construye el mapa trip_id -> desfase (por línea) para un vector de offsets.
-    let offsets_arc = |v: &[i64]| -> Arc<HashMap<String, i64>> {
-        let mut m: HashMap<String, i64> = HashMap::with_capacity(trips.len());
-        for (tid, line) in &trips {
-            let o = v[line_idx[line.as_str()]];
-            if o != 0 {
-                m.insert(tid.clone(), o);
-            }
-        }
-        Arc::new(m)
+    // Mapa línea -> desfase (segundos) para un vector de offsets alineado con `lines`.
+    let offsets_map = |v: &[i64]| -> HashMap<String, i64> {
+        lines.iter().cloned().zip(v.iter().copied()).filter(|(_, o)| *o != 0).collect()
     };
 
     let evaluate = |v: &[i64]| -> Eval {
-        let offsets = offsets_arc(v);
-        let res: Vec<(f64, f64, f64, f64)> = incidents
-            .par_iter()
-            .enumerate()
-            .map(|(k, scen)| {
-                let sim = run_system(net, &service_id, sc, &offsets, &single, scen, k as u64);
-                let v = passenger_weighted_delay(&sim, &w) * w.w_delay
-                    + sim.held_events as f64 * w.w_conflict;
-                let rec = match sim.recovery_time {
-                    Some(t) => (t.saturating_sub(sim.peak_time)) as f64 / 60.0,
-                    None => (sc.window.1.saturating_sub(sim.peak_time)) as f64 / 60.0,
-                };
-                (v, sim.peak_total_delay as f64, rec, sim.held_events as f64)
-            })
+        let offsets = offsets_map(v);
+        let res: Vec<(f64, f64, f64, f64)> = (0..sc.mc_runs)
+            .into_par_iter()
+            .map(|k| run_seed(net, adif, ltv, sc, &templates, &offsets, k as u64, &w))
             .collect();
         let n = res.len().max(1) as f64;
         Eval {
@@ -203,90 +183,38 @@ pub fn optimize_system(
         best_recovery_min: best_eval.recovery_min,
         base_held: base.held,
         best_held: best_eval.held,
-        trips: trips.len(),
+        trips,
     })
 }
 
+/// Una simulación Monte-Carlo del sistema completo con el motor unificado, para un vector de
+/// desfases y una semilla. Devuelve `(V, pic_retard_acumulat_s, recuperació_min, conflictes)`.
 #[allow(clippy::too_many_arguments)]
-fn run_system(
+fn run_seed(
     net: &Network,
-    service_id: &str,
+    adif: Option<&AdifNet>,
+    ltv: Option<&LtvSet>,
     sc: SystemSearch,
-    offsets: &Arc<HashMap<String, i64>>,
-    single: &Arc<HashSet<(NodeIndex, NodeIndex)>>,
-    scenario: &[Incident],
-    seed: u64,
-) -> crate::simulation_engine::SimResult {
-    let mut cfg = SimConfig::default();
+    templates: &[IncidentTemplate],
+    offsets: &HashMap<String, i64>,
+    k: u64,
+    w: &PotentialWeights,
+) -> (f64, f64, f64, f64) {
+    let mut cfg = EngineCfg::day();
     cfg.start_sec = sc.window.0;
     cfg.end_sec = sc.window.1;
-    cfg.strict_signaling = true; // andanes reals + testigo de vía única + aspecte groc
-    cfg.exclude_buses = true;
-    cfg.min_block_headway_secs = sc.min_block_headway;
-    cfg.single_track = single.clone();
-    cfg.offsets = offsets.clone();
-    cfg.seed = Some(2000 + seed);
-    let mut sim = Simulator::new(net, cfg);
-    for inc in scenario {
-        sim.add_incident(inc.clone());
-    }
-    sim.run(service_id)
-}
+    // Semilla FIJA por índice de run (independiente del desfase) → comparación justa entre candidatos.
+    cfg.seed = sc.seed.wrapping_mul(0x9E3779B97F4A7C15).wrapping_add(k);
 
-/// Genera `mc_runs` escenarios, cada uno con `incidents_per_run` incidencias repartidas
-/// por el día en puntos críticos (retrasos 3-12 min y bloqueos de cantón compartido).
-fn build_scenarios(net: &Network, service_id: &str, sc: &SystemSearch) -> Vec<Vec<Incident>> {
-    let critical = ["clot", "arc de triomf", "barcelona-sants", "passeig de gràcia"];
-    let mut delays: Vec<(String, String)> = Vec::new();
-    let mut cantons: Vec<(String, String)> = Vec::new();
-    for s in net.services.iter().filter(|s| {
-        s.service_id == service_id
-            && !s.is_bus
-            && matches!(s.first_time(), Some(t) if t >= sc.window.0 && t <= sc.window.1)
-    }) {
-        for st in &s.schedule {
-            let name = net.stop_name(&st.stop_id).to_lowercase();
-            if critical.iter().any(|c| name.contains(c)) {
-                delays.push((s.train_number.clone(), net.stop_name(&st.stop_id).to_string()));
-            }
-        }
-        for w in s.schedule.windows(2) {
-            cantons.push((w[0].stop_id.clone(), w[1].stop_id.clone()));
-        }
-    }
-    delays.sort();
-    delays.dedup();
-    cantons.sort();
-    cantons.dedup();
+    let off = if offsets.is_empty() { None } else { Some(offsets) };
+    let mut eng = Engine::new(net, cfg, adif, ltv, templates, off, None);
+    let m = eng.run();
 
-    let mut rng = StdRng::seed_from_u64(sc.seed ^ 0x5EED);
-    (0..sc.mc_runs)
-        .map(|_| {
-            let mut scen = Vec::with_capacity(sc.incidents_per_run);
-            for i in 0..sc.incidents_per_run {
-                let extra = rng.gen_range(3..=12) * 60;
-                // Reparte las incidencias por franjas del día.
-                let span = sc.window.1 - sc.window.0;
-                let from = sc.window.0 + (span * i as u32 / sc.incidents_per_run.max(1) as u32)
-                    + rng.gen_range(0..(span / sc.incidents_per_run.max(1) as u32).max(1));
-                if rng.gen::<bool>() && !delays.is_empty() {
-                    let (tn, sta) = &delays[rng.gen_range(0..delays.len())];
-                    scen.push(Incident::TrainDelay {
-                        train_number: tn.clone(),
-                        at_stop_name: sta.clone(),
-                        extra_secs: extra,
-                    });
-                } else if !cantons.is_empty() {
-                    let (a, b) = &cantons[rng.gen_range(0..cantons.len())];
-                    scen.push(Incident::BlockSegmentById {
-                        from_stop_id: a.clone(),
-                        to_stop_id: b.clone(),
-                        from_sec: from,
-                        dur_secs: extra,
-                    });
-                }
-            }
-            scen
-        })
-        .collect()
+    let delay = weighted_delay_from_timeline(eng.timeline(), w);
+    let v = delay * w.w_delay + m.held_events as f64 * w.w_conflict;
+    let recovery_min = match m.recovery_time {
+        Some(t) => t.saturating_sub(m.peak_time) as f64 / 60.0,
+        None => sc.window.1.saturating_sub(m.peak_time) as f64 / 60.0,
+    };
+    (v, m.peak_total_delay_s, recovery_min, m.held_events as f64)
 }

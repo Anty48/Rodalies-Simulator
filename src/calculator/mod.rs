@@ -184,7 +184,7 @@ fn downsample(trace: &[physics::Trace], by_distance: bool, max_pts: usize) -> Ve
 }
 
 /// Construye el `Vehicle` (SI) de una serie a partir de su ficha.
-fn vehicle_of(s: &rolling_stock::TrainSeries) -> Vehicle {
+pub fn vehicle_of(s: &rolling_stock::TrainSeries) -> Vehicle {
     Vehicle {
         vmax: s.vmax_kmh.value / 3.6,
         power_w: s.power_kw.value * 1000.0,

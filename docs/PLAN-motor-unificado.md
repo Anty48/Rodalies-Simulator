@@ -4,22 +4,122 @@
 >
 > ### PROGRESO
 > - ✅ **Fase 1 (fundamentos) HECHA** (`src/engine.rs`, subcomando `cargo run --release -- simulate`):
->   `Engine` con `step`/`observe`/`run`/`metrics`, `TraversalModel` enchufable (`ScheduleTraversal`
->   = paridad por horario), cinemática por cantón con dwell y retraso, determinista, 2 tests. Corre
->   la jornada completa (~961 trenes) headless en ~90 ms. `cargo check` limpio.
-> - ⏭️ **SIGUE — Fase 1b (señalización/ocupación):** portar de `game/web/app.js` a `src/engine.rs`
->   (idealmente ya dividido en `src/engine/` según §6), regla por regla con test de paridad:
->   1. **Ocupación de cantón** (1 tren/bloque) + retención → `bloqueOcupado`/`ocuparBloque`/`bloqueEntrada`.
->   2. **Aspecto de señal** (rojo/ámbar/verde) → `aspectoBloque`/`siguienteRojo` (absorber `signaling.rs`).
->   3. **Vía única** (testigo compartido + prioridad regional) → `regionalEntrandoPronto`, claves canónicas.
->   4. **Enclavamiento de estación** (vías, vía principal, corredores) → `interlock`/`internoRojo`/`viaPrincipal`.
->   5. **Atascos** (seguir al de delante) — emergen al frenar por señal; verificar a ×25.
->   Luego: Fase B (velocidades por física, cambiar el `TraversalModel`), Fase A (incidencias
->   probabilísticas), y frontend-reproductor (trace) + migración del optimizador.
->   Nota de rendimiento pendiente: `Segment` usa ids `String`; cambiar a índices de nodo antes de
->   Monte-Carlo masivo (plan §3.5). El retraso que hoy reporta `simulate` es un **proxy** (paridad
->   por horario, sin conflictos): algunos exprés salen "tarde" porque el tiempo nominal del cantón
->   (mín. del grafo) es mayor que su hueco — se resuelve con la física de la Fase B.
+>   `Engine` con `step`/`observe`/`run`/`metrics`, cinemática por cantón con dwell y retraso,
+>   determinista, tests. `cargo check` limpio.
+> - ✅ **Fase 1b (señalización de BLOQUES) HECHA** (`src/engine.rs`, reescrito al **modelo de bloques
+>   + `shift`** portado 1:1 de `game/web/app.js::paso()`). Verificado headless (`simulate`, jornada
+>   961 trenes): **pico retenidos 6, final 0 (recupera), retraso máx ~767 s ≈ 12,8 min** — PARIDAD
+>   con el run JS verificado en memoria (máx ~13 min, pico ~4, final 0). Incluye:
+>   1. ✅ **Ocupación de cantón** (1 tren/bloque, andén = cola del último sub-bloque, platCap) +
+>      retención sin rebote (`bloque_ocupado`/`ocupar`/`bloque_entrada`, Pass 1 + Pass 2).
+>   2. ✅ **Aspecto de señal** rojo/ámbar/verde (`aspecto_bloque`/`siguiente_rojo`/`salida_ocupada`),
+>      expuesto en `observe()` para el visor (informativo; el ROJO ya detiene vía el gating).
+>      *(No se absorbió `signaling.rs`: usa `Signals::traversal_time` que aquí no aplica; queda para
+>      la Fase B, cuando el ámbar ralentice de verdad.)*
+>   3. ✅ **Vía única** (testigo canónico compartido + liberación por apartadero `te >= llegada` +
+>      prioridad regional `regional_entrando_pronto`).
+>   5. ✅ **Atascos**: emergen solos (un tren clavado en rojo retiene a los de detrás).
+>   **CLAVE de unificación:** el motor consume el MISMO horario descompuesto por cantones atómicos
+>   que la API del juego, vía el nuevo `game::build_schedule()` (extraído de `schedule_json`) — así
+>   exprés y trenes de parada comparten cantón físico real. Sub-bloques/vía única/terminales/vías de
+>   andén se derivan de `net`+`topology` (portados `calc_sub_blocks`, `imponer_parada_minima`).
+> - ✅ **Fase B (velocidades por FÍSICA) HECHA** (`src/engine.rs` reescrito a integración CINEMÁTICA
+>   por tick; `cargo run --release -- simulate`). La velocidad la fija `min(Vmax material, Vmax vía
+>   CVM/ADIF, LTV, frenada anticipada)`; acelera a ¾ de la máxima; ámbar → −20%; **un tren nunca sale
+>   antes de su hora programada** + dwell mínimo. Reutiliza `src/calculator/` (física, material,
+>   `adif_profile`, LTV) y `processed/adif/`. Material por línea (`fleet_for_line`): R2→450; regional
+>   no R11/R3→470; R1/R3/R4→465 (Civia, **añadida** a `rolling_stock` con dato oficial); resto→447.
+>   Verificado: R16 regional a 140 km/h (su Vmax), pico retenidos 4, final 0 (recupera), retraso
+>   acumulado 22200 tren·min (baja vs Fase 1b), runtime ~12 s (más caro; deuda de claves `String`).
+>   `cargo check` limpio, `cargo test` 32/32.
+> - ✅ **Fase A (incidencias probabilísticas) HECHA en el MOTOR** (`src/engine.rs`, subcomando
+>   `simulate <seed>`). `IncidentEffect` = 2 tipos (señal en rojo 1/2 sentidos; tramo doble→vía única).
+>   `IncidentTemplate` (motivo, efecto, duración, prob. diaria, enabled) + `default_templates()`
+>   (4 plantillas razonables, eliminables). Tirada **pre-día** determinista (`roll_incidents`, RNG
+>   sembrado, sin máximo): Bernoulli(prob) → ubica ∝ **pesos espaciales** (`spatial_weights`:
+>   nudos/Barcelona, estaciones grandes, tramos frecuentados, terminales) y fecha ∝ **densidad
+>   temporal** (PERFIL, hora punta). Efectos aplicados vía `dyn_effects`/`Dyn` en la ocupación.
+>   Verificado: seed 3 → avería en Barcelona El Clot (nudo) 7–8h, +2065 PAX·min; determinista.
+>   `cargo test` 34/34. **PENDIENTE de Fase A = solo su parte de frontend** (creador + headless), en C.
+> - ✅ **Fase C (frontend, visual & headless) — SERVIDOR + CREADOR HECHOS** (verificado por API):
+>   - Servidor (`src/server.rs`): plantillas persistentes en `report/incidents.json` (se siembran los
+>     defaults si falta), `GET/POST /api/incidents/templates` (el frontend envía la lista completa al
+>     añadir/borrar/toggle), y `GET /api/simulate?seed=` que corre el motor unificado headless con las
+>     plantillas activas → JSON de métricas + incidencias del roll. **Determinista** (se ordenó
+>     `spatial_weights`; CLI y servidor coinciden).
+>   - Frontend (`game/web/`): **creador de incidencias probabilístico** (motivo/efecto/duración/prob),
+>     plantillas eliminables y toggleables; panel **"Simular sin visual (números)"**. Módulo JS aislado
+>     que solo habla con la API (no toca el motor del juego). Verificado por curl (crear→persistir→
+>     simular usa la plantilla; prob 1.0 → sale en Barcelona Sants, nudo).
+> - ✅ **FRONTEND-REPRODUCTOR HECHO** (verificado headless con Playwright): el modo visual del juego
+>   YA NO calcula física propia — **reproduce el TRACE del motor Rust**. Motor: `Engine::run_trace(dt)`
+>   graba por tren `(cantón, fracción, velocidad)` muestreado (5 s) → `Trace` (arrays de enteros,
+>   ~12 MB/jornada); endpoint `GET /api/game/trace?seed=`. Frontend (`app.js`): `cargarTrace` +
+>   `pasoRepro` reemplazan a `paso` (respaldo al motor JS si falla); `render` dibuja desde el trace y
+>   reconstruye la ocupación para colorear señales como el motor. **Verificado: trenes con velocidad
+>   variable real 0–130 km/h (30 velocidades distintas), señales coloreadas, consola limpia.** «Lo que
+>   ves = lo que se simula en masa» (mismo motor que el modo números).
+> - ✅ **MENÚ de 3 opciones** (`/`): **Información** (`/info`: cómo se calculan los tiempos por física y
+>   todas las probabilidades del modelo de incidencias) · **Modo visual** (`/game`, reproductor) ·
+>   **Varias runs solo números** (`/numeros`: corre `/api/simulate` para un rango de semillas y compara
+>   métricas). Añadidas `render_info_page`/`render_numbers_page` en `report.rs`.
+> - ✅ **"Lanzar incidencia AHORA"** (sustituye al generador de incidencias PROGRAMADAS): elige una
+>   plantilla + un **tramo** (lista de cantones con nombres acortados) y el motor **re-simula la jornada**
+>   con la incidencia inyectada desde la hora actual (`Engine::inject_incident` + params en
+>   `/api/game/trace`). Como la semilla es la misma, el trace hasta "ahora" es idéntico → reanuda sin
+>   salto. Verificado: lanzar en el tronco de BCN retiene trenes en la ventana.
+> - ✅ **PRERREQUISITO DE RENDIMIENTO HECHO** (`src/engine.rs`): claves `String`→índices `u32`. Se
+>   internan los `stop_id`→`nid` y se precalculan los **recursos de ocupación** por bloque (`res`
+>   normal + `res_single` canónico + `cap_double`); `occ` pasa de `HashMap<String,…>` a
+>   `Vec<Vec<usize>>` denso indexado por recurso (se reutiliza entre steps, cero realloc/hashing en
+>   caliente). La ruta fría (visor `observe`) resuelve por lookup en `Infra`. **Paridad EXACTA**
+>   (retard 22200 tren·min, pic 2124s, pic retinguts 4, final 0, KPI 82920) y **jornada 15175 ms →
+>   ~580 ms (~26×)**. `cargo test` 34/34. Determinismo del roll intacto (seed 3 reproduce). Deuda
+>   pendiente menor: reuso de la infra/zonas entre runs del optimizador (hoy `Engine::new` reperfila
+>   ADIF por run → ~1,4 s/run; ver abajo).
+> - ✅ **OPTIMIZADOR MIGRADO al motor unificado** (`src/optimizer/system.rs`): `optimize_system` ya
+>   conduce `engine.rs` en vez de `simulation_engine.rs`. Añadido al motor: **desfase de fase por
+>   línea** (`Engine::new(..., offsets)` desplaza `pts.a/d` por `route_short_name`), **línea temporal
+>   de retraso acumulado** (`Engine::timeline()` cada 60 s → PAX-weighted delay + pico + recuperación
+>   en `RunMetrics`) y **conflictos distintos** (`held_events`, flanco de subida de `waiting`). Cada
+>   run MC = una **semilla fija por índice** (independiente del desfase → comparación justa; los pesos
+>   espaciales/temporales del roll no dependen de la fase). `V = w_delay·PAX-weighted-delay +
+>   w_conflict·held`. **Verificado end-to-end** (CLI `optimize`): V 2735→2174 (−20,5%), pico 4282→4011 s,
+>   retenciones 359→269; 953 trenes, 201×8 = 1608 runs en 414 s; CSV+PDF exportados. `adif`/`ltv` se
+>   cargan en `main`/`server` y se pasan al optimizador. `PotentialWeights::factor` ahora `pub` +
+>   `weighted_delay_from_timeline`. Retirados los campos legado `min_block_headway`/`incidents_per_run`
+>   de `SystemSearch`. `search.rs` (modo `optimize-line`) sigue en el motor antiguo (se migrará al final).
+> - ✅ **MIGRACIÓN A RUST CERRADA** (2026-09-15). El motor unificado `engine.rs` es la ÚNICA fuente
+>   de verdad de la física para TODOS los consumidores:
+>   1. ✅ **Dashboard `/panel`** (`scenario::sim_view`/`res_view`) migrado a `engine.rs`: reshape de
+>      `SimView`/`ResView` (línea temporal `(u32,f64)` del motor, `held_events`, pico, recuperación),
+>      se quitó el log CTC y las métricas que el motor no produce; los knobs de capacidad/headway/
+>      demanda se retiraron (el motor los DERIVA de ADIF + perfil). `Engine::new` toma `line_filter`.
+>      Verificado en vivo (curl): `/panel` 200, `/api/render` da métricas del motor.
+>   2. ✅ **`optimize-line` RETIRADO** (`search.rs` borrado): el optimizador de sistema (per-línea,
+>      todas a la vez) lo subsume. Limpiado `potential.rs` (fuera `potential`/`regularity_cost`/
+>      `passenger_weighted_delay`/`w_regularity`), `exporter.rs` y el CLI.
+>   3. ✅ **`simulation_engine.rs` + `signaling.rs` + `passenger_model.rs` BORRADOS** (sin
+>      consumidores). También `TrackEdge.capacity` (solo lo leía el motor viejo). `cargo check`
+>      LIMPIO, `cargo test` 28/28.
+>   4. ✅ **Motor JS del juego RETIRADO** (`app.js`): el reproductor del trace es el ÚNICO motor
+>      visual; borrado el stepper `paso`/`bloqueEntrada`/`ocuparBloque` y el respaldo de `render`.
+>      Verificado con Playwright: `/game` reproduce el trace a ×25 (reloj 05:00→05:58, 20 trenes
+>      dibujados / 40 activos), consola limpia (solo favicon 404 preexistente).
+> - ⏭️ **ÚNICO PENDIENTE (perf, no bloqueante):** reusar infra/zonas entre runs del optimizador/panel
+>   (plantilla inmutable + instancia barata) para no reperfilar ADIF cada `Engine::new` (~1,4 s/run;
+>   optimizador 414 s → ~120 s estimado; el panel `res_view` reconstruye 4 motores por request).
+> - ⏭️ **Pendientes menores previos:** **enclavamiento de estación** (`internoRojo`/corredores, inerte
+>   en lote); **deuda de rendimiento** (claves `String`→índices `u32`, jornada ~12 s) antes del MC masivo;
+>   **interactividad avanzada** (forzar señal manual en el reproductor = re-simular); trace más ligero
+>   (submuestreo adaptativo) y KPI/retraso reales en el visor (hoy el trace no lleva retraso por tren).
+>   Luego: **Fase B** (velocidades por física: reescribir los tiempos de `pts` con `calculator/`
+>   antes de construir la secuencia), **Fase A** (incidencias probabilísticas: `inject`+taxonomía),
+>   frontend-reproductor (trace de `observe()`) y migración del optimizador.
+>   **Deuda de rendimiento (plan §3.5):** las claves de bloque/recurso se construyen como `String`
+>   en el bucle caliente (`key`/`canon`/`sb_res`) → jornada en ~4,1 s a dt=2 s. Internar `stop_id`
+>   a índices `u32` ANTES del Monte-Carlo masivo. También falta el `dispersarFlota`/`encadenarFlota`
+>   del juego (reparto inicial de material), que aquí no se modela (todos salen a su hora GTFS).
 
 ## 1. Objetivo y principio rector
 

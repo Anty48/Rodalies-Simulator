@@ -3,7 +3,6 @@
 //! el archivo se puede abrir con doble clic y funciona sin conexión.
 
 use crate::gtfs_loader::fmt_hms;
-use crate::simulation_engine::{CtcEvent, Sample};
 
 // --------------------------------------------------------------------------
 // Vistas (datos ya calculados que alimentan el HTML)
@@ -46,16 +45,13 @@ pub struct SimView {
     pub key_stations: Vec<String>,
     pub busiest: Option<(String, String, usize)>,
     pub incidents: Vec<String>,
-    pub events: Vec<CtcEvent>,
     pub trains_run: usize,
-    pub arrivals: usize,
     pub held: usize,
     pub peak_total: i64,
     pub peak_time: String,
-    pub peak_delayed: usize,
-    pub peak_mean: f64,
     pub recovery: Option<String>,
-    pub timeline: Vec<Sample>,
+    /// Línea temporal del retraso acumulado de la red (`(instante_s, retraso_total_s)`) del motor.
+    pub timeline: Vec<(u32, f64)>,
     /// SVG del mapa geográfico de la red con trenes animados.
     pub map_svg: String,
 }
@@ -63,7 +59,6 @@ pub struct SimView {
 pub struct ResRow {
     pub mins: u32,
     pub peak: i64,
-    pub delayed: usize,
     pub recovery: Option<u32>,
     pub held: usize,
 }
@@ -92,8 +87,9 @@ fn run_txt(secs: u32) -> String {
     }
 }
 
-/// Gráfico de área SVG del retraso acumulado de la red a lo largo del tiempo.
-fn timeline_svg(timeline: &[Sample]) -> String {
+/// Gráfico de área SVG del retraso acumulado de la red a lo largo del tiempo. `timeline` =
+/// `(instante_s, retraso_total_s)` muestreado por el motor unificado (`Engine::timeline`).
+fn timeline_svg(timeline: &[(u32, f64)]) -> String {
     if timeline.is_empty() {
         return "<p class=\"muted\">Sin datos de serie temporal.</p>".into();
     }
@@ -106,21 +102,16 @@ fn timeline_svg(timeline: &[Sample]) -> String {
     let plot_w = w - pad_l - pad_r;
     let plot_h = h - pad_t - pad_b;
 
-    let max_d = timeline
-        .iter()
-        .map(|s| s.total_delay)
-        .max()
-        .unwrap_or(1)
-        .max(1) as f64;
+    let max_d = timeline.iter().map(|s| s.1).fold(1.0_f64, f64::max);
     let n = timeline.len();
     let x = |i: usize| pad_l + plot_w * (i as f64) / ((n - 1).max(1) as f64);
-    let y = |d: i64| pad_t + plot_h * (1.0 - (d as f64 / max_d));
+    let y = |d: f64| pad_t + plot_h * (1.0 - (d / max_d));
 
     // Área.
     let mut area = String::new();
-    area.push_str(&format!("M {:.1} {:.1}", x(0), y(timeline[0].total_delay)));
+    area.push_str(&format!("M {:.1} {:.1}", x(0), y(timeline[0].1)));
     for (i, s) in timeline.iter().enumerate().skip(1) {
-        area.push_str(&format!(" L {:.1} {:.1}", x(i), y(s.total_delay)));
+        area.push_str(&format!(" L {:.1} {:.1}", x(i), y(s.1)));
     }
     let line_path = area.clone();
     area.push_str(&format!(
@@ -161,7 +152,7 @@ fn timeline_svg(timeline: &[Sample]) -> String {
             "<text x=\"{:.1}\" y=\"{:.1}\" class=\"axis\" text-anchor=\"middle\">{}</text>",
             xx,
             h - 14.0,
-            &fmt_hms(timeline[i].time)[..5]
+            &fmt_hms(timeline[i].0)[..5]
         ));
         i += step;
     }
@@ -197,8 +188,6 @@ pub struct Controls {
     pub line: Option<String>,
     pub block: u32,
     pub delay: u32,
-    pub cap: u32,
-    pub headway: u32,
     pub random: bool,
 }
 
@@ -419,8 +408,7 @@ function qs(){
   const p=new URLSearchParams();
   p.set('start_h',$('c_start').value); p.set('dur_h',$('c_dur').value);
   p.set('line',$('c_line').value); p.set('block',$('c_block').value);
-  p.set('delay',$('c_delay').value); p.set('cap',$('c_cap').value);
-  p.set('headway',$('c_headway').value); p.set('random',$('c_random').checked?'1':'0');
+  p.set('delay',$('c_delay').value); p.set('random',$('c_random').checked?'1':'0');
   return p.toString();
 }
 async function simulate(){
@@ -764,23 +752,18 @@ fn controls_html(lines: &[String], c: &Controls) -> String {
         <select id="c_line">{opts}</select></div>
       <div class="field"><label>Bloqueo cantón <b id="o_block">{block}</b> min</label>
         <input type="range" id="c_block" min="0" max="20" step="1" value="{block}" data-out="o_block"></div>
-      <div class="field"><label>Retraso tren <b id="o_delay">{delay}</b> min</label>
+      <div class="field"><label>Avería señal <b id="o_delay">{delay}</b> min</label>
         <input type="range" id="c_delay" min="0" max="15" step="1" value="{delay}" data-out="o_delay"></div>
-      <div class="field"><label>Vías/andén <b id="o_cap">{cap}</b></label>
-        <input type="range" id="c_cap" min="1" max="8" step="1" value="{cap}" data-out="o_cap"></div>
-      <div class="field"><label>Sep. mín. bloque <b id="o_headway">{headway}</b> s</label>
-        <input type="range" id="c_headway" min="60" max="300" step="30" value="{headway}" data-out="o_headway"></div>
-      <div class="field"><label class="chk"><input type="checkbox" id="c_random"{chk}> Pasajeros estocásticos</label></div>
+      <div class="field"><label class="chk"><input type="checkbox" id="c_random"{chk}> Incidencias probabilísticas</label></div>
       <div class="field"><button class="btn" id="c_run">Simular</button></div>
     </div>
+    <p class="muted" style="margin-top:8px;font-size:11px">Vías/andén, separación de bloque y demanda los DERIVA el motor unificado de datos reales (ADIF + perfil de demanda); no son ajustables.</p>
   </div>"#,
         start = c.start_h,
         dur = c.dur_h,
         opts = opts,
         block = c.block,
         delay = c.delay,
-        cap = c.cap,
-        headway = c.headway,
         chk = chk,
     )
 }
@@ -912,14 +895,24 @@ pub fn render_menu_page() -> String {
 
     <div class="hero">
       <a class="hero-card" id="playCard" href="/game">
-        <span class="hero-badge">Simulador</span>
-        <h2>Simulador de red</h2>
-        <p>Pon en marcha toda la red de Rodalies sobre el mapa satélite: trenes circulando por su ruta real siguiendo el horario, señalización de bloque, vía única, generador de incidencias y KPI de retraso acumulado. La pieza central.</p>
-        <span class="hero-cta">Lanzar simulador →</span>
+        <span class="hero-badge">Modo visual</span>
+        <h2>Simulador de red (visual)</h2>
+        <p>Toda la red de Rodalies sobre el mapa satélite, <b>reproduciendo el motor unificado</b>: los trenes aceleran y frenan de verdad (Vmax de vía CVM/ADIF + LTV + física del material real), con señalización de bloque, vía única e incidencias. La pieza central.</p>
+        <span class="hero-cta">Lanzar modo visual →</span>
       </a>
     </div>
 
     <div class="tiles">
+      <a class="tile" href="/info">
+        <div class="tile-ic">ℹ️</div>
+        <h3>Información</h3>
+        <p>Cómo se calculan los tiempos entre estaciones (física del material + Vmax de vía + LTV) y todas las probabilidades del modelo de incidencias (dónde y cuándo aparecen).</p>
+      </a>
+      <a class="tile" href="/numeros">
+        <div class="tile-ic">⚡</div>
+        <h3>Varias runs (solo números)</h3>
+        <p>Corre el motor headless muchas veces (varias semillas) sin dibujar nada y compara solo las métricas: retraso, retenidos, PAX·min e incidencias del día. Mismo motor que el visual.</p>
+      </a>
       <a class="tile" href="/panel#calc">
         <div class="tile-ic">📐</div>
         <h3>Calcular tramos</h3>
@@ -939,6 +932,124 @@ pub fn render_menu_page() -> String {
         modal = settings_modal(),
     );
     document(&head, &body)
+}
+
+/// Página de INFORMACIÓN: cómo se calculan los tiempos entre estaciones (física) y todas las
+/// probabilidades del modelo de incidencias. Documenta el modelo real del motor unificado.
+pub fn render_info_page() -> String {
+    let head = format!("<title>Rodalies Simulator · Información</title>\n{STYLE}");
+    let body = r#"<style>
+.info-card{max-width:840px;margin:14px auto;text-align:left;line-height:1.55}
+.info-card h2{margin:.2em 0 .5em;font-size:18px}
+.info-card pre{background:rgba(255,255,255,.06);padding:8px 10px;border-radius:8px;overflow-x:auto;font-size:12.5px;white-space:pre-wrap}
+.info-card ul{margin:.3em 0 .6em 1.1em}
+.info-card li{margin:.2em 0}
+</style>
+<div class="menu-wrap">
+    <div class="panel-bar"><a class="back-link" href="/">← Menú</a></div>
+    <div class="menu-top"><div class="menu-brand"><div class="logo">R</div><div>
+      <h1>Información del modelo</h1>
+      <div class="sub">Cómo el motor unificado calcula los tiempos entre estaciones y las probabilidades de las incidencias.</div>
+    </div></div></div>
+
+    <section class="card info-card">
+      <h2>⏱️ Tiempos entre estaciones — por FÍSICA, no por horario</h2>
+      <p>El motor <b>no</b> aplica un tiempo fijo por tramo: integra el movimiento tren a tren, cada fracción de segundo. La velocidad en cada punto es</p>
+      <pre>v_permitida = mín( Vmax del material , Vmax de vía (CVM/ADIF) , LTV , frenada anticipada )</pre>
+      <ul>
+        <li><b>Vmax del material</b> — serie real asignada a cada línea:
+          <ul>
+            <li><b>R2 / R2N / R2S → serie 450</b> (doble piso, 140 km/h)</li>
+            <li><b>Regionales (no R11 ni R3) → serie 470</b> (140 km/h)</li>
+            <li><b>R1 / R3 / R4 → serie 465</b> (Civia, 120 km/h)</li>
+            <li><b>Resto (R7, R8, R11, R12…) → serie 447</b> (120 km/h)</li>
+          </ul>
+        </li>
+        <li><b>Vmax de vía</b> — velocidad de diseño oficial de ADIF (CVM/RFIG) proyectada a cada cantón.</li>
+        <li><b>LTV</b> — limitaciones temporales de velocidad de ADIF, superpuestas donde aplican.</li>
+        <li><b>Frenada anticipada</b> — el tren empieza a frenar con antelación para parar en la estación o ante una señal en rojo.</li>
+      </ul>
+      <p><b>Conducción:</b> el maquinista acelera a <b>¾ de la aceleración máxima</b> (no todos van a tope) y siempre intenta ir a la máxima permitida. Ante una señal en <b>ámbar</b> reduce un <b>20%</b> para poder detenerse si la siguiente sigue en rojo.</p>
+      <p><b>El horario es un OBJETIVO, no una imposición de velocidad:</b> un tren <b>nunca sale de una estación antes de su hora programada</b> de salida, y respeta la <b>parada mínima</b> (20–60 s según la densidad de servicio de la estación). Si la física o la congestión lo retrasan, el retraso se propaga — como en la realidad.</p>
+    </section>
+
+    <section class="card info-card">
+      <h2>⚠️ Incidencias — probabilidades del modelo</h2>
+      <p>Toda incidencia es de <b>dos tipos</b>: una <b>señal en rojo</b> sin tren delante (en un sentido o en ambos), o un <b>tramo de vía doble que pasa a vía única</b>. Cada plantilla que creas tiene un <b>motivo</b>, un <b>efecto</b>, una <b>duración</b> y una <b>probabilidad diaria</b>.</p>
+      <p><b>Antes de empezar el día</b>, el motor "tira los dados" (reproducible con la <b>semilla</b>): para cada plantilla activa saca un número y, con su probabilidad diaria, decide si aparece. No hay máximo de incidencias.</p>
+      <p>Si aparece, se decide <b>dónde</b> y <b>cuándo</b> con distribuciones iguales para todos los tipos:</p>
+      <ul>
+        <li><b>Dónde (distribución espacial):</b> más probable en <b>nudos (Barcelona)</b>, <b>estaciones grandes</b>, <b>tramos más frecuentados</b> y <b>terminales</b>. Peso por cantón:
+          <pre>peso = (1 + vías_norm) · (1 + frecuencia_norm) · (1 + terminal) · (1 + nudo_BCN)</pre>
+          donde <i>vías</i> = nº de vías de andén, <i>frecuencia</i> = nº de servicios que pasan, <i>terminal</i> = extremo de línea, <i>nudo_BCN</i> = estación de Barcelona.</li>
+        <li><b>Cuándo (distribución temporal):</b> más probable en <b>hora punta</b> que en horas valle o primera/última hora (sigue el perfil de demanda del día).</li>
+      </ul>
+      <p>El creador de incidencias (plantillas eliminables y activables) está en el panel <b>INCID.</b> del modo visual y se comparte con el modo de números.</p>
+    </section>
+  </div>"#;
+    document(&head, body)
+}
+
+/// Página del modo "VARIAS RUNS (solo números)": corre el motor headless para varias semillas y
+/// compara las métricas. Otra ventana/modo aparte del visual (mismo motor).
+pub fn render_numbers_page() -> String {
+    let head = format!("<title>Rodalies Simulator · Varias runs (números)</title>\n{STYLE}");
+    let body = r##"<style>
+.info-card{max-width:920px;margin:14px auto;text-align:left}
+.num-tbl{width:100%;border-collapse:collapse;margin-top:12px;font-size:13px}
+.num-tbl th,.num-tbl td{border-bottom:1px solid rgba(255,255,255,.1);padding:6px 8px;text-align:right}
+.num-tbl th{opacity:.7;font-weight:600}
+.num-tbl td:last-child,.num-tbl th:last-child{text-align:left}
+.info-card label{font-size:13px;display:inline-flex;flex-direction:column;gap:3px;opacity:.85}
+.info-card input{background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.15);border-radius:7px;padding:5px 7px;color:inherit;font:inherit}
+</style>
+<div class="menu-wrap">
+    <div class="panel-bar"><a class="back-link" href="/">← Menú</a></div>
+    <div class="menu-top"><div class="menu-brand"><div class="logo">R</div><div>
+      <h1>Varias runs · solo motor y números</h1>
+      <div class="sub">Corre el motor unificado headless (física + incidencias) para un rango de semillas y compara métricas. Sin dibujar nada — el mismo motor que el modo visual.</div>
+    </div></div></div>
+
+    <section class="card info-card">
+      <div style="display:flex;gap:12px;align-items:end;flex-wrap:wrap">
+        <label>Semillas (desde) <input type="number" id="s0" value="1" min="0" style="width:90px"></label>
+        <label>Semillas (hasta) <input type="number" id="s1" value="8" min="0" style="width:90px"></label>
+        <button class="hero-cta" id="runBtn" style="cursor:pointer;border:none">▶ Ejecutar runs</button>
+        <span id="prog" style="opacity:.7"></span>
+      </div>
+      <p class="sub" style="margin-top:6px">Cada run simula la jornada completa (~961 trenes); tarda unos segundos. Se ejecutan una a una.</p>
+      <table class="num-tbl" id="tbl">
+        <thead><tr><th>Semilla</th><th>Trenes</th><th>Retraso máx (min)</th><th>Pico retenidos</th><th>Final retenidos</th><th>PAX·min</th><th>Incidencias</th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </section>
+  </div>
+  <script>
+  (function(){
+    const $=id=>document.getElementById(id);
+    const EFF={red_one:"roja 1 sentido",red_both:"roja 2 sentidos",single:"vía única"};
+    $("runBtn").onclick=async()=>{
+      const a=+$("s0").value||0, b=+$("s1").value||0;
+      const tb=$("tbl").querySelector("tbody"); tb.innerHTML="";
+      $("runBtn").disabled=true;
+      for(let s=a;s<=b;s++){
+        $("prog").textContent="Ejecutando semilla "+s+"…";
+        try{
+          const r=await (await fetch("/api/simulate?seed="+s)).json();
+          const inc=(r.incidents||[]).map(i=>`${i.motivo} (${EFF[i.effect]||i.effect}) ${Math.floor(i.t0/3600)}h`).join("; ")||"—";
+          const tr=document.createElement("tr");
+          tr.innerHTML=`<td>${s}</td><td>${r.n_trains}</td><td>${r.max_delay_min.toFixed(0)}</td><td>${r.peak_waiting}</td><td>${r.final_waiting}</td><td>${Math.round(r.pax_min).toLocaleString()}</td><td style="text-align:left">${inc}</td>`;
+          tb.appendChild(tr);
+        }catch(e){
+          const tr=document.createElement("tr"); tr.innerHTML=`<td>${s}</td><td colspan="6">error</td>`; tb.appendChild(tr);
+        }
+      }
+      $("prog").textContent="Hecho.";
+      $("runBtn").disabled=false;
+    };
+  })();
+  </script>"##;
+    document(&head, body)
 }
 
 /// Página interactiva (servida por el servidor web): cabecera + controles +
@@ -1061,42 +1172,13 @@ pub fn render_body(
         inc_html = "<li class=\"muted\">Ninguna incidencia inyectada.</li>".into();
     }
 
-    // --- Log CTC ---
-    let mut log_html = String::new();
-    for e in &sim.events {
-        let (cls, badge) = if e.kind == "INCIDENCIA" {
-            ("ev-inc", "!")
-        } else if e.kind == "LLEGADA" {
-            ("ev-arr", "▼")
-        } else if e.kind.starts_with("SALIDA") {
-            ("ev-dep", "▲")
-        } else {
-            ("", "·")
-        };
-        let late = if e.delay >= 120 { " late" } else if e.delay > 0 { " warn" } else { "" };
-        if e.kind == "INCIDENCIA" {
-            log_html.push_str(&format!(
-                "<div class=\"ev {cls}\"><span class=\"ev-badge\">{badge}</span><span class=\"ev-txt\">{}</span></div>",
-                esc(&e.station)
-            ));
-        } else {
-            log_html.push_str(&format!(
-                "<div class=\"ev {cls}{late}\"><span class=\"ev-time mono\">{}</span><span class=\"ev-badge\">{badge}</span><span class=\"ev-kind\">{}</span><span class=\"ev-train\">{} <em>{}</em></span><span class=\"ev-sta\">{}</span><span class=\"ev-track mono\">via {}</span><span class=\"ev-delay mono\">{:+} s</span></div>",
-                fmt_hms(e.time), esc(&e.kind), esc(&e.train), esc(&e.line), esc(&e.station), esc(&e.track), e.delay
-            ));
-        }
-    }
-
-    // --- Mètriques ---
+    // --- Mètriques (del motor unificat) ---
     let recovery = sim.recovery.clone().unwrap_or_else(|| "no alcanzado".into());
     let metrics = [
-        ("Trenes en la ventana", format!("{}", sim.trains_run)),
-        ("Llegadas procesadas", format!("{}", sim.arrivals)),
-        ("Retenciones (señalización)", format!("{}", sim.held)),
+        ("Trenes simulados", format!("{}", sim.trains_run)),
+        ("Retenciones (conflictos)", format!("{}", sim.held)),
         ("Pico de retraso acumulado", format!("{} s", sim.peak_total)),
         ("Hora del pico", sim.peak_time.clone()),
-        ("Máx. trenes retrasados a la vez", format!("{}", sim.peak_delayed)),
-        ("Retraso medio/tren en el pico", format!("{:.0} s", sim.peak_mean)),
         ("Retorno al equilibrio", recovery),
     ];
     let mut metrics_html = String::new();
@@ -1117,8 +1199,8 @@ pub fn render_body(
         };
         let pct = (r.peak as f64 / max_peak) * 100.0;
         res_rows.push_str(&format!(
-            "<tr><td class=\"mono\">+{} min</td><td class=\"num\">{}</td><td><span class=\"bar-track sm\"><span class=\"bar-fill\" style=\"width:{:.1}%\"></span></span></td><td class=\"num\">{}</td><td>{}</td><td class=\"num\">{}</td></tr>",
-            r.mins, r.peak, pct, r.delayed, esc(&recov), r.held
+            "<tr><td class=\"mono\">+{} min</td><td class=\"num\">{}</td><td><span class=\"bar-track sm\"><span class=\"bar-fill\" style=\"width:{:.1}%\"></span></span></td><td>{}</td><td class=\"num\">{}</td></tr>",
+            r.mins, r.peak, pct, esc(&recov), r.held
         ));
     }
 
@@ -1166,15 +1248,10 @@ pub fn render_body(
   </section>
 
   <section class="card">
-    <h2>Registro CTC · entradas/salidas en tramos clave</h2>
-    <div class="log">{log_html}</div>
-  </section>
-
-  <section class="card">
     <h2>Análisis de resiliencia</h2>
-    <p class="muted">Escenario: bloqueo del cantón {segment}. Cada fila es una duración de bloqueo (Monte Carlo, rayon).</p>
+    <p class="muted">Escenario: bloqueo del cantón {segment}. Cada fila es una duración de bloqueo (Monte Carlo, rayon · motor unificado).</p>
     <div class="scroll"><table>
-      <thead><tr><th>bloqueo</th><th>pico acumulado</th><th></th><th>trenes ret.</th><th>recuperación</th><th>retenciones</th></tr></thead>
+      <thead><tr><th>bloqueo</th><th>pico acumulado</th><th></th><th>recuperación</th><th>conflictos</th></tr></thead>
       <tbody>{res_rows}</tbody>
     </table></div>
   </section>
@@ -1196,7 +1273,6 @@ pub fn render_body(
         inc_html = inc_html,
         map_svg = sim.map_svg,
         chart = chart,
-        log_html = log_html,
         segment = esc(&res.segment),
         res_rows = res_rows,
         example_html = example_html,

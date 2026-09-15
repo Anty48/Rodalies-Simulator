@@ -4,23 +4,26 @@
 
 use rayon::prelude::*;
 
+use crate::calculator::infrastructure::AdifNet;
+use crate::calculator::ltv::LtvSet;
+use crate::engine::{default_templates, Engine, EngineCfg, IncidentEffect};
 use crate::gtfs_loader::{fmt_hms, Network};
-use crate::passenger_model::PassengerModel;
 use crate::report::{ExampleView, ResRow, ResView, SimView, StopRow, SummaryView};
-use crate::simulation_engine::{key_station_names, Incident, SimConfig, Simulator};
 
-/// Parámetros ajustables desde la UI.
+/// Parámetros ajustables desde la UI del panel (`/panel`). Los antiguos knobs de capacidad de
+/// andén / headway / tasa de llegada se retiraron al migrar al **motor unificado** (`engine.rs`),
+/// que los DERIVA de datos reales (topología ADIF + perfil de demanda) — no son ajustables.
 #[derive(Debug, Clone)]
 pub struct SimParams {
     pub start_sec: u32,
     pub end_sec: u32,
     /// `None` = todas las líneas.
     pub line: Option<String>,
+    /// Minutos de bloqueo del cantón más cargado (señal en rojo, ambos sentidos). 0 = sin bloqueo.
     pub block_min: u32,
+    /// Minutos de avería de señal (un sentido) en el cantón más cargado. 0 = sin avería.
     pub delay_min: u32,
-    pub platform_capacity: u32,
-    pub min_block_headway: u32,
-    pub base_arrival_rate: f64,
+    /// `true` = añade además las incidencias probabilísticas del sistema (por plantilla).
     pub random: bool,
 }
 
@@ -32,9 +35,6 @@ impl Default for SimParams {
             line: None,
             block_min: 12,
             delay_min: 8,
-            platform_capacity: 4,
-            min_block_headway: 120,
-            base_arrival_rate: 4.0,
             random: false,
         }
     }
@@ -188,47 +188,44 @@ pub fn example_view(net: &Network, wanted: &str, line: Option<&str>) -> Option<E
     })
 }
 
-fn cfg_from(p: &SimParams) -> SimConfig {
-    let mut cfg = SimConfig::default();
+/// Estaciones-nudo clave de la red (para los chips del panel), por coincidencia de nombre.
+fn key_station_list(net: &Network) -> Vec<String> {
+    const PATS: &[&str] = &[
+        "barcelona-sants", "passeig de gràcia", "el clot", "arc de triomf",
+        "plaça de catalunya", "barcelona nord", "l'hospitalet",
+    ];
+    let mut set: std::collections::BTreeSet<String> = Default::default();
+    for n in net.graph.node_weights() {
+        let name = net.stop_name(&n.stop_id);
+        let lname = name.to_lowercase();
+        if PATS.iter().any(|p| lname.contains(p)) {
+            set.insert(name.to_string());
+        }
+    }
+    set.into_iter().collect()
+}
+
+/// Configura el motor unificado para el panel (ventana + filtro de línea + semilla). `random`
+/// añade las incidencias probabilísticas del sistema; si no, solo se aplican las inyectadas.
+fn engine_for(
+    net: &Network,
+    adif: Option<&AdifNet>,
+    ltv: Option<&LtvSet>,
+    p: &SimParams,
+    seed: u64,
+) -> Engine {
+    let mut cfg = EngineCfg::day();
     cfg.start_sec = p.start_sec;
     cfg.end_sec = p.end_sec;
-    cfg.platform_capacity = p.platform_capacity.max(1);
-    cfg.min_block_headway_secs = p.min_block_headway.max(30);
-    cfg.line_filter = p.line.clone();
-    cfg.passenger = PassengerModel {
-        base_arrival_rate: p.base_arrival_rate,
-        ..PassengerModel::default()
-    };
-    cfg
+    cfg.seed = seed;
+    let templates = if p.random { default_templates() } else { Vec::new() };
+    Engine::new(net, cfg, adif, ltv, &templates, None, p.line.as_deref())
 }
 
-fn first_train_through(
-    net: &Network,
-    service_id: &str,
-    p: &SimParams,
-    needle: &str,
-) -> Option<String> {
-    net.services
-        .iter()
-        .filter(|s| s.service_id == service_id)
-        .filter(|s| p.line.as_ref().map_or(true, |l| &s.route_short_name == l))
-        .filter(|s| matches!(s.first_time(), Some(t) if t >= p.start_sec && t <= p.end_sec))
-        .find(|s| {
-            s.schedule
-                .iter()
-                .any(|st| net.stop_name(&st.stop_id).to_lowercase().contains(needle))
-        })
-        .map(|s| s.train_number.clone())
-}
-
-pub fn sim_view(net: &Network, p: &SimParams) -> SimView {
+pub fn sim_view(net: &Network, adif: Option<&AdifNet>, ltv: Option<&LtvSet>, p: &SimParams) -> SimView {
     let service_id = net.dominant_service().unwrap_or_default();
     let window = format!("{}–{}", fmt_hms(p.start_sec), fmt_hms(p.end_sec));
-
-    let key_cfg = SimConfig::default();
-    let mut key_stations: Vec<String> =
-        key_station_names(net, &key_cfg.key_stations).into_iter().collect();
-    key_stations.sort();
+    let key_stations = key_station_list(net);
 
     let busiest_ids =
         net.busiest_segment_filtered(&service_id, p.start_sec, p.end_sec, p.line.as_deref());
@@ -236,39 +233,48 @@ pub fn sim_view(net: &Network, p: &SimParams) -> SimView {
         .as_ref()
         .map(|(f, t, c)| (net.stop_name(f).to_string(), net.stop_name(t).to_string(), *c));
 
-    let mut cfg = cfg_from(p);
-    cfg.seed = if p.random { Some(42) } else { None };
-    let mut sim = Simulator::new(net, cfg);
+    let mut eng = engine_for(net, adif, ltv, p, 42);
 
-    if p.block_min > 0 {
-        if let Some((from, to, _)) = &busiest_ids {
-            sim.add_incident(Incident::BlockSegmentById {
-                from_stop_id: from.clone(),
-                to_stop_id: to.clone(),
-                from_sec: p.start_sec + 20 * 60,
-                dur_secs: p.block_min * 60,
-            });
+    // Incidencias inyectadas según los knobs del panel, sobre el cantón más cargado.
+    if let Some((from, to, _)) = &busiest_ids {
+        if p.block_min > 0 {
+            eng.inject_incident(
+                from.clone(), to.clone(),
+                IncidentEffect::RedSignal { both: true },
+                (p.start_sec + 20 * 60) as f64, p.block_min as f64,
+                "Bloqueig de cantó (2 sentits)".into(),
+            );
         }
-    }
-    if p.delay_min > 0 {
-        if let Some(tn) = first_train_through(net, &service_id, p, "clot") {
-            sim.add_incident(Incident::TrainDelay {
-                train_number: tn,
-                at_stop_name: "Clot".into(),
-                extra_secs: p.delay_min * 60,
-            });
+        if p.delay_min > 0 {
+            eng.inject_incident(
+                from.clone(), to.clone(),
+                IncidentEffect::RedSignal { both: false },
+                (p.start_sec + 10 * 60) as f64, p.delay_min as f64,
+                "Avaria de senyalització (1 sentit)".into(),
+            );
         }
     }
 
-    let res = sim.run(&service_id);
-    let peak_mean = res
-        .timeline
+    // Descripción legible de todas las incidencias vigentes (inyectadas + rodadas si `random`).
+    let incidents: Vec<String> = eng
+        .incidents()
         .iter()
-        .find(|s| s.time == res.peak_time)
-        .map(|s| s.mean_active)
-        .unwrap_or(0.0);
-    let recovery = res.recovery_time.map(|t| {
-        format!("{} (+{} min del pic)", fmt_hms(t), (t.saturating_sub(res.peak_time)) / 60)
+        .map(|inc| {
+            format!(
+                "{} · {} → {} · {}–{}",
+                inc.motivo,
+                net.stop_name(&inc.from),
+                net.stop_name(&inc.to),
+                fmt_hms(inc.t0 as u32),
+                fmt_hms(inc.t1 as u32),
+            )
+        })
+        .collect();
+
+    let m = eng.run();
+    let timeline = eng.timeline().to_vec();
+    let recovery = m.recovery_time.map(|t| {
+        format!("{} (+{} min del pic)", fmt_hms(t), t.saturating_sub(m.peak_time) / 60)
     });
 
     SimView {
@@ -276,22 +282,18 @@ pub fn sim_view(net: &Network, p: &SimParams) -> SimView {
         service_id,
         key_stations,
         busiest,
-        incidents: res.incidents.clone(),
-        events: res.events.clone(),
-        trains_run: res.trains_run,
-        arrivals: res.total_arrivals,
-        held: res.held_events,
-        peak_total: res.peak_total_delay,
-        peak_time: fmt_hms(res.peak_time),
-        peak_delayed: res.peak_delayed,
-        peak_mean,
+        incidents,
+        trains_run: m.n_trains,
+        held: m.held_events as usize,
+        peak_total: m.peak_total_delay_s as i64,
+        peak_time: fmt_hms(m.peak_time),
         recovery,
-        timeline: res.timeline.clone(),
+        timeline,
         map_svg: crate::map::network_map_svg(net, p),
     }
 }
 
-pub fn res_view(net: &Network, p: &SimParams) -> ResView {
+pub fn res_view(net: &Network, adif: Option<&AdifNet>, ltv: Option<&LtvSet>, p: &SimParams) -> ResView {
     let service_id = net.dominant_service().unwrap_or_default();
     let Some((from, to, _)) =
         net.busiest_segment_filtered(&service_id, p.start_sec, p.end_sec, p.line.as_deref())
@@ -305,29 +307,27 @@ pub fn res_view(net: &Network, p: &SimParams) -> ResView {
         fmt_hms(p.start_sec + 20 * 60)
     );
 
-    let durations: Vec<u32> = vec![0, 3, 6, 9, 12, 18];
+    // Barrido de duraciones de bloqueo (Monte-Carlo por escenario, en paralelo con rayon).
+    // Cada fila reconstruye el motor unificado (reperfila ADIF) → pocas duraciones para la UI.
+    let durations: [u32; 4] = [0, 4, 8, 12];
     let mut rows: Vec<ResRow> = durations
         .par_iter()
         .map(|&mins| {
-            let mut cfg = cfg_from(p);
-            cfg.passenger.base_arrival_rate = p.base_arrival_rate + 0.5; // més estrès
-            cfg.seed = Some(1000 + mins as u64); // Monte Carlo per escenari
-            let mut sim = Simulator::new(net, cfg);
+            let mut eng = engine_for(net, adif, ltv, p, 1000 + mins as u64);
             if mins > 0 {
-                sim.add_incident(Incident::BlockSegmentById {
-                    from_stop_id: from.clone(),
-                    to_stop_id: to.clone(),
-                    from_sec: p.start_sec + 20 * 60,
-                    dur_secs: mins * 60,
-                });
+                eng.inject_incident(
+                    from.clone(), to.clone(),
+                    IncidentEffect::RedSignal { both: true },
+                    (p.start_sec + 20 * 60) as f64, mins as f64,
+                    "Bloqueig de cantó".into(),
+                );
             }
-            let r = sim.run(&service_id);
+            let r = eng.run();
             ResRow {
                 mins,
-                peak: r.peak_total_delay,
-                delayed: r.peak_delayed,
-                recovery: r.recovery_time.map(|t| (t.saturating_sub(r.peak_time)) / 60),
-                held: r.held_events,
+                peak: r.peak_total_delay_s as i64,
+                recovery: r.recovery_time.map(|t| t.saturating_sub(r.peak_time) / 60),
+                held: r.held_events as usize,
             }
         })
         .collect();

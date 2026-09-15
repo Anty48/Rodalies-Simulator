@@ -486,29 +486,29 @@ pub fn network_json(net: &Network, lines: &[String], generated_at: &str) -> Stri
 // Horarios para el juego: GTFS «tal cual» u optimizados
 // --------------------------------------------------------------------------
 
-#[derive(Serialize)]
-struct GameStop {
+#[derive(Serialize, Clone)]
+pub struct GameStop {
     /// stop_id.
-    s: String,
+    pub s: String,
     /// Llegada (segundos desde medianoche).
-    a: u32,
+    pub a: u32,
     /// Salida (segundos desde medianoche).
-    d: u32,
+    pub d: u32,
     /// `true` = punto de paso SINTÉTICO (un exprés cruza aquí sin parar; interpolado al
     /// descomponer el salto en cantones reales). El juego NO fuerza tiempo de parada en estos.
-    pass: bool,
+    pub pass: bool,
 }
 
-#[derive(Serialize)]
-struct GameTrain {
-    train: String,
-    line: String,
+#[derive(Serialize, Clone)]
+pub struct GameTrain {
+    pub train: String,
+    pub line: String,
     /// Origen y destino (stop_id) del recorrido, como clave de sentido.
-    from: String,
-    to: String,
+    pub from: String,
+    pub to: String,
     /// Desfase aplicado en minutos (0 si son horarios GTFS sin optimizar).
-    offset_min: i64,
-    stops: Vec<GameStop>,
+    pub offset_min: i64,
+    pub stops: Vec<GameStop>,
 }
 
 #[derive(Serialize)]
@@ -548,6 +548,24 @@ fn optimized_offsets(dir: &Path) -> HashMap<String, i64> {
 /// JSON de los horarios del día tipo dominante (día laborable), sólo trenes (sin autobuses).
 /// `optimized = true` aplica los desfases por línea de `report/optimized/`.
 pub fn schedule_json(net: &Network, optimized: bool, line_filter: Option<&str>) -> String {
+    let service_id = net.dominant_service().unwrap_or_default();
+    let trains = build_schedule(net, optimized, line_filter);
+
+    let out = GameSchedule {
+        source: if optimized { "optimized".into() } else { "gtfs".into() },
+        service_id,
+        n_trains: trains.len(),
+        trains,
+    };
+    serde_json::to_string(&out).unwrap_or_else(|_| "{}".into())
+}
+
+/// Construye los horarios del día tipo dominante (mismos datos que sirve `schedule_json`), como
+/// `Vec<GameTrain>` reutilizable. Es la **fuente única** de la descomposición atómica (exprés →
+/// cantones reales con puntos de paso sintéticos): la consume tanto la API del juego como el
+/// **motor unificado** (`engine.rs`), de modo que «lo que se ve = lo que se simula en masa» sobre
+/// exactamente el mismo recorrido físico. `optimized = true` aplica los desfases por línea.
+pub fn build_schedule(net: &Network, optimized: bool, line_filter: Option<&str>) -> Vec<GameTrain> {
     let service_id = net.dominant_service().unwrap_or_default();
     let offsets = if optimized {
         optimized_offsets(Path::new("report/optimized"))
@@ -627,11 +645,5 @@ pub fn schedule_json(net: &Network, optimized: bool, line_filter: Option<&str>) 
         *_per_line.entry(t.line.as_str()).or_insert(0) += 1;
     }
 
-    let out = GameSchedule {
-        source: if optimized { "optimized".into() } else { "gtfs".into() },
-        service_id,
-        n_trains: trains.len(),
-        trains,
-    };
-    serde_json::to_string(&out).unwrap_or_else(|_| "{}".into())
+    trains
 }

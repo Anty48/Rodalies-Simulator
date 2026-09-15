@@ -90,8 +90,6 @@ pub struct TrackEdge {
     pub to_stop: String,
     /// Tiempo de marcha nominal: `arrival_next - departure_current` (segundos).
     pub nominal_run_secs: u32,
-    /// Capacidad del cantón: por defecto 1 tren simultáneo por sección.
-    pub capacity: u8,
 }
 
 /// Una parada dentro del horario de un servicio.
@@ -424,7 +422,6 @@ pub fn load(dir: &Path) -> Result<Network, Box<dyn Error>> {
                             from_stop: a.stop_id.clone(),
                             to_stop: b.stop_id.clone(),
                             nominal_run_secs: run,
-                            capacity: 1,
                         },
                     );
                     edge_index.insert((na, nb), ei);

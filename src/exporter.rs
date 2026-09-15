@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use printpdf::{BuiltinFont, Mm, PdfDocument};
 
 use crate::gtfs_loader::{fmt_hms, Network, TrainService};
-use crate::optimizer::{LineOptResult, SystemResult};
+use crate::optimizer::SystemResult;
 
 /// hora `HH:MM` a partir de segundos.
 fn hm(secs: u32) -> String {
@@ -178,31 +178,6 @@ fn short_num(tn: &str) -> String {
 }
 
 // --------------------------------------------------------------------------
-// Exportación por LÍNEA (optimización individual)
-// --------------------------------------------------------------------------
-
-pub fn export_line_csv(net: &Network, r: &LineOptResult, dir: &Path) -> Result<PathBuf, Box<dyn Error>> {
-    let trains: Vec<&TrainService> = r
-        .trip_ids
-        .iter()
-        .filter_map(|id| net.services.iter().find(|s| &s.trip_id == id))
-        .collect();
-    let off = |t: &TrainService| r.offsets.get(&t.trip_id).copied().unwrap_or(0);
-    write_csv(net, &r.line, &trains, &off, dir)
-}
-
-pub fn export_line_pdf(net: &Network, r: &LineOptResult, dir: &Path) -> Result<PathBuf, Box<dyn Error>> {
-    let mut trains: Vec<&TrainService> = r
-        .trip_ids
-        .iter()
-        .filter_map(|id| net.services.iter().find(|s| &s.trip_id == id))
-        .collect();
-    let off = |t: &TrainService| r.offsets.get(&t.trip_id).copied().unwrap_or(0);
-    trains.sort_by_key(|t| t.schedule[0].departure_sec as i64 + off(t));
-    write_pdf(net, &r.line, &trains, &off, dir)
-}
-
-// --------------------------------------------------------------------------
 // Exportación del SISTEMA (un desfase por línea)
 // --------------------------------------------------------------------------
 
@@ -235,24 +210,6 @@ pub fn export_system(
 // --------------------------------------------------------------------------
 // Comparativas en consola
 // --------------------------------------------------------------------------
-
-pub fn print_comparison(results: &[LineOptResult]) {
-    println!("\n┌─ COMPARATIVA D'OPTIMITZACIÓ PER LÍNIA ({} línies) ────────────────────┐", results.len());
-    println!(
-        "  {:<5} {:>5} {:>9} {:>9} {:>7} {:>9} {:>9} {:>11}",
-        "línia", "trens", "V base", "V òptim", "ΔV %", "pic base", "pic òpt", "conflictes"
-    );
-    println!("  {}", "─".repeat(72));
-    for r in results {
-        println!(
-            "  {:<5} {:>5} {:>9.1} {:>9.1} {:>6.1}% {:>7.0} s {:>7.0} s {:>4.0}→{:<4.0} ({:.0}→{:.0}m)",
-            r.line, r.n_trips, r.base_v, r.best_v, pct(r.base_v, r.best_v),
-            r.base_peak, r.best_peak, r.base_held, r.best_held,
-            r.base_recovery_min, r.best_recovery_min
-        );
-    }
-    println!("  └{}", "─".repeat(72));
-}
 
 pub fn print_system_comparison(r: &SystemResult) {
     println!("\n┌─ RESULTAT · OPTIMITZACIÓ DEL SISTEMA (dia laborable) ─────────────────┐");

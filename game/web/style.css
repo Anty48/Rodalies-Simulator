@@ -480,3 +480,13 @@ body.ctc {
 /* Scrollbars discretas */
 .sp-body::-webkit-scrollbar, .drawer-list::-webkit-scrollbar, .hud-scroll::-webkit-scrollbar { width: 8px; }
 .sp-body::-webkit-scrollbar-thumb, .drawer-list::-webkit-scrollbar-thumb, .hud-scroll::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.12); border-radius: 8px; }
+
+/* ── Creador de incidencias probabilístico (plantillas) + headless ── */
+.field.end { align-self: flex-end; }
+#tplList li, #incList li:not(.empty) { display: flex; align-items: center; gap: 8px; }
+#tplList .tpl-main { flex: 1; display: flex; flex-direction: column; line-height: 1.2; min-width: 0; }
+#tplList .tpl-main b { font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#tplList .tpl-main small { opacity: 0.6; font-size: 11px; }
+.mini-del { background: none; border: none; color: #ff6b8a; cursor: pointer; font-size: 15px; line-height: 1; padding: 2px 4px; }
+.mini-del:hover { color: #ff2d55; }
+#simOut { line-height: 1.5; }

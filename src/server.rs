@@ -9,7 +9,7 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 
@@ -137,6 +137,8 @@ async fn handle(mut stream: TcpStream, state: Arc<ServerState>) -> std::io::Resu
 
     let (status, ctype, body): (&str, &str, Vec<u8>) = match path {
         "/" => ("200 OK", "text/html", report::render_menu_page().into_bytes()),
+        "/info" | "/informacion" => ("200 OK", "text/html", report::render_info_page().into_bytes()),
+        "/numeros" | "/numbers" => ("200 OK", "text/html", report::render_numbers_page().into_bytes()),
         "/panel" | "/panel/" => ("200 OK", "text/html", render_page(&state).into_bytes()),
         "/api/render" => ("200 OK", "text/html", render_fragment(&state, query).into_bytes()),
         "/api/mintime" => ("200 OK", "text/html", render_mintime(&state, query).into_bytes()),
@@ -162,6 +164,17 @@ async fn handle(mut stream: TcpStream, state: Arc<ServerState>) -> std::io::Resu
                 crate::game::schedule_json(&net, optimized, line).into_bytes(),
             )
         }
+        // Incidencias (creador compartido por el modo visual y el headless).
+        "/api/incidents/templates" if is_post => {
+            ("200 OK", "application/json", save_incident_templates(&body).into_bytes())
+        }
+        "/api/incidents/templates" => {
+            ("200 OK", "application/json", incident_templates_json().into_bytes())
+        }
+        // Simulación HEADLESS (solo números) del motor unificado con las plantillas activas.
+        "/api/simulate" => ("200 OK", "application/json", simulate_json(&state, query).into_bytes()),
+        // Trace de la jornada (posición/velocidad por tren) para el REPRODUCTOR visual.
+        "/api/game/trace" => ("200 OK", "application/json", trace_json(&state, query).into_bytes()),
         "/api/gtfs/update" => ("200 OK", "application/json", start_gtfs_update(&state).into_bytes()),
         "/api/gtfs/status" => {
             let j = state.gtfs_job.lock().unwrap().clone();
@@ -278,6 +291,167 @@ fn serve_game_file(name: &str) -> Option<(&'static str, Vec<u8>)> {
     Some((ct, bytes))
 }
 
+// --------------------------------------------------------------------------
+// Incidencias: plantillas persistentes (creador compartido visual + headless)
+// --------------------------------------------------------------------------
+
+const INCIDENTS_PATH: &str = "report/incidents.json";
+
+/// Plantilla tal y como la ve/edita el frontend. `effect` = "red_one" | "red_both" | "single".
+#[derive(Serialize, Deserialize, Clone)]
+struct TemplateDto {
+    motivo: String,
+    effect: String,
+    dur_min: f64,
+    daily_prob: f64,
+    enabled: bool,
+}
+
+fn effect_str(e: crate::engine::IncidentEffect) -> &'static str {
+    match e {
+        crate::engine::IncidentEffect::RedSignal { both: true } => "red_both",
+        crate::engine::IncidentEffect::RedSignal { both: false } => "red_one",
+        crate::engine::IncidentEffect::SingleTrack => "single",
+    }
+}
+
+fn to_template(d: &TemplateDto) -> crate::engine::IncidentTemplate {
+    let effect = match d.effect.as_str() {
+        "red_both" => crate::engine::IncidentEffect::RedSignal { both: true },
+        "single" => crate::engine::IncidentEffect::SingleTrack,
+        _ => crate::engine::IncidentEffect::RedSignal { both: false },
+    };
+    crate::engine::IncidentTemplate {
+        motivo: d.motivo.clone(),
+        effect,
+        dur_min: d.dur_min,
+        daily_prob: d.daily_prob.clamp(0.0, 1.0),
+        enabled: d.enabled,
+    }
+}
+
+/// Carga las plantillas de disco; si no existen, siembra las de por defecto (eliminables).
+fn load_incident_dtos() -> Vec<TemplateDto> {
+    if let Ok(s) = std::fs::read_to_string(INCIDENTS_PATH) {
+        if let Ok(v) = serde_json::from_str::<Vec<TemplateDto>>(&s) {
+            return v;
+        }
+    }
+    crate::engine::default_templates()
+        .iter()
+        .map(|t| TemplateDto {
+            motivo: t.motivo.clone(),
+            effect: effect_str(t.effect).to_string(),
+            dur_min: t.dur_min,
+            daily_prob: t.daily_prob,
+            enabled: t.enabled,
+        })
+        .collect()
+}
+
+fn incident_templates_json() -> String {
+    serde_json::to_string(&load_incident_dtos()).unwrap_or_else(|_| "[]".into())
+}
+
+/// Guarda la lista COMPLETA de plantillas (el frontend envía todo el conjunto al añadir/borrar/toggle).
+fn save_incident_templates(body: &[u8]) -> String {
+    match serde_json::from_slice::<Vec<TemplateDto>>(body) {
+        Ok(v) => {
+            std::fs::create_dir_all("report").ok();
+            let ok = std::fs::write(INCIDENTS_PATH, serde_json::to_string_pretty(&v).unwrap_or_default()).is_ok();
+            serde_json::json!({ "ok": ok, "n": v.len() }).to_string()
+        }
+        Err(e) => serde_json::json!({ "ok": false, "error": e.to_string() }).to_string(),
+    }
+}
+
+/// Corre el motor unificado HEADLESS con las plantillas activas y una semilla → métricas + la
+/// tirada de incidencias del día. Es el "modo sin nada visual" (solo números por run). Bloquea
+/// la petición mientras corre (~s); uso local de un solo usuario.
+fn simulate_json(state: &ServerState, query: &str) -> String {
+    let q = parse_query(query);
+    let seed: u64 = q.get("seed").and_then(|s| s.parse().ok()).unwrap_or(1);
+    let templates: Vec<crate::engine::IncidentTemplate> =
+        load_incident_dtos().iter().map(to_template).collect();
+
+    let net_guard = state.net.read().unwrap();
+    let ltv_guard = state.ltv.read().unwrap();
+    let mut cfg = crate::engine::EngineCfg::day();
+    cfg.seed = seed;
+    let mut eng = crate::engine::Engine::new(
+        &net_guard,
+        cfg,
+        state.adif.as_ref(),
+        ltv_guard.as_deref(),
+        &templates,
+        None,
+        None,
+    );
+    let m = eng.run();
+    let incidents: Vec<_> = eng
+        .incidents()
+        .iter()
+        .map(|i| {
+            serde_json::json!({
+                "motivo": i.motivo,
+                "effect": effect_str(i.effect),
+                "from": i.from,
+                "to": i.to,
+                "t0": i.t0,
+                "t1": i.t1,
+            })
+        })
+        .collect();
+    serde_json::json!({
+        "seed": seed,
+        "n_trains": m.n_trains,
+        "sim_hours": m.sim_seconds as f64 / 3600.0,
+        "train_min_delay": m.train_min_delay,
+        "max_delay_min": m.max_delay_s / 60.0,
+        "peak_waiting": m.peak_waiting,
+        "final_waiting": m.final_waiting,
+        "pax_min": m.pax_min,
+        "incidents": incidents,
+    })
+    .to_string()
+}
+
+/// Trace de la jornada (posición/velocidad por tren, muestreado) para el reproductor visual.
+/// Es el MISMO motor que el modo headless: lo que se ve = lo que se simula en masa.
+fn trace_json(state: &ServerState, query: &str) -> String {
+    let q = parse_query(query);
+    let seed: u64 = q.get("seed").and_then(|s| s.parse().ok()).unwrap_or(1);
+    let templates: Vec<crate::engine::IncidentTemplate> =
+        load_incident_dtos().iter().map(to_template).collect();
+    let net_guard = state.net.read().unwrap();
+    let ltv_guard = state.ltv.read().unwrap();
+    let mut cfg = crate::engine::EngineCfg::day();
+    cfg.seed = seed;
+    let mut eng = crate::engine::Engine::new(
+        &net_guard,
+        cfg,
+        state.adif.as_ref(),
+        ltv_guard.as_deref(),
+        &templates,
+        None,
+        None,
+    );
+    // Incidencia MANUAL "lanzar ahora": params opcionales from/to (+ eff/t0/dur/motivo).
+    if let (Some(from), Some(to)) = (q.get("from"), q.get("to")) {
+        let effect = match q.get("eff").map(|s| s.as_str()) {
+            Some("red_both") => crate::engine::IncidentEffect::RedSignal { both: true },
+            Some("single") => crate::engine::IncidentEffect::SingleTrack,
+            _ => crate::engine::IncidentEffect::RedSignal { both: false },
+        };
+        let t0 = q.get("t0").and_then(|s| s.parse().ok()).unwrap_or(0.0);
+        let dur = q.get("dur").and_then(|s| s.parse().ok()).unwrap_or(15.0);
+        let motivo = q.get("motivo").cloned().unwrap_or_else(|| "Incidencia".into());
+        eng.inject_incident(from.clone(), to.clone(), effect, t0, dur, motivo);
+    }
+    let trace = eng.run_trace(5.0);
+    serde_json::to_string(&trace).unwrap_or_else(|_| "{}".into())
+}
+
 fn render_page(state: &ServerState) -> String {
     let net_guard = state.net.read().unwrap();
     let net: &Network = &net_guard;
@@ -285,16 +459,15 @@ fn render_page(state: &ServerState) -> String {
     let p = SimParams::default();
     let summary = scenario::summary_view(net, state.load_ms);
     let example = scenario::example_view(net, "25412", p.line.as_deref());
-    let sim = scenario::sim_view(net, &p);
-    let res = scenario::res_view(net, &p);
+    let ltv_guard = state.ltv.read().unwrap();
+    let sim = scenario::sim_view(net, state.adif.as_ref(), ltv_guard.as_deref(), &p);
+    let res = scenario::res_view(net, state.adif.as_ref(), ltv_guard.as_deref(), &p);
     let controls = Controls {
         start_h: p.start_sec / 3600,
         dur_h: (p.end_sec - p.start_sec) / 3600,
         line: p.line.clone(),
         block: p.block_min,
         delay: p.delay_min,
-        cap: p.platform_capacity,
-        headway: p.min_block_headway,
         random: p.random,
     };
     let stations = crate::calculator::infrastructure::station_list(net);
@@ -507,10 +680,11 @@ fn render_fragment(state: &ServerState, query: &str) -> String {
     let net_guard = state.net.read().unwrap();
     let net: &Network = &net_guard;
     let p = params_from_query(&parse_query(query));
+    let ltv_guard = state.ltv.read().unwrap();
     let summary = scenario::summary_view(net, state.load_ms);
     let example = scenario::example_view(net, "25412", p.line.as_deref());
-    let sim = scenario::sim_view(net, &p);
-    let res = scenario::res_view(net, &p);
+    let sim = scenario::sim_view(net, state.adif.as_ref(), ltv_guard.as_deref(), &p);
+    let res = scenario::res_view(net, state.adif.as_ref(), ltv_guard.as_deref(), &p);
     report::render_body(&summary, &example, &sim, &res, &now_utc_string())
 }
 
@@ -642,7 +816,12 @@ fn run_optimization(net: Arc<Network>, opt: Arc<Mutex<OptJob>>) {
         j.history.push(best);
     };
 
-    let res = optimizer::optimize_system(&net, sc, w, &cb);
+    // Física del motor unificado (misma que ve el juego); si falta, cae a Vmax por defecto.
+    let adif = crate::calculator::infrastructure::AdifNet::load(std::path::Path::new(
+        "processed/adif/rfig_speed.json",
+    ));
+    let ltv = crate::calculator::ltv::load_default();
+    let res = optimizer::optimize_system(&net, adif.as_ref(), ltv.as_ref(), sc, w, &cb);
 
     let mut j = opt.lock().unwrap();
     match res {
@@ -689,9 +868,6 @@ fn params_from_query(q: &HashMap<String, String>) -> SimParams {
         line,
         block_min: get_u("block", 12).min(60),
         delay_min: get_u("delay", 8).min(60),
-        platform_capacity: get_u("cap", 4).clamp(1, 12),
-        min_block_headway: get_u("headway", 120).clamp(30, 600),
-        base_arrival_rate: 4.0,
         random: q.get("random").map(|v| v == "1").unwrap_or(false),
     }
 }

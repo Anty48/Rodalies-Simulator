@@ -15,12 +15,9 @@ mod gtfs_loader;
 mod gtfs_update;
 mod map;
 mod optimizer;
-mod passenger_model;
 mod report;
 mod scenario;
 mod server;
-mod signaling;
-mod simulation_engine;
 mod topology;
 
 use std::path::Path;
@@ -28,7 +25,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use gtfs_loader::{fmt_hms, Network};
-use optimizer::{PotentialWeights, SearchConfig};
+use optimizer::PotentialWeights;
 use report::{ExampleView, ResView, SimView, SummaryView};
 use scenario::SimParams;
 
@@ -79,18 +76,25 @@ async fn main() {
         run_system_optimizer(&net);
         return;
     }
-    // Modo optimizador por LÍNEA (avanzado): `cargo run --release -- optimize-line R1 R4`
-    if std::env::args().any(|a| a == "optimize-line") {
-        run_line_optimizer(&net);
-        return;
+
+    // Física del motor unificado (misma para el dashboard estático y el servidor interactivo).
+    let adif = calculator::infrastructure::AdifNet::load(Path::new("processed/adif/rfig_speed.json"));
+    match &adif {
+        Some(a) => println!("✓ CVM ADIF carregada: {} segments de via (processed/adif)", a.n_segments()),
+        None => println!("· CVM ADIF no trobada (processed/adif/rfig_speed.json). Executa scripts/fetch_adif_cvm.py"),
+    }
+    let ltv = calculator::ltv::load_default();
+    match &ltv {
+        Some(l) => println!("✓ LTV carregades: {} limitacions temporals (snapshot {})", l.count(), l.snapshot),
+        None => println!("· LTV no trobades. Deixa el ZIP diari a raw/ltv/ o executa scripts/fetch_adif_ltv.py"),
     }
 
     // 3. Construir las vistas (con parámetros por defecto) y volcarlas a consola.
     let params = SimParams::default();
     let summary = scenario::summary_view(&net, load_ms);
     let example = scenario::example_view(&net, EXAMPLE_TRAIN, None);
-    let sim = scenario::sim_view(&net, &params);
-    let res = scenario::res_view(&net, &params);
+    let sim = scenario::sim_view(&net, adif.as_ref(), ltv.as_ref(), &params);
+    let res = scenario::res_view(&net, adif.as_ref(), ltv.as_ref(), &params);
 
     print_summary(&net, &summary);
     print_example(&example);
@@ -115,17 +119,6 @@ async fn main() {
 
     // 5. Arrancar el servidor web interactivo.
     let lines = scenario::distinct_lines(&net);
-    let adif = calculator::infrastructure::AdifNet::load(Path::new("processed/adif/rfig_speed.json"));
-    match &adif {
-        Some(a) => println!("✓ CVM ADIF carregada: {} segments de via (processed/adif)", a.n_segments()),
-        None => println!("· CVM ADIF no trobada (processed/adif/rfig_speed.json). Executa scripts/fetch_adif_cvm.py"),
-    }
-    // LTV: auto-ingesta d'un ZIP diari a raw/ltv/ o càrrega de processed/adif/ltv.json.
-    let ltv = calculator::ltv::load_default();
-    match &ltv {
-        Some(l) => println!("✓ LTV carregades: {} limitacions temporals (snapshot {})", l.count(), l.snapshot),
-        None => println!("· LTV no trobades. Deixa el ZIP diari a raw/ltv/ o executa scripts/fetch_adif_ltv.py"),
-    }
     let state = Arc::new(server::ServerState {
         net: std::sync::RwLock::new(Arc::new(net)),
         load_ms,
@@ -161,11 +154,12 @@ fn run_system_optimizer(net: &Network) {
 
     println!("┌─ OPTIMITZACIÓ DEL SISTEMA (Recuit Simulat + Monte Carlo · rayon) ─┐");
     println!(
-        "  Dia laborable {}–{}  ·  {} iteracions × {} sims (× {} incidències c/u)",
-        fmt_hms(sc.window.0), fmt_hms(sc.window.1), sc.iters, sc.mc_runs, sc.incidents_per_run
+        "  Dia laborable {}–{}  ·  {} iteracions × {} sims Monte-Carlo (llavor per run)",
+        fmt_hms(sc.window.0), fmt_hms(sc.window.1), sc.iters, sc.mc_runs
     );
     println!("  Sistema SENCER: es coordinen totes les línies (conflictes entre línies).");
-    println!("  Física estricta: cantons per blocs, vía única (testigo), andanes reals, sense bus.");
+    println!("  Motor UNIFICAT (engine.rs): velocitats per física, blocs, vía única, incidències");
+    println!("  probabilístiques per plantilla — la MATEIXA física que veu el joc.");
     println!("└──────────────────────────────────────────────────────────────────┘");
 
     let total = sc.iters;
@@ -175,8 +169,12 @@ fn run_system_optimizer(net: &Network) {
         }
     };
 
+    // Física del motor unificado (misma que ve el juego); si falta, cae a Vmax por defecto.
+    let adif = calculator::infrastructure::AdifNet::load(Path::new("processed/adif/rfig_speed.json"));
+    let ltv = calculator::ltv::load_default();
+
     let t0 = Instant::now();
-    let result = optimizer::optimize_system(net, sc, w, &progress);
+    let result = optimizer::optimize_system(net, adif.as_ref(), ltv.as_ref(), sc, w, &progress);
     let secs = t0.elapsed().as_secs_f64();
 
     let Some(result) = result else {
@@ -193,72 +191,6 @@ fn run_system_optimizer(net: &Network) {
         println!("   ✓ {:<4} → {}", line, pdf.file_name().unwrap().to_string_lossy());
     }
     println!("\n✓ Optimització del sistema completada en {:.1} s.", secs);
-}
-
-/// Optimización por LÍNEA (modo avanzado; el problema real es el sistema entero).
-fn run_line_optimizer(net: &Network) {
-    let service_id = match net.dominant_service() {
-        Some(s) => s,
-        None => {
-            eprintln!("✗ No hi ha cap servei per optimitzar.");
-            return;
-        }
-    };
-
-    // Líneas pedidas por CLI (las que empiezan por 'R'), o un conjunto por defecto.
-    let available = scenario::distinct_lines(net);
-    let requested: Vec<String> = std::env::args()
-        .filter(|a| a.len() >= 2 && a.starts_with('R') && a.chars().nth(1).unwrap().is_ascii_digit())
-        .filter(|a| available.contains(a))
-        .collect();
-    let lines: Vec<String> = if !requested.is_empty() {
-        requested
-    } else {
-        // Por defecto, las 4 líneas con más servicios.
-        available.into_iter().take(4).collect()
-    };
-
-    let sc = SearchConfig::default();
-    let w = PotentialWeights::default();
-
-    println!("┌─ OPTIMITZACIÓ DE HORARIS (Recuit Simulat + Monte Carlo · rayon) ─┐");
-    println!(
-        "  Línies: {}  ·  finestra {}–{}  ·  {} iteracions × {} sims MC  ·  offset ±{} min",
-        lines.join(", "),
-        fmt_hms(sc.window.0),
-        fmt_hms(sc.window.1),
-        sc.iters,
-        sc.mc_runs,
-        sc.max_offset_min
-    );
-    println!("  Física: senyalització estricta per cantons (capacitat 1, groc/vermell)");
-    println!("  service_id dominant: {}", service_id);
-    println!("└─────────────────────────────────────────────────────────────────┘");
-
-    let t0 = Instant::now();
-    let results = optimizer::optimize_lines(net, &lines, &service_id, sc, w);
-    let secs = t0.elapsed().as_secs_f64();
-
-    if results.is_empty() {
-        eprintln!("✗ Cap línia amb prou viatges a la finestra per optimitzar.");
-        return;
-    }
-
-    exporter::print_comparison(&results);
-
-    let dir = Path::new("report").join("optimized");
-    println!("\n  Exportant taules d'horaris optimitzades (CSV + PDF) a {}\\ …", dir.display());
-    for r in &results {
-        match exporter::export_line_csv(net, r, &dir) {
-            Ok(p) => print!("   ✓ {:<4} → {}", r.line, p.file_name().unwrap().to_string_lossy()),
-            Err(e) => eprint!("   ✗ {} CSV: {}", r.line, e),
-        }
-        match exporter::export_line_pdf(net, r, &dir) {
-            Ok(p) => println!(" + {}  ({} viatges, {} amb ajust)", p.file_name().unwrap().to_string_lossy(), r.n_trips, r.offsets.len()),
-            Err(e) => println!("  (PDF error: {})", e),
-        }
-    }
-    println!("\n✓ Optimització completada en {:.1} s.", secs);
 }
 
 // --------------------------------------------------------------------------
@@ -323,31 +255,18 @@ fn print_sim(sim: &SimView) {
     }
     println!("└───────────────────────────────────────────────────────────────────┘\n");
 
-    println!("── LOG CTC (entrades/sortides a trams clau) ──────────────────────────");
+    println!("── INCIDÈNCIES ───────────────────────────────────────────────────────");
+    if sim.incidents.is_empty() {
+        println!("  (cap incidència)");
+    }
     for i in &sim.incidents {
-        println!("{}", i);
-    }
-    let max = 40usize;
-    for e in sim.events.iter().take(max) {
-        if e.kind == "INCIDENCIA" {
-            println!("  ! {}", e.station);
-        } else {
-            println!(
-                "[{}] Tren {:>8} ({:<3}) {:<6} {:<30} via {}  ({:+} s)",
-                fmt_hms(e.time), e.train, e.line, e.kind, e.station, e.track, e.delay
-            );
-        }
-    }
-    if sim.events.len() > max {
-        println!("… ({} esdeveniments més al dashboard)", sim.events.len() - max);
+        println!("  · {}", i);
     }
 
-    println!("\n── MÈTRIQUES D'ESTABILITAT ───────────────────────────────────────────");
+    println!("\n── MÈTRIQUES D'ESTABILITAT (motor unificat) ──────────────────────────");
     println!("  Trens simulats en la finestra ...... {}", sim.trains_run);
-    println!("  Arribades processades .............. {}", sim.arrivals);
-    println!("  Retencions per senyalització ....... {}", sim.held);
+    println!("  Retencions (conflictes) ............ {}", sim.held);
     println!("  Pic de retard acumulat ............. {} s a les {}", sim.peak_total, sim.peak_time);
-    println!("  Màxim de trens retardats alhora .... {}", sim.peak_delayed);
     match &sim.recovery {
         Some(t) => println!("  Retorn a l'equilibri (<120 s) ...... {}", t),
         None => println!("  Retorn a l'equilibri ............... NO assolit dins la finestra"),
@@ -358,14 +277,14 @@ fn print_sim(sim: &SimView) {
 fn print_res(res: &ResView) {
     println!("┌─ ANÀLISI DE RESILIÈNCIA (rayon · Monte Carlo en paral·lel) ─┐");
     println!("  Escenari: bloqueig del cantó {}", res.segment);
-    println!("  {:<12} {:>14} {:>12} {:>16} {:>12}", "bloqueig", "pic acumulat", "trens ret.", "recuperació", "retencions");
-    println!("  {}", "─".repeat(70));
+    println!("  {:<12} {:>14} {:>16} {:>12}", "bloqueig", "pic acumulat", "recuperació", "conflictes");
+    println!("  {}", "─".repeat(58));
     for r in &res.rows {
         let recov = match r.recovery {
             Some(m) => format!("{} min", m),
             None => "no recupera".into(),
         };
-        println!("  {:<12} {:>12} s {:>12} {:>16} {:>12}", format!("{} min", r.mins), r.peak, r.delayed, recov, r.held);
+        println!("  {:<12} {:>12} s {:>16} {:>12}", format!("{} min", r.mins), r.peak, recov, r.held);
     }
     println!("└───────────────────────────────────────────────────────────────────┘");
 }
@@ -374,13 +293,44 @@ fn print_res(res: &ResView) {
 // Dashboard estático + apertura de navegador
 // --------------------------------------------------------------------------
 
-/// Fase 1 del motor unificado (headless): corre la jornada, muestra una foto a mediodía
-/// (camino de VER: `observe`) y las métricas finales (camino de LOTE: `run`/`metrics`). Es el
-/// esqueleto verificable; la señalización/ocupación llegan en la Fase 1b (ver docs/PLAN).
+/// Fase 1b del motor unificado (headless): corre la jornada con SEÑALIZACIÓN DE BLOQUES (1 tren/
+/// bloque, retención, vía única con testigo y prioridad regional, aspecto de señal), muestra una
+/// foto a mediodía (camino de VER: `observe`) y las métricas finales (camino de LOTE:
+/// `run`/`metrics`). Regla de oro: los efectos de congestión afloran a ×25 en el frontend.
 fn run_engine_demo(net: &Network) {
     use engine::{Engine, EngineCfg};
-    let cfg = EngineCfg::day();
-    let mut eng = Engine::new(net, cfg);
+    let mut cfg = EngineCfg::day();
+    // Semilla opcional del Monte-Carlo: `simulate <seed>` (para explorar días con incidencias).
+    if let Some(seed) = std::env::args().skip_while(|a| a != "simulate").nth(1).and_then(|s| s.parse().ok()) {
+        cfg.seed = seed;
+    }
+    // Datos reales de infraestructura para la física (Vmax de vía CVM/ADIF + LTV).
+    let adif = calculator::infrastructure::AdifNet::load(Path::new("processed/adif/rfig_speed.json"));
+    let ltv = calculator::ltv::load_default();
+    match &adif {
+        Some(a) => println!("✓ CVM ADIF: {} segments de via (física per cantó)", a.n_segments()),
+        None => println!("· CVM ADIF no trobada → Vmax de via per defecte (100 km/h). Executa scripts/fetch_adif_cvm.py"),
+    }
+    let templates = engine::default_templates();
+    let mut eng = Engine::new(net, cfg, adif.as_ref(), ltv.as_ref(), &templates, None, None);
+    let incs = eng.incidents().to_vec();
+    if incs.is_empty() {
+        println!("· Cap incidència avui (llavor {})", cfg.seed);
+    } else {
+        println!("→ Incidències del dia (llavor {}): {}", cfg.seed, incs.len());
+        for i in &incs {
+            let ef = match i.effect {
+                engine::IncidentEffect::RedSignal { both: true } => "senyal roig (2 sentits)",
+                engine::IncidentEffect::RedSignal { both: false } => "senyal roig (1 sentit)",
+                engine::IncidentEffect::SingleTrack => "tram a via única",
+            };
+            println!(
+                "   · {} · {} · {} → {} · {}–{}",
+                i.motivo, ef, i.from, i.to,
+                (i.t0 as u32) / 3600, (i.t1 as u32) / 3600
+            );
+        }
+    }
 
     let t0 = Instant::now();
     let noon = 12.0 * 3600.0;
@@ -388,11 +338,17 @@ fn run_engine_demo(net: &Network) {
         eng.step(cfg.dt_sec);
     }
     let frame = eng.observe();
-    println!("→ Motor (Fase 1) · trens en marxa a les 12:00: {}", frame.len());
+    let esperant = frame.iter().filter(|t| t.waiting).count();
+    println!(
+        "→ Motor (Fase B) · trens en marxa a les 12:00: {} ({} retinguts)",
+        frame.len(),
+        esperant
+    );
     if let Some(t) = frame.first() {
+        let asp = ["verd", "ambre", "vermell"][t.aspect as usize];
         println!(
-            "   ex.: {} ({}) {} → {}  · {:.0}% del cantó · retard {:.0}s",
-            t.id, t.line, t.from, t.to, t.frac * 100.0, t.delay_s
+            "   ex.: {} ({}) {} → {} · {:.0}% del cantó · {:.0} km/h · senyal {} · retard {:.0}s · pos ({:.4},{:.4})",
+            t.id, t.line, t.from, t.to, t.frac * 100.0, t.speed_kmh, asp, t.delay_s, t.lat, t.lon
         );
     }
 
@@ -400,10 +356,18 @@ fn run_engine_demo(net: &Network) {
     let ms = t0.elapsed().as_secs_f64() * 1000.0;
     println!(
         "✓ Jornada de {:.0} h · {} trens · retard acumulat {:.0} tren·min · pic {:.0}s · {:.1} ms",
-        m.sim_seconds as f64 / 3600.0, m.n_trains, m.train_min_delay, m.max_delay_s, ms
+        m.sim_seconds as f64 / 3600.0,
+        m.n_trains,
+        m.train_min_delay,
+        m.max_delay_s,
+        ms
     );
     println!(
-        "   (Fase 1 = paritat per horari, SENSE senyalització/ocupació encara — veure docs/PLAN-motor-unificado.md)"
+        "   Senyalització de blocs · pic retinguts {} · retinguts al final {} · KPI {:.0} PAX·min de retard",
+        m.peak_waiting, m.final_waiting, m.pax_min
+    );
+    println!(
+        "   (Fase B = velocitats per FÍSICA: Vmax de via CVM/ADIF + LTV + material real 447/450/465/470, sortida no abans de l'horari; PENDENT: incidències — veure docs/PLAN-motor-unificado.md)"
     );
 }
 

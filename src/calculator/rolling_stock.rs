@@ -157,6 +157,22 @@ pub fn all() -> Vec<TrainSeries> {
             notes: "Composición de doble piso (masa elevada). Vmax 140 km/h. \
                     Aceleración/frenado NO publicados → modelados.",
         },
+        // ---- Serie 465 (Civia, Cercanías; composición de 5 coches) ----
+        TrainSeries {
+            id: "465",
+            name: "UT 465 — Civia (Cercanías)",
+            builder: "CAF / Siemens / Alstom",
+            available: true,
+            vmax_kmh: Sourced::new(120.0, Provenance::Oficial, RENFE_CSV),
+            power_kw: Sourced::new(2200.0, Provenance::Oficial, RENFE_CSV),
+            mass_t: Sourced::new(157.3, Provenance::Oficial, RENFE_CSV),
+            accel_start: ACCEL_START_MODEL,
+            decel_service: DECEL_MODEL,
+            efficiency: EFF_MODEL,
+            rotary_mass: ROTARY_MODEL,
+            notes: "Civia serie 465 (5 coches) del CSV de Renfe: Vmax 120 km/h, 2200 kW, \
+                    157,3 t. Aceleración/frenado NO publicados → modelados.",
+        },
         // ---- Serie 470 (Media Distancia; reconstrucción de la 440) ----
         TrainSeries {
             id: "470",
