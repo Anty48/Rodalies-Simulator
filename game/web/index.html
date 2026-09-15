@@ -111,6 +111,12 @@
         <span class="track"></span>
         <span class="switch-lbl">Semáforos de tramo (al acercar)</span>
       </label>
+      <label class="switch">
+        <input type="checkbox" id="showVmax">
+        <span class="track"></span>
+        <span class="switch-lbl">Mapa por velocidad máxima (Vmax)</span>
+      </label>
+      <div class="vmax-legend" id="vmaxLegend" hidden></div>
     </section>
 
     <section class="card">
@@ -160,8 +166,9 @@
         <select id="liveTpl"></select>
       </div>
       <div class="field">
-        <label>Tramo</label>
-        <select id="liveTramo"></select>
+        <label>Tramo <span class="hint mini">(escribe el nombre para buscar)</span></label>
+        <input id="liveTramo" list="tramoList" autocomplete="off" placeholder="p. ej. Barcelona Sants → …">
+        <datalist id="tramoList"></datalist>
       </div>
       <div class="btn-row">
         <button id="liveLaunch" class="btn danger block">▶ Lanzar ahora</button>
@@ -169,40 +176,12 @@
       <div class="hint mini" id="liveStatus"></div>
     </section>
     <section class="card">
-      <div class="card-title"><span class="dot rojo"></span> Registro de incidencias</div>
-      <ul class="inc" id="incList"><li class="empty">Sin incidencias lanzadas.</li></ul>
+      <div class="card-title"><span class="dot rojo"></span> Incidencias del día</div>
+      <ul class="inc" id="incList"><li class="empty">Generando el día…</li></ul>
+      <p class="hint mini">Las incidencias probabilísticas se definen en la pantalla previa (al entrar). El creador de plantillas está allí.</p>
     </section>
 
-    <!-- Creador de incidencias PROBABILÍSTICO (plantillas compartidas visual + headless) -->
-    <section class="card">
-      <div class="card-title"><span class="dot rojo"></span> Creador de incidencias (probabilístico)</div>
-      <p class="hint mini">Plantillas con <b>probabilidad diaria</b>. Antes de cada día el motor "tira los dados": las ubica (nudos/Barcelona, estaciones grandes, tramos frecuentados, terminales) y las fecha (más en hora punta). Compartidas por el modo visual y el modo sin visual.</p>
-      <div class="field"><label>Motivo</label><input id="tplMotivo" type="text" placeholder="p. ej. Avería de puertas"></div>
-      <div class="field-row">
-        <div class="field"><label>Efecto</label><select id="tplEffect">
-          <option value="red_one">Señal roja (1 sentido)</option>
-          <option value="red_both">Señal roja (2 sentidos)</option>
-          <option value="single">Tramo → vía única</option>
-        </select></div>
-        <div class="field"><label>Duración (min)</label><input id="tplDur" type="number" min="1" value="15"></div>
-      </div>
-      <div class="field-row">
-        <div class="field"><label>Prob. diaria (%)</label><input id="tplProb" type="number" min="0" max="100" value="30"></div>
-        <div class="field end"><button id="tplAdd" class="btn block">+ Añadir plantilla</button></div>
-      </div>
-      <ul class="inc" id="tplList"><li class="empty">Cargando plantillas…</li></ul>
-    </section>
-
-    <!-- Modo HEADLESS: correr el motor unificado y ver solo números -->
-    <section class="card">
-      <div class="card-title"><span class="dot"></span> Simular sin visual (números)</div>
-      <p class="hint mini">Corre el motor unificado (física + incidencias) una jornada completa y devuelve solo métricas — el mismo motor y las mismas plantillas activas que el modo visual.</p>
-      <div class="field-row">
-        <div class="field"><label>Semilla</label><input id="simSeed" type="number" min="0" value="1"></div>
-        <div class="field end"><button id="simRun" class="btn block">▶ Ejecutar run</button></div>
-      </div>
-      <div class="hint" id="simOut">—</div>
-    </section>
+    <!-- (El modo "Simular sin visual (números)" vive ahora en su propio apartado /numeros del menú.) -->
   </div>
 </aside>
 
@@ -219,6 +198,10 @@
   <div class="hud-next" id="stNext"></div>
   <div class="hud-scroll">
     <div id="stTracks" class="tracks"></div>
+    <details id="stNextWrap" class="next-wrap" open>
+      <summary>Próximos trenes <span class="hint mini">(por horario)</span></summary>
+      <div id="stNextList" class="next-list"></div>
+    </details>
     <div id="stDiagrams" class="diagrams"></div>
   </div>
 </section>
@@ -264,6 +247,58 @@
   <div class="drawer-body">
     <div class="drawer-list" id="trenesList"></div>
     <div class="drawer-list ctc-log" id="ctcLog" hidden></div>
+  </div>
+</div>
+
+<!-- ═══════════════ Cajón inferior: incidencias del día (se pone ROJO al ocurrir una) ═══════════════ -->
+<button class="drawer-handle glass right-of-trains" id="btnIncidDia" aria-label="Abrir incidencias del día">
+  <svg viewBox="0 0 24 24" width="15" height="15"><path d="M12 3l9 16H3z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/><path d="M12 10v4M12 17h.01" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+  <span>Incidencias</span>
+  <span class="handle-count" id="incidDiaCount">0</span>
+</button>
+<div class="drawer glass" id="incidDiaPanel" hidden>
+  <div class="drawer-grip"></div>
+  <div class="drawer-head">
+    <div class="drawer-tabs"><button class="dtab active">Incidencias del día</button></div>
+    <button class="close-btn" id="incidDiaClose" aria-label="Cerrar">✕</button>
+  </div>
+  <div class="drawer-body">
+    <div class="drawer-list" id="incidDiaList"></div>
+  </div>
+</div>
+
+<!-- ═══════════════ Pantalla PREVIA: selección de incidencias antes de generar el día ═══════════════ -->
+<div class="preday" id="preDay">
+  <div class="preday-inner glass">
+    <img class="findia-renfe" src="/game/lines/renfe_logo.png" alt="Renfe">
+    <h2>Antes de empezar la jornada</h2>
+    <p class="hint">Elige la <b>semilla</b> del día. Si quieres, define incidencias probabilísticas abajo (se guardan). Para ir rápido, pulsa <b>Confirmar</b> sin tocar nada.</p>
+    <div class="field" style="max-width:220px;margin:0 auto 10px">
+      <label>Semilla del día</label>
+      <input id="preSeed" type="number" min="0" value="0">
+    </div>
+    <section class="card preday-creator">
+      <div class="card-title"><span class="dot rojo"></span> Creador de incidencias (probabilístico)</div>
+      <p class="hint mini">Plantillas con <b>probabilidad diaria</b>. Antes del día el motor "tira los dados": las ubica (nudos/Barcelona, estaciones grandes, tramos frecuentados, terminales) y las fecha (más en hora punta).</p>
+      <div class="field"><label>Motivo</label><input id="tplMotivo" type="text" placeholder="p. ej. Avería de puertas"></div>
+      <div class="field-row">
+        <div class="field"><label>Efecto</label><select id="tplEffect">
+          <option value="red_one">Señal roja (1 sentido)</option>
+          <option value="red_both">Señal roja (2 sentidos)</option>
+          <option value="single">Tramo → vía única</option>
+        </select></div>
+        <div class="field"><label>Duración (min)</label><input id="tplDur" type="number" min="1" value="15"></div>
+      </div>
+      <div class="field-row">
+        <div class="field"><label>Prob. diaria (%)</label><input id="tplProb" type="number" min="0" max="100" value="30"></div>
+        <div class="field end"><button id="tplAdd" class="btn block">+ Añadir plantilla</button></div>
+      </div>
+      <ul class="inc" id="tplList"><li class="empty">Cargando plantillas…</li></ul>
+    </section>
+    <div class="btn-row">
+      <button id="preConfirm" class="btn block">▶ Confirmar y generar el día</button>
+    </div>
+    <div class="hint mini" id="preStatus"></div>
   </div>
 </div>
 

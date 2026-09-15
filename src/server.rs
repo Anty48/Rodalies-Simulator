@@ -147,10 +147,12 @@ async fn handle(mut stream: TcpStream, state: Arc<ServerState>) -> std::io::Resu
         "/api/game/network" => {
             let net = state.net.read().unwrap();
             let lines = state.lines.read().unwrap();
+            let ltv_guard = state.ltv.read().unwrap();
             (
                 "200 OK",
                 "application/json",
-                crate::game::network_json(&net, &lines, &now_utc_string()).into_bytes(),
+                crate::game::network_json(&net, &lines, &now_utc_string(), state.adif.as_ref(), ltv_guard.as_deref())
+                    .into_bytes(),
             )
         }
         "/api/game/schedule" => {
@@ -388,6 +390,10 @@ fn simulate_json(state: &ServerState, query: &str) -> String {
         None,
     );
     let m = eng.run();
+    let hm = |s: f64| {
+        let t = s.max(0.0) as u32;
+        format!("{:02}:{:02}", t / 3600, (t % 3600) / 60)
+    };
     let incidents: Vec<_> = eng
         .incidents()
         .iter()
@@ -397,8 +403,13 @@ fn simulate_json(state: &ServerState, query: &str) -> String {
                 "effect": effect_str(i.effect),
                 "from": i.from,
                 "to": i.to,
+                // Nombres de estación legibles + horas HH:MM (para el log de /numeros: dónde y cuándo).
+                "from_name": net_guard.stop_name(&i.from),
+                "to_name": net_guard.stop_name(&i.to),
                 "t0": i.t0,
                 "t1": i.t1,
+                "t0_hm": hm(i.t0),
+                "t1_hm": hm(i.t1),
             })
         })
         .collect();
@@ -449,7 +460,28 @@ fn trace_json(state: &ServerState, query: &str) -> String {
         eng.inject_incident(from.clone(), to.clone(), effect, t0, dur, motivo);
     }
     let trace = eng.run_trace(5.0);
-    serde_json::to_string(&trace).unwrap_or_else(|_| "{}".into())
+    // Incidencias del día (roll + manual) con nombres y horas, para mostrarlas en el juego.
+    let incidents: Vec<_> = eng
+        .incidents()
+        .iter()
+        .map(|i| {
+            serde_json::json!({
+                "motivo": i.motivo,
+                "effect": effect_str(i.effect),
+                "from": i.from,
+                "to": i.to,
+                "from_name": net_guard.stop_name(&i.from),
+                "to_name": net_guard.stop_name(&i.to),
+                "t0": i.t0,
+                "t1": i.t1,
+            })
+        })
+        .collect();
+    let mut v = serde_json::to_value(&trace).unwrap_or_else(|_| serde_json::json!({}));
+    if let Some(obj) = v.as_object_mut() {
+        obj.insert("incidents".into(), serde_json::json!(incidents));
+    }
+    v.to_string()
 }
 
 fn render_page(state: &ServerState) -> String {
@@ -817,9 +849,7 @@ fn run_optimization(net: Arc<Network>, opt: Arc<Mutex<OptJob>>) {
     };
 
     // Física del motor unificado (misma que ve el juego); si falta, cae a Vmax por defecto.
-    let adif = crate::calculator::infrastructure::AdifNet::load(std::path::Path::new(
-        "processed/adif/rfig_speed.json",
-    ));
+    let adif = crate::calculator::infrastructure::AdifNet::load_default();
     let ltv = crate::calculator::ltv::load_default();
     let res = optimizer::optimize_system(&net, adif.as_ref(), ltv.as_ref(), sc, w, &cb);
 

@@ -74,6 +74,9 @@ function lineImg(line, cls) {
 // ---- Estado -------------------------------------------------------------------------------
 const S = {
   net: null, trains: [], stationById: new Map(), edgeLines: new Map(),
+  edgeZones: new Map(),    // key(a,b) -> [{a,b,v,ltv}…] perfil de Vmax por zonas del cantón
+  vmaxView: false,         // ¿mapa coloreado por Vmax en vez de por línea?
+  dayIncidents: [],        // incidencias del día (roll del motor + lanzadas), para el registro/cajón
   simT: DIA_INICIO, speedKey: "PAUSA", speed: 0,
   cantonMode: new Map(),   // "A>B" -> 'AUTO'|'MV'|'MR' (manual por cantón entero, afecta a todos sus bloques)
   occ: new Map(),          // clave de bloque -> [id_tren...] (UN tren por bloque; vía única = clave canónica)
@@ -125,6 +128,7 @@ const stationLayer = L.layerGroup().addTo(map);
 const signalLayer = L.layerGroup().addTo(map);
 const trainLayer = L.layerGroup().addTo(map);
 const parkedLayer = L.layerGroup().addTo(map);
+const singleIncLayer = L.layerGroup().addTo(map);   // resalte de cantones en vía única por incidencia
 const trainMarkers = new Map();
 const parkedMarkers = new Map();
 // Solo para el aislado visual de líneas de la nueva UI (chrome, no afecta a la simulación).
@@ -147,7 +151,12 @@ async function cargarRed() {
   S.stationById.clear();
   for (const st of S.net.stations) S.stationById.set(st.id, st);
   S.edgeLines.clear();
-  for (const e of S.net.edges) S.edgeLines.set(key(e.from, e.to), e.lines);
+  S.edgeZones.clear();
+  for (const e of S.net.edges) {
+    S.edgeLines.set(key(e.from, e.to), e.lines);
+    // Perfil de Vmax por zonas del cantón (para la vista "mapa por velocidad máxima").
+    if (e.zones) S.edgeZones.set(key(e.from, e.to), e.zones);
+  }
 
   // Vía única real: bastón/testigo — ambos sentidos comparten la MISMA vía física, así que
   // se indexan por clave canónica no dirigida (ver `resKey`).
@@ -203,9 +212,23 @@ function perpOffset(a, b) {
 // Dibuja una vía: una FRANJA gris oscura de fondo (para que el color resalte sobre el satélite al
 // hacer zoom) y encima el trazo de color de la línea. Vía única = trazo discontinuo (bastón).
 function trazarVia(p0, p1, color, unica, entry) {
-  const casing = L.polyline([p0, p1], { pane: "trackCasing", color: "#0c0c10", weight: unica ? 5 : 5.5, opacity: 0.5, lineCap: "round" }).addTo(lineLayer);
+  const casing = L.polyline([p0, p1], { pane: "trackCasing", color: "#050507", weight: unica ? 8 : 9, opacity: 0.72, lineCap: "round" }).addTo(lineLayer);
   const linea = L.polyline([p0, p1], { pane: "trackLine", color, weight: unica ? 2.5 : 3, opacity: 0.95, dashArray: unica ? "6,5" : null, lineCap: "round" }).addTo(lineLayer);
   entry.casing.push(casing); entry.color.push(linea);
+}
+// Dibuja un cantón en la vista Vmax: casing gris + un segmento de color por cada ZONA de Vmax del
+// perfil ADIF (los sub-tramos varían de color a lo largo del cantón; una LTV ocupa solo sus metros
+// reales, resaltada con color brillante y trazo más grueso). Sin datos → gris.
+function trazarViaVmax(a, b, zones, entry) {
+  const casing = L.polyline([[a.lat, a.lon], [b.lat, b.lon]], { pane: "trackCasing", color: "#050507", weight: 9, opacity: 0.72, lineCap: "round" }).addTo(lineLayer);
+  entry.casing.push(casing);
+  const zs = (zones && zones.length) ? zones : [{ a: 0, b: 1, v: 0, ltv: false }];
+  for (const z of zs) {
+    const p0 = [a.lat + (b.lat - a.lat) * z.a, a.lon + (b.lon - a.lon) * z.a];
+    const p1 = [a.lat + (b.lat - a.lat) * z.b, a.lon + (b.lon - a.lon) * z.b];
+    const line = L.polyline([p0, p1], { pane: "trackLine", color: vmaxColor(z), weight: z.ltv ? 5.5 : 3.2, opacity: 0.98, lineCap: "butt" }).addTo(lineLayer);
+    entry.color.push(line);
+  }
 }
 // (Re)dibuja todas las vías. A zoom bajo: una sola línea centrada por cantón (rápido y legible).
 // A zoom ≥ LINE_SPLIT_ZOOM: la vía doble se desdobla en DOS líneas paralelas (una por sentido),
@@ -225,14 +248,19 @@ function dibujarLineas() {
     if (!a || !b) continue;
     const unica = S.singleTrack.has(c);
     const lines = S.edgeLines.get(key(e.from, e.to)) || S.edgeLines.get(key(e.to, e.from)) || e.lines;
-    const color = colorLinea(lines[0]);
-    const entry = { lines, unica, casing: [], color: [] };   // para el aislado visual (chrome UI)
-    if (unica || !split) {
-      trazarVia([a.lat, a.lon], [b.lat, b.lon], color, unica, entry);
+    const entry = { lines, unica, canon: c, casing: [], color: [] };   // para el aislado visual (chrome UI)
+    if (S.vmaxView) {
+      // Vista Vmax: una sola línea centrada, coloreada por SUB-TRAMOS según el perfil ADIF del cantón.
+      trazarViaVmax(a, b, S.edgeZones.get(key(e.from, e.to)), entry);
     } else {
-      const off = perpOffset(a, b);        // vía del sentido a→b (derecha) y la del sentido opuesto
-      trazarVia([a.lat + off[0], a.lon + off[1]], [b.lat + off[0], b.lon + off[1]], color, false, entry);
-      trazarVia([a.lat - off[0], a.lon - off[1]], [b.lat - off[0], b.lon - off[1]], color, false, entry);
+      const color = colorLinea(lines[0]);
+      if (unica || !split) {
+        trazarVia([a.lat, a.lon], [b.lat, b.lon], color, unica, entry);
+      } else {
+        const off = perpOffset(a, b);        // vía del sentido a→b (derecha) y la del sentido opuesto
+        trazarVia([a.lat + off[0], a.lon + off[1]], [b.lat + off[0], b.lon + off[1]], color, false, entry);
+        trazarVia([a.lat - off[0], a.lon - off[1]], [b.lat - off[0], b.lon - off[1]], color, false, entry);
+      }
     }
     linePolys.push(entry);
   }
@@ -439,7 +467,7 @@ function regionalEntrandoPronto(rk, exceptId) {
 // Nº de sub-bloques del cantón a→b (≥1) y clave del BLOQUE físico (sub-bloque `sb`): en vía
 // única ambos sentidos comparten el MISMO bloque-testigo (clave canónica, sin sentido ni `sb`).
 function subM(a, b) { return S.subBlocks.get(key(a, b)) || 1; }
-function sbRes(a, b, sb) { return S.singleTrack.has(canon(a, b)) ? canon(a, b) : key(a, b) + "#" + sb; }
+function sbRes(a, b, sb) { return esViaUnica(a, b) ? canon(a, b) : key(a, b) + "#" + sb; }
 
 // Tiempo de parada reglamentario por estación, derivado de la DENSIDAD de servicio del GTFS (nº
 // de paradas reales al día ∝ demanda de pasajeros): 20 s en las de menor afluencia, hasta 60 s
@@ -491,6 +519,33 @@ function construirSecuenciaBloques() {
 // andanados a la vez sin colapsar el tronco (varias líneas comparten el cantón de entrada).
 function platCap(b) { const st = S.stationById.get(b); return Math.max(1, Math.floor((st ? st.tracks : 2) / 2)); }
 
+// ¿Hay una incidencia del MOTOR con señal ROJA vigente en el cantón a→b ahora mismo? (red_one =
+// solo ese sentido; red_both = ambos). La "vía única" no fija una señal roja. Alimenta el color de
+// las señales del mapa para que las incidencias (rodadas o lanzadas) se VEAN en rojo.
+function incidenteRojoEng(a, b) {
+  const now = S.simT;
+  for (const i of (S.dayIncidents || [])) {
+    if (now < i.t0 || now >= i.t1 || i.effect === "single") continue;
+    if (i.from === a && i.to === b) return true;
+    if (i.effect === "red_both" && i.from === b && i.to === a) return true;
+  }
+  return false;
+}
+// ¿El cantón a↔b es VÍA ÚNICA por una incidencia vigente ahora? (ambos sentidos comparten la vía).
+function incidenteSingleEng(a, b) {
+  const now = S.simT;
+  for (const i of (S.dayIncidents || [])) {
+    if (i.effect !== "single" || now < i.t0 || now >= i.t1) continue;
+    if ((i.from === a && i.to === b) || (i.from === b && i.to === a)) return true;
+  }
+  return false;
+}
+// Vía única EFECTIVA ahora: estática (topología) o por incidencia. Ambos sentidos comparten el
+// testigo → un tren en la vía pone en rojo las señales del sentido CONTRARIO.
+function esViaUnica(a, b) {
+  return S.singleTrack.has(canon(a, b)) || incidenteSingleEng(a, b);
+}
+
 // ¿El bloque físico (sub-bloque `sb` del cantón a→b) está OCUPADO/cerrado? Capacidad 1 en vía
 // abierta; el ÚLTIMO sub-bloque (incluye el andén de `b`) admite `platCap(b)` trenes. Rojo si el
 // bloque está lleno, o manual rojo, o avería de bloqueo, o el cruce (cizallamiento) está tomado.
@@ -498,19 +553,22 @@ function bloqueOcupado(a, b, sb, exceptId) {
   const k = key(a, b), mode = S.cantonMode.get(k) || "AUTO";
   if (mode === "MR" || incidenteEdge(k, "block")) return true;
   if (mode === "MV") return false;
+  // Incidencia del MOTOR (señal roja) vigente en este cantón: la señal es una barrera sin tren
+  // ocupando la vía, así que hay que reflejarla aquí para que el semáforo se vea ROJO de verdad.
+  if (incidenteRojoEng(a, b)) return true;
   // Vía única: capacidad SIEMPRE 1 (un tren en la vía, en cualquier sentido — es el bastón/testigo;
   // no aplica la capacidad de andén, porque la estación es un apartadero que se libera al parar).
-  // Vía doble: el ÚLTIMO sub-bloque incluye el andén de `b`, con capacidad platCap(b); el resto, 1.
-  const unica = S.singleTrack.has(canon(a, b));
-  const cap = unica ? 1 : (sb === subM(a, b) - 1 ? platCap(b) : 1);
+  // Capacidad 1 por bloque (igual que el motor): la señal se pone roja con UN tren en el bloque.
+  // Los trenes andanados no ocupan el bloque de aproximación (ver pasoRepro), así que la estación
+  // no serializa las paradas aunque el último bloque sea cap 1.
   const occ = S.occ.get(sbRes(a, b, sb));
-  if (occ && occ.filter((x) => x !== exceptId).length >= cap) return true;
+  if (occ && occ.filter((x) => x !== exceptId).length >= 1) return true;
   for (const [c, d] of S.shearMap.get(k) || []) if (edgeOcupadoRes(c, d, exceptId)) return true;
   return false;
 }
 // ¿Algún bloque del cantón c→d (o su testigo de vía única) está ocupado? (para el cizallamiento).
 function edgeOcupadoRes(c, d, exceptId) {
-  if (S.singleTrack.has(canon(c, d))) { const o = S.occ.get(canon(c, d)); return !!(o && o.some((x) => x !== exceptId)); }
+  if (esViaUnica(c, d)) { const o = S.occ.get(canon(c, d)); return !!(o && o.some((x) => x !== exceptId)); }
   const m = subM(c, d);
   for (let s = 0; s < m; s++) { const o = S.occ.get(key(c, d) + "#" + s); if (o && o.some((x) => x !== exceptId)) return true; }
   return false;
@@ -606,11 +664,56 @@ async function cargarTrace(seed) {
   tr.byId = new Map();
   for (const t of tr.trains) tr.byId.set(t.id, t);
   S.trace = tr; S.repro = true; S.simT = tr.start;
+  // Incidencias del día que rodó el motor (para el registro y el cajón que se pone rojo).
+  S.dayIncidents = (tr.incidents || []).map((i) => ({ ...i, launched: false }));
+  pintarIncidenciasDia();
 }
-// Nombre ACORTADO de una estación (para la lista de tramos): quita el prefijo "Barcelona".
+// Pinta el registro de incidencias del día (panel derecho) y la lista del cajón inferior.
+function pintarIncidenciasDia() {
+  const list = S.dayIncidents || [];
+  const EFFL = { red_one: "señal roja (1 sentido)", red_both: "señal roja (2 sentidos)", single: "vía única" };
+  const fila = (i) => {
+    const donde = (i.from_name || i.from) + " → " + (i.to_name || i.to);
+    const cuando = hhmm(i.t0) + "–" + hhmm(i.t1);
+    const activa = S.simT >= i.t0 && S.simT < i.t1;
+    return `<li class="inc-row${activa ? " activa" : ""}${i.launched ? " manual" : ""}">
+      <div class="inc-motivo">${i.motivo}${i.launched ? ' <span class="tag">lanzada</span>' : ""}</div>
+      <div class="inc-meta">${EFFL[i.effect] || i.effect} · ${donde}</div>
+      <div class="inc-when">${cuando}${activa ? " · <b>EN CURSO</b>" : ""}</div></li>`;
+  };
+  const inc = $("incList");
+  if (inc) inc.innerHTML = list.length ? list.map(fila).join("") : '<li class="empty">Sin incidencias hoy.</li>';
+  const dl = $("incidDiaList");
+  if (dl) dl.innerHTML = list.length ? list.map(fila).join("") : '<div class="empty">Sin incidencias hoy.</div>';
+  const cnt = $("incidDiaCount"); if (cnt) cnt.textContent = list.length;
+}
+// Marca el cajón de incidencias en ROJO mientras haya alguna EN CURSO (por fotograma, barato).
+function actualizarIncidenciasDia() {
+  const list = S.dayIncidents || [];
+  const activa = list.some((i) => S.simT >= i.t0 && S.simT < i.t1);
+  const btn = $("btnIncidDia"); if (btn) btn.classList.toggle("alerta", activa);
+  dibujarViaUnicaIncidencias();
+}
+// Resalta en el mapa los cantones que están en VÍA ÚNICA por una incidencia vigente (línea gruesa
+// punteada ámbar). Solo redibuja cuando cambia el conjunto activo (barato por fotograma).
+let _singleSig = "";
+function dibujarViaUnicaIncidencias() {
+  const now = S.simT;
+  const act = (S.dayIncidents || []).filter((i) => i.effect === "single" && now >= i.t0 && now < i.t1);
+  const sig = act.map((i) => i.from + ">" + i.to).sort().join("|");
+  if (sig === _singleSig) return;
+  _singleSig = sig;
+  singleIncLayer.clearLayers();
+  for (const i of act) {
+    const A = S.stationById.get(i.from), B = S.stationById.get(i.to);
+    if (!A || !B) continue;
+    L.polyline([[A.lat, A.lon], [B.lat, B.lon]], { color: "#ffb400", weight: 6, opacity: 0.9, dashArray: "3,8", lineCap: "round" }).addTo(singleIncLayer);
+  }
+}
+// Nombre de una estación para la lista/buscador de tramos: nombre COMPLETO (con "Barcelona"
+// entero, para poder buscarlo escribiéndolo), solo normaliza los guiones con espacios.
 function nombreCorto(id) {
-  const n = nombre(id);
-  return n.replace(/^Barcelona[\s-]+/i, "BCN ").replace(/\s+-\s+/g, " ").trim();
+  return nombre(id).replace(/\s+-\s+/g, " ").trim();
 }
 // Un sub-paso del reproductor: sitúa cada tren interpolando su trace y reconstruye la ocupación de
 // bloques (para colorear las señales del mapa exactamente como el motor). Vía única + parado =
@@ -635,8 +738,11 @@ function pasoRepro(dtGame) {
       : rt.f[i0] / 1000;
     const v = rt.v[i0] + (rt.v[i1] - rt.v[i0]) * fr;
     activos++;
-    const stopped = frac >= 0.995, singleHere = S.singleTrack.has(canon(a, b));
-    if (!(stopped && singleHere)) {
+    // El andén (vía doble) es una EXTENSIÓN del tramo de aproximación: un tren parado ahí SIGUE
+    // ocupando ese tramo → la señal de entrada queda en ROJO mientras está en la estación. Solo en
+    // VÍA ÚNICA el andén es apartadero y libera el testigo (para el cruce en sentido contrario).
+    const stopped = frac >= 0.995;
+    if (!(stopped && esViaUnica(a, b))) {
       const m = subM(a, b); let sb = Math.min(Math.floor(frac * m), m - 1); if (sb < 0) sb = 0;
       const rk = sbRes(a, b, sb); let arr = S.occ.get(rk); if (!arr) { arr = []; S.occ.set(rk, arr); } arr.push(t.id);
     }
@@ -886,11 +992,15 @@ function buildStationPanel() {
     }
     for (const v of g.vias) {
       const esMain = g.mainA === v || g.mainB === v;
-      const tags = esMain ? [g.mainA === v ? "◀A" : "", g.mainB === v ? "B▶" : ""].filter(Boolean).join(" ") : '<span class="dep-tag">🅿 depósito</span>';
+      // Dirección de la vía (en vez de A/B): A = sentido Norte, B = sentido Sur (geográfico, ver ladoEdge).
+      // La interfaz se muestra VOLTEADA horizontalmente (Sur a la izquierda, Norte a la derecha) para
+      // que las direcciones casen con la orientación del mapa (como las flechitas blancas). Es SOLO
+      // presentación: `data-lado` (A/B) y toda la lógica de señalización quedan intactos.
+      const tags = esMain ? [g.mainB === v ? "◀ dir. Sur" : "", g.mainA === v ? "dir. Norte ▶" : ""].filter(Boolean).join(" ") : '<span class="dep-tag">🅿 depósito</span>';
       html += `<div class="trackrow${esMain ? "" : " siding"}">
-        <button class="sig" data-v="${v}" data-lado="A">A</button>
+        <button class="sig" data-v="${v}" data-lado="B" title="Señal sentido Sur">S</button>
         <div class="viac ${esMain ? "main" : "dep"}" data-v="${v}" data-corr="${c}">Vía ${v + 1} ${tags}<span class="occ-label"></span></div>
-        <button class="sig" data-v="${v}" data-lado="B">B</button>
+        <button class="sig" data-v="${v}" data-lado="A" title="Señal sentido Norte">N</button>
       </div>`;
     }
   }
@@ -921,14 +1031,16 @@ function actualizarEstacionDinamico() {
   const esperaSalida = new Set();       // "corredor|lado": un servicio espera salir por ahí (vía ppal.)
   const dormidoSalida = new Set();      // "v|lado": un durmiente saldrá por ahí (señal roja hasta que salga)
   const etiqueta = new Map();           // v -> texto de ocupación
-  // Servicios EN CURSO parados aquí → en su vía principal (corredor + lado).
+  // Servicios EN CURSO parados aquí → en su vía principal (corredor + lado). Se toma la posición
+  // REAL del reproductor (trace), no el horario: un tren está andanado en `s` si el trace lo sitúa
+  // parado (frac≈1) con `s` como destino del cantón que ocupa. Así el panel coincide con el mapa.
   for (const t of S.trains) {
-    const te = S.simT - t.shift, seg = segmentoDe(t, te);
-    if (!(seg && !seg.moving && t.pts[seg.i].id === s.id)) continue;
+    const r = t.repro;
+    if (!r || r.frac < 0.995 || r.b !== s.id) continue;
     const c = corrIdx(il, t.line);
     let via = viaPrincipal(il, t.side, t.line);
     if (il.occ[via] != null) { const libre = il.corr[c].vias.find((v) => il.occ[v] == null); if (libre != null) via = libre; }
-    il.occ[via] = t.id; etiqueta.set(via, t.line + " " + t.id);
+    il.occ[via] = t.id; etiqueta.set(via, t.line + " → " + nombre(t.pts[t.pts.length - 1].id));
     // Un tren que solo PARA (recoge pasajeros) NO pone su señal de salida en rojo; solo la pone
     // roja si está realmente RETENIDO por el bloque de delante (t.esperando). El tiempo de parada
     // reglamentario se cumple igual: no saldrá antes aunque la señal esté verde.
@@ -951,7 +1063,8 @@ function actualizarEstacionDinamico() {
   const pc = $("parkCount"); if (pc) pc.textContent = park;
   let prox = null, mejor = Infinity;
   for (const t of S.trains) { const te = S.simT - t.shift, seg = segmentoDe(t, te); if (!seg) continue; for (let j = Math.max(seg.i, 0); j < t.pts.length; j++) { if (t.pts[j].id === s.id) { const eta = t.pts[j].a - te; if (eta >= 0 && eta < mejor) { mejor = eta; prox = t; } break; } } }
-  $("stNext").innerHTML = prox ? `<span class="stNextline">Próximo: <b>${prox.line}</b> tren ${prox.id} en ~${Math.round(mejor / 60)} min</span>` : `<span class="muted">Sin trenes próximos.</span>`;
+  $("stNext").innerHTML = prox ? `<span class="stNextline">Próximo: <b>${prox.line}</b> → ${nombre(prox.pts[prox.pts.length - 1].id)} en ~${Math.round(mejor / 60)} min</span>` : `<span class="muted">Sin trenes próximos.</span>`;
+  pintarProximos(s);
   // Aspecto EFECTIVO de cada señal interna (misma regla que las de tramo): ROJO si está forzada
   // a mano, si el primer bloque de vía de salida de ese lado está ocupado, si retiene a un
   // servicio que espera salir o a un durmiente en su plaza; ÁMBAR si su bloque está libre pero
@@ -973,6 +1086,54 @@ function actualizarEstacionDinamico() {
     cell.classList.toggle("occ", !!occ);
     const lbl = cell.querySelector(".occ-label"); if (lbl) lbl.textContent = occ ? " · " + (etiqueta.get(v) || occ) : "";
   });
+}
+
+// Índice de parada ALCANZADA por un tren según el reproductor (trace): i si va por el cantón
+// pts[i]→pts[i+1], i+1 si está parado en pts[i+1]. -1 si aún no ha salido / ya finalizó / no hay trace.
+function reproIndex(t) {
+  const r = t.repro;
+  if (!r) return -1;
+  for (let i = 0; i < t.pts.length - 1; i++) {
+    if (t.pts[i].id === r.a && t.pts[i + 1].id === r.b) return r.frac >= 0.995 ? i + 1 : i;
+  }
+  return -1;
+}
+// Próximos trenes que POR HORARIO deben pasar por la estación `s`: los siguientes 15 aún no llegados,
+// ordenados por hora de paso. Si su hora ya pasó y el tren no ha llegado, se marca el RETRASO (los
+// minutos transcurridos desde esa hora). El horario NO manda sobre los semáforos; esto es informativo.
+function pintarProximos(s) {
+  const box = $("stNextList"); if (!box) return;
+  const now = S.simT;
+  const rows = [];
+  for (const t of S.trains) {
+    let j = -1;
+    for (let k = 0; k < t.pts.length; k++) { if (t.pts[k].id === s.id && !t.pts[k].pass) { j = k; break; } }
+    if (j < 0) continue;
+    const ta = t.pts[j].a;
+    const ri = reproIndex(t);   // posición REAL del tren en el trace (−1 si no está en la ventana)
+    let lateMin = 0;
+    if (ri >= 0) {
+      // En ruta: si ya alcanzó/pasó la estación, no es "próximo"; si va detrás de su hora, retraso real.
+      if (ri >= j) continue;
+      if (ta < now) lateMin = Math.round((now - ta) / 60);
+    } else {
+      // Sin posición en el trace: o ya circuló (jornada acabada) o aún no ha salido (futuro).
+      if (t.pts[t.pts.length - 1].a < now) continue;   // ya terminó su servicio → no es próximo
+      if (ta < now) continue;                           // sin trace y hora pasada → no inventar retraso
+    }
+    if (ta > now + 3 * 3600) continue;                  // solo las próximas ~3 h
+    rows.push({ ta, line: t.line, dest: nombre(t.pts[t.pts.length - 1].id), lateMin });
+  }
+  rows.sort((a, b) => a.ta - b.ta);
+  const top = rows.slice(0, 15);
+  box.innerHTML = top.length
+    ? top.map((r) => {
+        const when = r.lateMin > 0
+          ? `<span class="np-time late">${hhmm(r.ta)} <b>+${r.lateMin}′</b></span>`
+          : `<span class="np-time">${hhmm(r.ta)}</span>`;
+        return `<div class="np-row${r.lateMin > 0 ? " is-late" : ""}">${lineImg(r.line, "line-logo xs") || ""}<span class="np-line">${r.line}</span><span class="np-dest">→ ${r.dest}</span>${when}</div>`;
+      }).join("")
+    : `<div class="muted" style="padding:6px">Sin trenes programados próximamente.</div>`;
 }
 
 // ---- Actualización del GTFS (descarga oficial o subida manual) ----------------------------
@@ -1098,7 +1259,56 @@ function finDelDia() {
 
 // ---- KPI, leyenda -------------------------------------------------------------------------
 function actualizarKpi() { $("kDelay").textContent = Math.round(S.kpi).toLocaleString("es-ES"); }
-function pintarLeyenda() { $("legend").innerHTML = S.net.lines.map((l) => `<div class="row" data-line="${l.line}">${lineImg(l.line, "line-logo") || `<span class="sw" style="background:${l.color}"></span>`}<span>${l.line}</span></div>`).join(""); }
+// Orden de la leyenda: por REGIÓN (R rodalies/regionals, luego RG, RL, RT como bloques separados)
+// y, dentro de cada bloque, por número (con el sufijo N/S detrás). Solo estético.
+function lineSortKey(name) {
+  const m = /^(R[GLT]?)(\d*)([NS]?)/i.exec(name) || [];
+  const prefix = (m[1] || "R").toUpperCase();
+  const groupOrder = { R: 0, RG: 1, RL: 2, RT: 3 }[prefix];
+  return { group: groupOrder === undefined ? 9 : groupOrder, prefix, num: parseInt(m[2] || "0", 10) || 0, suf: m[3] || "" };
+}
+function pintarLeyenda() {
+  const lines = S.net.lines.slice().sort((a, b) => {
+    const ka = lineSortKey(a.line), kb = lineSortKey(b.line);
+    return ka.group - kb.group || ka.num - kb.num || ka.suf.localeCompare(kb.suf) || a.line.localeCompare(b.line);
+  });
+  let html = "", prevGroup = null;
+  for (const l of lines) {
+    const g = lineSortKey(l.line).group;
+    if (prevGroup !== null && g !== prevGroup) html += `<div class="legend-sep" aria-hidden="true"></div>`;
+    prevGroup = g;
+    html += `<div class="row" data-line="${l.line}">${lineImg(l.line, "line-logo") || `<span class="sw" style="background:${l.color}"></span>`}<span>${l.line}</span></div>`;
+  }
+  $("legend").innerHTML = html;
+}
+
+// ---- Vista "mapa por velocidad máxima (Vmax)" ---------------------------------------------
+// Colorea cada cantón por su Vmax de vía (del perfil ADIF, servida en el JSON de red). Los cantones
+// con una LTV (limitación temporal) vigente se marcan con un color BRILLANTE distinto. Es solo una
+// capa de color alternativa: no toca la simulación (los trenes siguen reproduciendo el trace).
+function vmaxColor(z) {
+  if (!z || !z.v) return "#5b6472";                  // sin cobertura ADIF
+  if (z.ltv) return "#ff33d6";                        // LTV: color brillante que resalta
+  const v = z.v;
+  return v >= 140 ? "#ef4444" : v >= 120 ? "#f59e0b" : v >= 100 ? "#22c55e" : v >= 70 ? "#06b6d4" : "#2563eb";
+}
+const VMAX_LEYENDA = [
+  ["#2563eb", "< 70"], ["#06b6d4", "70–99"], ["#22c55e", "100–119"],
+  ["#f59e0b", "120–139"], ["#ef4444", "≥ 140"], ["#ff33d6", "LTV (temporal)"], ["#5b6472", "sin dato"],
+];
+function pintarVmaxLegend() {
+  const el = $("vmaxLegend"); if (!el) return;
+  el.hidden = !S.vmaxView;
+  if (S.vmaxView) {
+    el.innerHTML = `<div class="vmax-title">Vmax de vía (km/h)</div>` +
+      VMAX_LEYENDA.map(([c, t]) => `<div class="vmax-item"><span class="vmax-sw" style="background:${c}"></span>${t}</div>`).join("");
+  }
+}
+function aplicarVistaVmax(on) {
+  S.vmaxView = on;
+  dibujarLineas();       // redibuja con el color por Vmax (dibujarLineas ya lee S.vmaxView)
+  pintarVmaxLegend();
+}
 
 // ---- Controles ----------------------------------------------------------------------------
 function setSpeed(k) { S.speedKey = k; S.speed = VELOCIDADES[k]; document.querySelectorAll("#speeds button").forEach((b) => b.classList.toggle("active", b.dataset.speed === k)); }
@@ -1109,10 +1319,26 @@ $("gtfsUpload").addEventListener("click", subirGtfs);
 $("source").addEventListener("change", cargarHorarios);
 $("lineFilter").addEventListener("change", cargarHorarios);
 $("showSignals").addEventListener("change", construirSemaforos);
+$("showVmax").addEventListener("change", (e) => aplicarVistaVmax(e.target.checked));
 $("btnTrenes").addEventListener("click", () => { const p = $("trenesPanel"); p.hidden = !p.hidden; refrescarTrenes(); });
 $("trenesClose").addEventListener("click", () => $("trenesPanel").hidden = true);
 ["tFiltLine", "tOnlyLate", "tSort"].forEach((id) => $(id).addEventListener("change", refrescarTrenes));
 $("finRepetir").addEventListener("click", () => location.reload());
+
+// Cajón de incidencias del día.
+$("btnIncidDia").addEventListener("click", () => { const p = $("incidDiaPanel"); p.hidden = !p.hidden; pintarIncidenciasDia(); });
+$("incidDiaClose").addEventListener("click", () => $("incidDiaPanel").hidden = true);
+
+// Pantalla PREVIA: al confirmar, se genera el día con la semilla elegida y se oculta la pantalla.
+$("preConfirm").addEventListener("click", async () => {
+  const seed = +$("preSeed").value || 0;
+  $("preConfirm").disabled = true;
+  $("preStatus").textContent = "Generando la jornada con el motor (unos segundos)…";
+  await generarDia(seed);
+  $("preDay").classList.add("hidden");
+  $("preConfirm").disabled = false;
+  $("preStatus").textContent = "";
+});
 window.addEventListener("resize", () => map.invalidateSize());
 
 // ---- Bucle --------------------------------------------------------------------------------
@@ -1128,8 +1354,9 @@ function bucle(now) {
   render();
   actualizarSemaforosAspecto();      // color de las señales del mapa: CADA fotograma (fluido a ×25)
   actualizarSemaforoDinamico();      // aspecto del panel de señal abierto: también por fotograma
+  actualizarIncidenciasDia();        // cajón de incidencias en rojo si hay alguna en curso
   acumUI += dt;
-  if (acumUI > 0.5) { acumUI = 0; actualizarKpi(); refrescarIncidencias(); refrescarTrenes(); actualizarEstacionDinamico(); }
+  if (acumUI > 0.5) { acumUI = 0; actualizarKpi(); refrescarTrenes(); actualizarEstacionDinamico(); pintarIncidenciasDia(); }
   requestAnimationFrame(bucle);
 }
 
@@ -1140,18 +1367,23 @@ async function iniciar() {
   try {
     await cargarRed(); await cargarHorarios(); construirSemaforos();
     setTimeout(() => map.invalidateSize(), 120);
-    // Motor unificado: pide el TRACE físico (el servidor corre la jornada; tarda unos segundos).
-    // El mapa REPRODUCE la física real (acel./frenada). Es el ÚNICO motor visual: no hay respaldo JS.
-    $("netInfo").textContent += " · Calculando la simulación física (motor Rust)…";
-    try {
-      const seed = +(new URLSearchParams(location.search).get("seed")) || 0;
-      await cargarTrace(seed);
-      $("netInfo").textContent = $("netInfo").textContent.replace(" · Calculando la simulación física (motor Rust)…", " · Física del motor Rust (reproductor).");
-    } catch (e) {
-      $("netInfo").textContent = "⚠ No se pudo cargar la simulación del motor Rust (trace): " + e;
-    }
+    // NO se genera el día directamente: primero la PANTALLA PREVIA de incidencias. El día (trace)
+    // se genera al pulsar "Confirmar" (con o sin incidencias). Ver `generarDia`.
+    const seedUrl = +(new URLSearchParams(location.search).get("seed"));
+    if (Number.isFinite(seedUrl) && $("preSeed")) $("preSeed").value = seedUrl;
   } catch (e) { $("netInfo").textContent = "Error cargando datos: " + e; }
   requestAnimationFrame(bucle);
+}
+// Genera el día: pide el TRACE físico al motor con la semilla elegida y reproduce la física real.
+// Es el ÚNICO motor visual (no hay respaldo JS). Se llama al confirmar la pantalla previa.
+async function generarDia(seed) {
+  $("netInfo").textContent = $("netInfo").textContent.replace(/ · .*$/, "") + " · Calculando la simulación física (motor Rust)…";
+  try {
+    await cargarTrace(seed);
+    $("netInfo").textContent = $("netInfo").textContent.replace(" · Calculando la simulación física (motor Rust)…", " · Física del motor Rust (reproductor).");
+  } catch (e) {
+    $("netInfo").textContent = "⚠ No se pudo cargar la simulación del motor Rust (trace): " + e;
+  }
 }
 iniciar();
 
@@ -1344,25 +1576,32 @@ iniciar();
 
   // ── "Lanzar incidencia AHORA": elige plantilla + tramo → re-simula la jornada con la
   // incidencia inyectada desde la hora actual (así el mapa visual la refleja de verdad). ──
+  const tramoMap = new Map();   // texto visible "Nombre A → Nombre B" -> "from>to"
   function poblarLive() {
-    const selTpl = $("liveTpl"), selTr = $("liveTramo");
+    const selTpl = $("liveTpl"), dl = $("tramoList");
     if (selTpl) selTpl.innerHTML = tpls.map((t, i) => `<option value="${i}">${t.motivo} · ${EFF[t.effect] || t.effect}</option>`).join("")
       || '<option value="">(crea plantillas arriba)</option>';
-    // La lista de TRAMOS (nombres acortados) sale de la red; espera a que cargue.
+    // Buscador de TRAMOS: datalist con el nombre COMPLETO (se busca escribiéndolo). El value del
+    // <input> es el texto visible; se resuelve a "from>to" con tramoMap al lanzar.
     const nEdges = (S.net && S.net.edges || []).length;
-    if (selTr && (!selTr.options.length || selTr.dataset.n !== String(nEdges))) {
-      if (nEdges) {
-        const eds = S.net.edges.slice().sort((a, b) => nombreCorto(a.from).localeCompare(nombreCorto(b.from)));
-        selTr.innerHTML = eds.map((e) => `<option value="${e.from}>${e.to}">${nombreCorto(e.from)} → ${nombreCorto(e.to)}</option>`).join("");
-        selTr.dataset.n = String(S.net.edges.length);
-      }
+    if (dl && nEdges && dl.dataset.n !== String(nEdges)) {
+      const eds = S.net.edges.slice().sort((a, b) => nombreCorto(a.from).localeCompare(nombreCorto(b.from)));
+      tramoMap.clear();
+      dl.innerHTML = eds.map((e) => {
+        const txt = `${nombreCorto(e.from)} → ${nombreCorto(e.to)}`;
+        tramoMap.set(txt, e.from + ">" + e.to);
+        return `<option value="${txt}"></option>`;
+      }).join("");
+      dl.dataset.n = String(nEdges);
     }
   }
   const launchBtn = $("liveLaunch");
   if (launchBtn) launchBtn.onclick = async () => {
     const ti = +$("liveTpl").value, tpl = tpls[ti];
-    const tramo = $("liveTramo").value, st = $("liveStatus");
-    if (!tpl || !tramo) { st.textContent = "Elige una plantilla y un tramo."; return; }
+    const txt = $("liveTramo").value.trim(), st = $("liveStatus");
+    // El input acepta el texto visible del tramo; se resuelve a "from>to" con el mapa del datalist.
+    const tramo = tramoMap.get(txt);
+    if (!tpl || !tramo) { st.textContent = "Escribe/elige un tramo válido de la lista (nombre exacto)."; return; }
     const [from, to] = tramo.split(">");
     const t0 = Math.floor(S.simT);
     st.textContent = "Recalculando la jornada con la incidencia…";
@@ -1374,11 +1613,9 @@ iniciar();
       tr.byId = new Map();
       for (const t of tr.trains) tr.byId.set(t.id, t);
       S.trace = tr; // se conserva S.simT: el trace hasta 'ahora' es idéntico (misma semilla)
-      S.incidentes.push({
-        estado: "activa", nombre: tpl.motivo, kind: "", scope: "edge", target: from + ">" + to,
-        label: nombreCorto(from) + " → " + nombreCorto(to), whenSec: t0, durSec: tpl.dur_min * 60,
-      });
-      if (typeof refrescarIncidencias === "function") refrescarIncidencias();
+      // El trace re-generado ya incluye TODAS las incidencias del día (incluida la lanzada).
+      S.dayIncidents = (tr.incidents || []).map((i) => ({ ...i, launched: i.t0 >= t0 - 1 }));
+      pintarIncidenciasDia();
       st.textContent = `Incidencia "${tpl.motivo}" activa desde ${hhmm(t0)} en ${nombreCorto(from)} → ${nombreCorto(to)}.`;
     } catch (e) {
       st.textContent = "Error al recalcular la jornada.";

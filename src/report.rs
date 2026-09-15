@@ -995,13 +995,19 @@ pub fn render_info_page() -> String {
 pub fn render_numbers_page() -> String {
     let head = format!("<title>Rodalies Simulator · Varias runs (números)</title>\n{STYLE}");
     let body = r##"<style>
-.info-card{max-width:920px;margin:14px auto;text-align:left}
-.num-tbl{width:100%;border-collapse:collapse;margin-top:12px;font-size:13px}
-.num-tbl th,.num-tbl td{border-bottom:1px solid rgba(255,255,255,.1);padding:6px 8px;text-align:right}
+.info-card{max-width:920px;margin:14px auto;text-align:left;box-sizing:border-box}
+.num-tbl{width:100%;border-collapse:collapse;margin-top:12px;font-size:13px;table-layout:fixed}
+.num-tbl th,.num-tbl td{border-bottom:1px solid rgba(255,255,255,.1);padding:6px 8px;text-align:right;vertical-align:top;overflow-wrap:anywhere;word-break:break-word}
 .num-tbl th{opacity:.7;font-weight:600}
-.num-tbl td:last-child,.num-tbl th:last-child{text-align:left}
+.num-tbl td:last-child,.num-tbl th:last-child{text-align:left;width:40%}
 .info-card label{font-size:13px;display:inline-flex;flex-direction:column;gap:3px;opacity:.85}
 .info-card input{background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.15);border-radius:7px;padding:5px 7px;color:inherit;font:inherit}
+.inc-cell{line-height:1.35}
+.inc-line{padding:3px 0;border-bottom:1px dashed rgba(255,255,255,.08)}
+.inc-line:last-child{border-bottom:none}
+.inc-line .eff{opacity:.65;font-size:11px}
+.inc-line .when{opacity:.7;font-variant-numeric:tabular-nums}
+.num-tbl .muted{opacity:.5}
 </style>
 <div class="menu-wrap">
     <div class="panel-bar"><a class="back-link" href="/">← Menú</a></div>
@@ -1036,9 +1042,13 @@ pub fn render_numbers_page() -> String {
         $("prog").textContent="Ejecutando semilla "+s+"…";
         try{
           const r=await (await fetch("/api/simulate?seed="+s)).json();
-          const inc=(r.incidents||[]).map(i=>`${i.motivo} (${EFF[i.effect]||i.effect}) ${Math.floor(i.t0/3600)}h`).join("; ")||"—";
+          const esc=x=>String(x).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
+          // Log de incidencias: DÓNDE (nombres de estación) y CUÁNDO (HH:MM–HH:MM), una por línea.
+          const inc=(r.incidents||[]).length
+            ? (r.incidents).map(i=>`<div class="inc-line"><b>${esc(i.motivo)}</b> <span class="eff">${EFF[i.effect]||i.effect}</span><br><span class="where">${esc(i.from_name||i.from)} → ${esc(i.to_name||i.to)}</span> · <span class="when">${i.t0_hm||Math.floor(i.t0/3600)+"h"}–${i.t1_hm||""}</span></div>`).join("")
+            : '<span class="muted">— sin incidencias hoy</span>';
           const tr=document.createElement("tr");
-          tr.innerHTML=`<td>${s}</td><td>${r.n_trains}</td><td>${r.max_delay_min.toFixed(0)}</td><td>${r.peak_waiting}</td><td>${r.final_waiting}</td><td>${Math.round(r.pax_min).toLocaleString()}</td><td style="text-align:left">${inc}</td>`;
+          tr.innerHTML=`<td>${s}</td><td>${r.n_trains}</td><td>${r.max_delay_min.toFixed(0)}</td><td>${r.peak_waiting}</td><td>${r.final_waiting}</td><td>${Math.round(r.pax_min).toLocaleString()}</td><td class="inc-cell">${inc}</td>`;
           tb.appendChild(tr);
         }catch(e){
           const tr=document.createElement("tr"); tr.innerHTML=`<td>${s}</td><td colspan="6">error</td>`; tb.appendChild(tr);

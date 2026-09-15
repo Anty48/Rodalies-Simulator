@@ -227,7 +227,6 @@ struct Infra {
     stop_index: HashMap<String, u32>,          // stop_id → nid (resolver incidencias)
     sub_blocks: HashMap<(u32, u32), u32>,      // (a_nid,b_nid) → nº sub-bloques
     single_track: HashSet<u32>,                // recursos canónicos que son vía única ESTÁTICA
-    plat_cap: Vec<u32>,                        // nid → capacidad de andén (denso)
     terminals: HashSet<u32>,                   // nids terminales
     edges_from: HashMap<u32, Vec<u32>>,        // a_nid → [b_nid] (visor: salida_ocupada)
     single_track_users: HashMap<u32, Vec<(usize, usize)>>, // recurso canónico → (tren, parada)
@@ -711,10 +710,15 @@ impl Engine {
             if b.last && b.arr_idx == t.pts.len() - 1 && infra.terminals.contains(&b.dest) {
                 continue;
             }
-            // Vía única: un tren PARADO en la estación destino del bloque la libera (apartadero).
+            // VÍA ÚNICA: la estación es un APARTADERO fuera de la vía; un tren PARADO en la estación
+            // destino la LIBERA para que el sentido contrario pueda cruzar (testigo compartido).
             if b.last && dynp.block_single(b) && t.phase == Phase::Dwell && t.station_idx == b.arr_idx {
                 continue;
             }
+            // VÍA DOBLE: el andén de la dirección es una EXTENSIÓN del tramo de aproximación — un tren
+            // parado en él SIGUE ocupando ese tramo, así que la señal de entrada al tramo queda en ROJO
+            // mientras el tren está en la estación (no se vacía al llegar). Los trenes de detrás esperan
+            // en el tramo previo (colapso realista), no se cuelan en vías extra.
             occ[dynp.block_res(b) as usize].push(idx);
         }
 
@@ -1170,7 +1174,6 @@ fn occ_cold(infra: &Infra, occ: &[Vec<usize>], dynp: &Dyn, a: u32, b: u32, sb: u
     }
     let canon = infra.canon_res(a, b);
     let unica = canon.is_some_and(|c| infra.single_track.contains(&c) || dynp.single.contains(&c));
-    let m = infra.sub_m_id(a, b);
     let res = if unica {
         match canon {
             Some(c) => c,
@@ -1182,14 +1185,8 @@ fn occ_cold(infra: &Infra, occ: &[Vec<usize>], dynp: &Dyn, a: u32, b: u32, sb: u
             None => return false,
         }
     };
-    let cap = if unica {
-        1
-    } else if sb == m - 1 {
-        infra.plat_cap.get(b as usize).copied().unwrap_or(1)
-    } else {
-        1
-    };
-    occ.get(res as usize).is_some_and(|arr| arr.len() >= cap as usize)
+    // Capacidad 1 por bloque (incluido el de aproximación al andén) — igual que el bucle caliente.
+    occ.get(res as usize).is_some_and(|arr| !arr.is_empty())
 }
 
 fn aspecto_bloque(infra: &Infra, occ: &[Vec<usize>], dynp: &Dyn, a: u32, b: u32, sb: u32, m: u32) -> Aspecto {
@@ -1280,7 +1277,6 @@ fn construir_secuencia(pts: &[Pt], cum_l: &[f64], infra: &Infra) -> Vec<Block> {
         let len = cum_l[i + 1] - cum_l[i];
         let res_single = infra.canon_res(a, b).expect("todo cantón tiene recurso canónico");
         let stat_single = infra.single_track.contains(&res_single);
-        let plat = infra.plat_cap.get(b as usize).copied().unwrap_or(1);
         for sb in 0..m {
             let res = if stat_single {
                 res_single
@@ -1299,7 +1295,10 @@ fn construir_secuencia(pts: &[Pt], cum_l: &[f64], infra: &Infra) -> Vec<Block> {
                 res,
                 res_single,
                 stat_single,
-                cap_double: if sb == m - 1 { plat } else { 1 },
+                // Capacidad 1 por bloque, incluido el último (aproximación al andén): así la señal
+                // de entrada al último tramo se pone ROJA cuando un tren lo ocupa (como en la
+                // realidad). Los terminales liberan el bloque al finalizar (no lo retienen).
+                cap_double: 1,
             });
         }
     }
@@ -1321,15 +1320,6 @@ fn build_infra(net: &Network, trains: &[Train], single_track_str: HashSet<String
             stop_index.entry(p.id.clone()).or_insert(next);
         }
     }
-    let n_nodes = stop_index.len();
-
-    // 2. Capacidad de andén densa por nid (vías reales / 2, mín. 1).
-    let mut plat_cap = vec![1u32; n_nodes];
-    for (id, &nid) in &stop_index {
-        let tracks = topology::platform_tracks(net.stop_name(id));
-        plat_cap[nid as usize] = (tracks as u32 / 2).max(1);
-    }
-
     // 3. Sub-bloques por cantón dirigido + aristas salientes + ASIGNACIÓN de recursos de ocupación
     //    a índices `u32` (canónico por cantón; dirigido por sub-bloque en vía doble). El bucle
     //    caliente indexa `occ` por estos ids sin volver a hashear cadenas.
@@ -1405,7 +1395,6 @@ fn build_infra(net: &Network, trains: &[Train], single_track_str: HashSet<String
         stop_index,
         sub_blocks,
         single_track,
-        plat_cap,
         terminals,
         edges_from,
         single_track_users,
@@ -1508,7 +1497,6 @@ mod tests {
             stop_index,
             sub_blocks: HashMap::new(),
             single_track: HashSet::new(),
-            plat_cap: vec![1; 4],
             terminals: HashSet::new(),
             edges_from: HashMap::new(),
             single_track_users: HashMap::new(),

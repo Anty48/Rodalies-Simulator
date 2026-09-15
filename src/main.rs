@@ -78,7 +78,7 @@ async fn main() {
     }
 
     // Física del motor unificado (misma para el dashboard estático y el servidor interactivo).
-    let adif = calculator::infrastructure::AdifNet::load(Path::new("processed/adif/rfig_speed.json"));
+    let adif = calculator::infrastructure::AdifNet::load_default();
     match &adif {
         Some(a) => println!("✓ CVM ADIF carregada: {} segments de via (processed/adif)", a.n_segments()),
         None => println!("· CVM ADIF no trobada (processed/adif/rfig_speed.json). Executa scripts/fetch_adif_cvm.py"),
@@ -170,7 +170,7 @@ fn run_system_optimizer(net: &Network) {
     };
 
     // Física del motor unificado (misma que ve el juego); si falta, cae a Vmax por defecto.
-    let adif = calculator::infrastructure::AdifNet::load(Path::new("processed/adif/rfig_speed.json"));
+    let adif = calculator::infrastructure::AdifNet::load_default();
     let ltv = calculator::ltv::load_default();
 
     let t0 = Instant::now();
@@ -305,7 +305,7 @@ fn run_engine_demo(net: &Network) {
         cfg.seed = seed;
     }
     // Datos reales de infraestructura para la física (Vmax de vía CVM/ADIF + LTV).
-    let adif = calculator::infrastructure::AdifNet::load(Path::new("processed/adif/rfig_speed.json"));
+    let adif = calculator::infrastructure::AdifNet::load_default();
     let ltv = calculator::ltv::load_default();
     match &adif {
         Some(a) => println!("✓ CVM ADIF: {} segments de via (física per cantó)", a.n_segments()),

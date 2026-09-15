@@ -9,6 +9,8 @@
 //! secuencia de estaciones aproximada por «vecino más cercano»): aquí la secuencia es la real
 //! del GTFS, y las vías por estación salen de `topology`.
 
+use crate::calculator::infrastructure::{self, AdifNet};
+use crate::calculator::ltv::LtvSet;
 use crate::gtfs_loader::Network;
 use crate::topology;
 use serde::Serialize;
@@ -105,6 +107,21 @@ struct GameEdge {
     from: String,
     to: String,
     lines: Vec<String>,
+    /// Perfil de velocidad máxima DENTRO del cantón (una entrada por zona de Vmax uniforme). Así el
+    /// frontend colorea el cantón por SUB-TRAMOS (la Vmax varía a lo largo del cantón) en vez de con
+    /// un color único, y una LTV se ve en los pocos metros reales que ocupa, no en km enteros.
+    zones: Vec<VmaxZone>,
+}
+
+/// Una zona de Vmax uniforme dentro de un cantón. `a`/`b` = fracción de la longitud del cantón
+/// (0..1) donde empieza/acaba; `v` = Vmax en km/h; `ltv` = la Vmax de esta zona está rebajada por
+/// una limitación temporal de velocidad (respecto a la Vmax de diseño de la vía en ese punto).
+#[derive(Serialize)]
+struct VmaxZone {
+    a: f64,
+    b: f64,
+    v: u16,
+    ltv: bool,
 }
 
 #[derive(Serialize)]
@@ -293,8 +310,53 @@ fn fallback_color(line: &str) -> String {
     format!("hsl({}, 65%, 45%)", h % 360)
 }
 
+/// Perfil de Vmax POR ZONAS de un cantón (fracciones 0..1 a lo largo de su longitud), con la Vmax
+/// EFECTIVA (incluye LTV) por zona y una marca `ltv` en las zonas donde una limitación temporal
+/// rebaja la Vmax de diseño. Vacío si no hay cobertura ADIF o faltan coordenadas.
+fn edge_vmax_zones(
+    st_coord: &HashMap<String, (f64, f64)>,
+    adif: Option<&AdifNet>,
+    ltv: Option<&LtvSet>,
+    from: &str,
+    to: &str,
+) -> Vec<VmaxZone> {
+    const STEP: f64 = 40.0;
+    const TOL: f64 = 140.0;
+    let (Some(&ca), Some(&cb)) = (st_coord.get(from), st_coord.get(to)) else { return Vec::new() };
+    let Some(adif) = adif else { return Vec::new() };
+    // Perfil EFECTIVO (con LTV aplicadas) = lo que se dibuja.
+    let Some(eff) = infrastructure::adif_profile(adif, ltv, &[ca, cb], STEP, TOL) else { return Vec::new() };
+    // Perfil BASE (Vmax de diseño, sin LTV) para marcar qué zonas están rebajadas por una LTV.
+    let base: Vec<(f64, f64, f64)> = infrastructure::adif_profile(adif, None, &[ca, cb], STEP, TOL)
+        .map(|p| p.zones.iter().map(|z| (z.from_m, z.to_m, z.vmax_kmh)).collect())
+        .unwrap_or_default();
+    let total = eff.zones.last().map(|z| z.to_m).unwrap_or(0.0).max(1.0);
+    let base_at = |m: f64| {
+        base.iter().find(|(a, b, _)| m >= *a && m < *b).map(|(_, _, v)| *v).unwrap_or(f64::INFINITY)
+    };
+    let r3 = |x: f64| (x * 1000.0).round() / 1000.0; // 3 decimales (JSON compacto)
+    eff.zones
+        .iter()
+        .map(|z| {
+            let mid = (z.from_m + z.to_m) / 2.0;
+            VmaxZone {
+                a: r3(z.from_m / total),
+                b: r3(z.to_m / total),
+                v: z.vmax_kmh.round() as u16,
+                ltv: z.vmax_kmh + 0.5 < base_at(mid), // rebajada respecto a la Vmax de diseño → LTV
+            }
+        })
+        .collect()
+}
+
 /// JSON de la topología del juego (estaciones + líneas con secuencias reales y colores).
-pub fn network_json(net: &Network, lines: &[String], generated_at: &str) -> String {
+pub fn network_json(
+    net: &Network,
+    lines: &[String],
+    generated_at: &str,
+    adif: Option<&AdifNet>,
+    ltv: Option<&LtvSet>,
+) -> String {
     // Acumuladores de estaciones: id -> (nombre, lat, lon) y líneas que la sirven. Se llenan
     // recorriendo TODOS los servicios de tren (no autobuses), de modo que toda estación por la
     // que circula algún tren queda registrada (y así todo extremo de cantón es una estación
@@ -363,6 +425,9 @@ pub fn network_json(net: &Network, lines: &[String], generated_at: &str) -> Stri
 
     // Conjunto de estaciones con coordenadas (para validar extremos de cantón).
     let st_coords: std::collections::HashSet<String> = st_meta.keys().cloned().collect();
+    // Coordenadas por parada (para la Vmax por cantón); se extrae antes de consumir `st_meta`.
+    let st_coord: HashMap<String, (f64, f64)> =
+        st_meta.iter().map(|(id, (_, lat, lon))| (id.clone(), (*lat, *lon))).collect();
 
     // Estaciones ordenadas por id (determinista).
     let diagrams_by_id = trenscat_diagrams();
@@ -448,10 +513,9 @@ pub fn network_json(net: &Network, lines: &[String], generated_at: &str) -> Stri
     }
     let edges: Vec<GameEdge> = kept
         .into_iter()
-        .map(|((from, to), lines)| GameEdge {
-            from,
-            to,
-            lines: lines.into_iter().collect(),
+        .map(|((from, to), lines)| {
+            let zones = edge_vmax_zones(&st_coord, adif, ltv, &from, &to);
+            GameEdge { from, to, lines: lines.into_iter().collect(), zones }
         })
         .collect();
 

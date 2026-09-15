@@ -288,6 +288,13 @@ fn pt_seg_dist_m(lat: f64, lon: f64, a: [f64; 2], b: [f64; 2], coslat: f64) -> (
 }
 
 impl AdifNet {
+    /// Carga las velocidades de vía preferentes: primero OSM/OpenRailwayMap (mejor calidad y sin la
+    /// alta velocidad que contamina la CVM), y si no, la CVM de ADIF. `None` si no hay ninguna.
+    pub fn load_default() -> Option<AdifNet> {
+        AdifNet::load(Path::new("processed/adif/osm_speed.json"))
+            .or_else(|| AdifNet::load(Path::new("processed/adif/rfig_speed.json")))
+    }
+
     /// Carga el JSON procesado. Devuelve `None` si falta o está corrupto (→ fallback).
     pub fn load(path: &Path) -> Option<AdifNet> {
         let txt = std::fs::read_to_string(path).ok()?;

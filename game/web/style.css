@@ -227,6 +227,13 @@ body.ctc {
 
 /* Leyenda de líneas interactiva */
 .legend { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; }
+/* Separador de bloque (RG/RL/RT): corta la fila para que cada región sea un bloque aparte. */
+.legend .legend-sep { flex-basis: 100%; height: 1px; margin: 3px 0; background: rgba(255,255,255,.10); }
+/* Leyenda de la vista "mapa por Vmax" (aparece al activar el interruptor). */
+.vmax-legend { margin-top: 8px; padding: 8px 10px; border: 1px solid var(--stroke); border-radius: 9px; background: rgba(0,0,0,.22); display: flex; flex-wrap: wrap; gap: 6px 12px; }
+.vmax-legend .vmax-title { flex-basis: 100%; font-size: 11px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; color: var(--faint); margin-bottom: 2px; }
+.vmax-legend .vmax-item { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; }
+.vmax-legend .vmax-sw { width: 16px; height: 5px; border-radius: 2px; display: inline-block; }
 .legend .row {
   display: flex; align-items: center; gap: 6px; font-size: 11.5px; font-weight: 600;
   padding: 4px 8px; border-radius: 20px; cursor: pointer; user-select: none;
@@ -311,6 +318,21 @@ body.ctc {
 .hud-next .muted, .muted { color: var(--faint); }
 
 /* Vías / semáforos internos del enclavamiento */
+/* Desplegable "Próximos trenes" (por horario) bajo las vías del panel de estación. */
+.next-wrap { margin-top: 12px; border-top: 1px solid var(--stroke); padding-top: 8px; }
+.next-wrap > summary { cursor: pointer; font-size: 12px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; color: var(--faint); list-style: none; }
+.next-wrap > summary::-webkit-details-marker { display: none; }
+.next-wrap > summary::before { content: "▸ "; }
+.next-wrap[open] > summary::before { content: "▾ "; }
+.next-wrap > summary .hint { text-transform: none; font-weight: 400; }
+.next-list { max-height: 240px; overflow-y: auto; margin-top: 6px; display: flex; flex-direction: column; gap: 3px; }
+.np-row { display: flex; align-items: center; gap: 7px; padding: 4px 6px; border-radius: 7px; background: rgba(255,255,255,0.04); font-size: 12.5px; }
+.np-row.is-late { background: rgba(220,60,60,0.12); }
+.np-line { font-weight: 700; min-width: 34px; }
+.np-dest { flex: 1 1 auto; opacity: .9; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.np-time { font-variant-numeric: tabular-nums; opacity: .75; }
+.np-time.late { color: #ff6a6a; opacity: 1; }
+.line-logo.xs { width: 16px; height: 16px; border-radius: 3px; }
 .tracks { display: flex; flex-direction: column; gap: 7px; margin-top: 4px; }
 .tracks .form { display: flex; gap: 8px; margin-bottom: 6px; }
 .tracks .form label { flex: 1; font-size: 10px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--faint); }
@@ -357,6 +379,24 @@ body.ctc {
 }
 .drawer-handle svg { fill: none; stroke: currentColor; }
 .handle-count { font-family: var(--mono); font-size: 11px; font-weight: 700; color: var(--ink); background: var(--naranja-lift); border-radius: 20px; padding: 1px 8px; }
+/* Cajón de incidencias del día, a la derecha del de Trenes. Se pone ROJO si hay una en curso. */
+.drawer-handle.right-of-trains { left: calc(50% + 170px); }
+.drawer-handle.alerta { background: rgba(200,38,38,0.94); color: #fff; box-shadow: 0 0 0 1px rgba(255,120,120,0.6), 0 4px 18px rgba(200,38,38,0.5); animation: incidPulse 1.1s ease-in-out infinite; }
+.drawer-handle.alerta .handle-count { background: #fff; color: #c0392b; }
+@keyframes incidPulse { 0%,100%{ filter: brightness(1); } 50%{ filter: brightness(1.3); } }
+/* Filas de incidencia (registro derecho y cajón inferior). */
+.inc-row { padding: 7px 9px; border-radius: 8px; background: rgba(255,255,255,0.04); margin-bottom: 5px; font-size: 12.5px; list-style: none; }
+.inc-row.activa { background: rgba(210,48,48,0.16); box-shadow: inset 0 0 0 1px rgba(255,90,90,0.4); }
+.inc-row .inc-motivo { font-weight: 700; }
+.inc-row .inc-meta { opacity: .8; font-size: 11.5px; }
+.inc-row .inc-when { opacity: .7; font-variant-numeric: tabular-nums; margin-top: 2px; }
+.inc-row .tag { font-size: 10px; background: var(--morado-lift); color: #fff; border-radius: 6px; padding: 0 5px; margin-left: 4px; }
+/* Pantalla PREVIA de selección de incidencias (antes de generar el día). */
+.preday { position: fixed; inset: 0; z-index: 1200; background: rgba(5,7,11,0.82); -webkit-backdrop-filter: blur(7px); backdrop-filter: blur(7px); display: flex; align-items: center; justify-content: center; overflow-y: auto; padding: 24px; }
+.preday.hidden { display: none; }
+.preday-inner { border-radius: 18px; padding: 26px 30px; max-width: 480px; width: 100%; text-align: center; position: relative; }
+.preday-inner h2 { margin: 8px 0 10px; font-size: 20px; }
+.preday-creator { text-align: left; margin: 14px 0; }
 
 .drawer {
   position: fixed; z-index: 540; left: 50%; bottom: 12px; transform: translateX(-50%);
