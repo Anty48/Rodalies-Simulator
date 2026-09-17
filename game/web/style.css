@@ -162,17 +162,59 @@ body.ctc {
 }
 .kpi-chip.mini { min-width: 62px; }
 .kpi-chip .spark { position: absolute; inset: 0; width: 100%; height: 100%; opacity: .5; }
-#kpiSparkLine { stroke: var(--verde); transition: stroke .3s; }
+#kpiSparkLine, #kpiSparkLineLive { stroke: var(--verde); transition: stroke .3s; }
 .kpi-body { position: relative; z-index: 1; }
 .kpi-num { font-family: var(--mono); font-weight: 700; font-size: 19px; line-height: 1; font-variant-numeric: tabular-nums; color: #fff; }
 .kpi-lbl { font-size: 8.5px; letter-spacing: .1em; text-transform: uppercase; color: var(--muted); margin-top: 3px; white-space: nowrap; }
 .kpi-lbl .trend { font-family: var(--mono); }
 /* Estados de alerta del KPI (se aplican por JS de chrome) */
 .kpi-chip.warn { border-color: rgba(255,203,46,0.5); box-shadow: 0 0 0 1px rgba(255,203,46,0.25), inset 0 0 20px rgba(255,203,46,0.08); }
-.kpi-chip.warn #kpiSparkLine { stroke: var(--amber); }
+.kpi-chip.warn #kpiSparkLine, .kpi-chip.warn #kpiSparkLineLive { stroke: var(--amber); }
 .kpi-chip.crit { border-color: rgba(255,77,77,0.6); box-shadow: 0 0 0 1px rgba(255,77,77,0.3), inset 0 0 22px rgba(255,77,77,0.1); }
-.kpi-chip.crit #kpiSparkLine { stroke: var(--rojo); }
+.kpi-chip.crit #kpiSparkLine, .kpi-chip.crit #kpiSparkLineLive { stroke: var(--rojo); }
 .kpi-chip.crit .kpi-num { color: #ffd7d7; }
+
+/* Tooltip de fórmula del KPI (hover sobre el chip) — tipografía "LaTeX", autocontenido/offline */
+.kpi-wrap { position: relative; }
+.kpi-wrap .kpi-chip { cursor: help; }
+.kpi-formula {
+  position: absolute; top: calc(100% + 9px); left: 50%; transform: translateX(-50%) translateY(4px);
+  width: 392px; max-width: 82vw; padding: 13px 15px 11px; z-index: 3000;
+  background: rgba(16,19,26,0.98); border: 1px solid var(--stroke); border-radius: 12px;
+  box-shadow: 0 14px 40px rgba(0,0,0,0.55); color: #e9edf4;
+  opacity: 0; visibility: hidden; pointer-events: none; transition: opacity .16s, transform .16s;
+}
+.kpi-wrap:hover .kpi-formula { opacity: 1; visibility: visible; transform: translateX(-50%) translateY(0); }
+.kpi-formula::before {
+  content: ""; position: absolute; bottom: 100%; left: 50%; transform: translateX(-50%);
+  border: 7px solid transparent; border-bottom-color: rgba(16,19,26,0.98);
+}
+.kf-title { font-size: 11.5px; font-weight: 700; color: #fff; margin-bottom: 9px; line-height: 1.25; }
+.kf-note { display: block; font-size: 9.5px; font-weight: 400; color: var(--muted); text-transform: none; letter-spacing: 0; margin-top: 2px; }
+.kf-eq {
+  display: flex; align-items: center; flex-wrap: wrap; gap: 3px 4px; justify-content: center;
+  font-family: Cambria, "Times New Roman", Georgia, serif; font-size: 17px; color: #fff;
+  padding: 7px 4px 9px; border-bottom: 1px solid var(--stroke); margin-bottom: 9px;
+}
+.kf-eq i { font-style: italic; }
+.kf-lhs, .kf-var, .kf-mul { white-space: nowrap; }
+.kf-mul sub { font-size: 0.62em; }
+.kf-op { color: var(--muted); padding: 0 1px; }
+.kf-brk { font-size: 26px; color: #9fb0c8; line-height: 0; }
+.kf-sum { display: inline-flex; flex-direction: column; align-items: center; line-height: 1; }
+.kf-sig { font-size: 26px; font-weight: 400; }
+.kf-lim { display: flex; flex-direction: column; align-items: center; font-size: 8px; color: var(--muted); }
+.kf-hi { margin-bottom: 1px; }
+.kf-lo { margin-top: 1px; }
+.kf-var sub, .kf-lhs sub { font-size: 0.62em; }
+.kf-legend { list-style: none; margin: 0; padding: 0; display: grid; gap: 5px; }
+.kf-legend li { font-size: 10px; color: #c7d0dd; line-height: 1.35; }
+.kf-legend i { font-style: italic; }
+.kf-k {
+  display: inline-block; min-width: 44px; margin-right: 6px; color: #fff; font-weight: 600;
+  font-family: Cambria, "Times New Roman", Georgia, serif; font-style: italic;
+}
+.kf-k sub { font-size: 0.62em; font-style: italic; }
 
 /* ════════════════════════ PESTAÑAS DE BORDE ════════════════════════ */
 .edge-tab {
@@ -439,6 +481,7 @@ body.ctc {
 .ctc-log .logline .tagx { font-size: 9px; font-weight: 700; letter-spacing: .06em; padding: 2px 7px; border-radius: 5px; text-transform: uppercase; }
 .ctc-log .tagx.inc { background: rgba(236,110,21,0.18); color: var(--naranja-lift); }
 .ctc-log .tagx.hold { background: rgba(255,77,77,0.16); color: var(--rojo); }
+.ctc-log .tagx.late { background: rgba(255,203,46,0.16); color: var(--amber); }
 
 /* ════════════════════════ MARCADORES DEL MAPA (triángulos) ════════════════════════ */
 /* Trenes y semáforos se dibujan como triángulos que apuntan en el SENTIDO DE MARCHA.

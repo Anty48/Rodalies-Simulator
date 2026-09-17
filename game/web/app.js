@@ -91,6 +91,8 @@ const S = {
   units: new Map(),        // id_unidad_física -> {line, parked:bool, atStation, freeAt}
   parked: [],              // unidades físicas actualmente apartadas (para dibujar)
   kpi: 0, activos: 0, selSt: null, selSig: null, finished: false,
+  arrivals: [],            // llegadas tarde a estación (del motor): {t, train, line, stop, delay}
+  arrPtr: 0,               // puntero de avance en `arrivals` (contador incremental de min de retraso)
   terminals: new Set(),    // estaciones que solo son cabecera/fin de línea (nunca paso): apartadero
 };
 
@@ -388,7 +390,7 @@ async function cargarHorarios() {
   construirSecuenciaBloques();
   trainLayer.clearLayers(); trainMarkers.clear();
   parkedLayer.clearLayers(); parkedMarkers.clear();
-  S.kpi = 0; actualizarKpi();
+  S.kpi = 0; S.arrPtr = 0; actualizarKpi();
   $("netInfo").textContent = `${S.net.n_stations} estaciones · ${S.net.n_lines} líneas · ${S.trains.length} trenes ` +
     `(${data.source === "optimized" ? "optimizado" : "GTFS"}, ${data.service_id}).`;
 }
@@ -664,6 +666,13 @@ async function cargarTrace(seed) {
   tr.byId = new Map();
   for (const t of tr.trains) tr.byId.set(t.id, t);
   S.trace = tr; S.repro = true; S.simT = tr.start;
+  // Rótulo de la jornada: el motor DERIVA el inicio de la 1ª salida por horario (no un 05:00 fijo),
+  // así que reflejamos el rango real del trace en el subtítulo del reloj.
+  const sub = document.querySelector(".clock-sub");
+  if (sub) sub.textContent = `Jornada · ${hhmm(tr.start)} → ${hhmm(tr.end)}`;
+  // Llegadas tarde a estación (registro de CTC + contador de minutos de retraso). Reinicia el
+  // contador: el bucle de reproducción lo va sumando conforme el reloj pasa por cada llegada.
+  S.arrivals = tr.arrivals || []; S.arrPtr = 0; S.kpi = 0;
   // Incidencias del día que rodó el motor (para el registro y el cajón que se pone rojo).
   S.dayIncidents = (tr.incidents || []).map((i) => ({ ...i, launched: false }));
   pintarIncidenciasDia();
@@ -723,9 +732,9 @@ function pasoRepro(dtGame) {
   if (S.simT >= DIA_FIN && !S.finished) { S.simT = DIA_FIN; finDelDia(); }
   const tr = S.trace; if (!tr) return;
   S.occ.clear();
-  let activos = 0, held = 0;
+  let activos = 0, liveDelay = 0;
   for (const t of S.trains) {
-    t.reproActive = false; t.repro = null; t.reproHeld = false;
+    t.reproActive = false; t.repro = null; t.reproHeld = false; t.reproDelay = 0;
     const rt = tr.byId.get(t.id); if (!rt) continue;
     const idx = (S.simT - rt.t0) / tr.dt;
     if (idx < 0 || idx > rt.a.length - 1) continue;
@@ -737,6 +746,11 @@ function pasoRepro(dtGame) {
       ? (rt.f[i0] + (rt.f[i1] - rt.f[i0]) * fr) / 1000
       : rt.f[i0] / 1000;
     const v = rt.v[i0] + (rt.v[i1] - rt.v[i0]) * fr;
+    // Retraso REAL del tren (s) desde el trace del motor (no derivado del horario ni del proxy de
+    // retenidos). Alimenta el KPI de pax·min, el panel de estación y el tooltip por tren.
+    const dly = rt.d ? (rt.d[i0] + (rt.d[i1] - rt.d[i0]) * fr) : 0;
+    t.reproDelay = dly;
+    liveDelay += dly / 60;
     activos++;
     // El andén (vía doble) es una EXTENSIÓN del tramo de aproximación: un tren parado ahí SIGUE
     // ocupando ese tramo → la señal de entrada queda en ROJO mientras está en la estación. Solo en
@@ -750,11 +764,16 @@ function pasoRepro(dtGame) {
     t.reproActive = !stopped;
     t.reproHeld = v < 1 && frac > 0.02 && frac < 0.98;   // clavado en plena vía = retenido por señal
     t.esperando = t.reproHeld;
-    if (t.reproHeld) { t.esperaDesde = a; t.esperaHacia = b; t.esperaMotivo = "semaforo"; held++; }
+    if (t.reproHeld) { t.esperaDesde = a; t.esperaHacia = b; t.esperaMotivo = "semaforo"; }
     else { t.esperaDesde = t.esperaHacia = t.esperaMotivo = null; }
   }
   S.activos = activos;
-  if (S.speed > 0 && held > 0) S.kpi += (dtGame / 60) * NOMINAL_PAX * demanda(S.simT) * held;
+  S.delayNow = liveDelay; // retraso VIVO de la red (min sumados de los trenes en marcha) → alerta
+  // Contador de minutos de retraso: suma la tardanza (min) de cada llegada tarde a estación cuyo
+  // instante ya ha pasado. Avanza un puntero sobre `arrivals` (orden temporal) → O(1) amortizado por
+  // fotograma. Es la suma de los "+N min" que van saliendo en el registro de CTC. Sin pasajeros.
+  const arr = S.arrivals;
+  while (S.arrPtr < arr.length && arr[S.arrPtr].t <= S.simT) { S.kpi += arr[S.arrPtr].delay / 60; S.arrPtr++; }
 }
 
 
@@ -774,10 +793,13 @@ function render() {
       const off = perpOffset(A, B); pos[0] += off[0]; pos[1] += off[1];
     }
     bearingDeg = bearing(A, B);
-    hold = t.reproHeld; late = false;
+    hold = t.reproHeld;
+    const dlyMin = Math.round((t.reproDelay || 0) / 60);
+    late = dlyMin >= 2 && !hold;   // en marcha pero ≥2 min por detrás de su horario
     const kmh = Math.round(r.v);
     tip = `${t.line} · tren ${t.id}<br>Destino: ${nombre(t.pts[t.pts.length - 1].id)}<br>` +
-      (hold ? `<b>⏸ Detenido ante señal</b> en ${nombre(r.a)}` : `Velocidad: <b>${kmh} km/h</b>`);
+      (hold ? `<b>⏸ Detenido ante señal</b> en ${nombre(r.a)}` : `Velocidad: <b>${kmh} km/h</b>`) +
+      (dlyMin > 0 ? `<br>Retraso: <b>+${dlyMin}′</b>` : ``);
     vivos.add(t.id);
     let m = trainMarkers.get(t.id);
     if (!m) {
@@ -1113,9 +1135,10 @@ function pintarProximos(s) {
     const ri = reproIndex(t);   // posición REAL del tren en el trace (−1 si no está en la ventana)
     let lateMin = 0;
     if (ri >= 0) {
-      // En ruta: si ya alcanzó/pasó la estación, no es "próximo"; si va detrás de su hora, retraso real.
+      // En ruta: si ya alcanzó/pasó la estación, no es "próximo". Si va con retraso, se muestra el
+      // retraso REAL del tren (del trace del motor), no el derivado de comparar con su horario.
       if (ri >= j) continue;
-      if (ta < now) lateMin = Math.round((now - ta) / 60);
+      lateMin = Math.round((t.reproDelay || 0) / 60);
     } else {
       // Sin posición en el trace: o ya circuló (jornada acabada) o aún no ha salido (futuro).
       if (t.pts[t.pts.length - 1].a < now) continue;   // ya terminó su servicio → no es próximo
@@ -1258,7 +1281,12 @@ function finDelDia() {
 }
 
 // ---- KPI, leyenda -------------------------------------------------------------------------
-function actualizarKpi() { $("kDelay").textContent = Math.round(S.kpi).toLocaleString("es-ES"); }
+function actualizarKpi() {
+  $("kDelay").textContent = Math.round(S.kpi).toLocaleString("es-ES");
+  // Retraso VIVO de la red: minutos de retraso sumados de todos los trenes en marcha AHORA (sube y
+  // baja, a diferencia del acumulado monótono de al lado). `S.delayNow` se recalcula cada fotograma.
+  $("kLive").textContent = Math.round(S.delayNow || 0).toLocaleString("es-ES");
+}
 // Orden de la leyenda: por REGIÓN (R rodalies/regionals, luego RG, RL, RT como bloques separados)
 // y, dentro de cada bloque, por número (con el sufijo N/S detrás). Solo estético.
 function lineSortKey(name) {
@@ -1449,7 +1477,8 @@ iniciar();
     if (!trains) pintarRegistro();
   });
 
-  // Registro CTC: derivado en vivo del estado (incidencias + retenciones actuales).
+  // Registro CTC: derivado en vivo del estado (incidencias + retenciones actuales + llegadas tarde).
+  const TAG_LABEL = { inc: "INCID", hold: "RETEN", late: "TARDE" };
   function pintarRegistro() {
     const filas = [];
     for (const i of S.incidentes) {
@@ -1460,27 +1489,45 @@ iniciar();
       const st = S.stationById.get(t.esperaDesde);
       filas.push({ ts: S.simT, tag: "hold", cls: "hold", txt: `<b>${t.line}</b> tren ${t.id} retenido en ${st ? st.name : t.esperaDesde} <span class="muted">(${MOTIVO_LABEL[t.esperaMotivo] || t.esperaMotivo})</span>` });
     }
+    // Llegadas tarde a estación ya ocurridas (las que el puntero `arrPtr` ha dejado atrás). Se toman
+    // las ~80 más recientes (el array va en orden temporal, así que están justo antes del puntero).
+    const arr = S.arrivals, hasta = S.arrPtr;
+    for (let k = Math.max(0, hasta - 80); k < hasta; k++) {
+      const a = arr[k]; const st = S.stationById.get(a.stop);
+      filas.push({ ts: a.t, tag: "late", cls: "late", txt: `<b>${a.line}</b> tren ${a.train} llegó a ${st ? st.name : a.stop} <span class="muted">+${Math.round(a.delay / 60)}′</span>` });
+    }
     filas.sort((a, b) => b.ts - a.ts);
     el("ctcLog").innerHTML = filas.length
-      ? filas.slice(0, 80).map((f) => `<div class="logline"><span class="ts">${hhmm(f.ts)}</span><span class="tagx ${f.cls}">${f.tag === "inc" ? "INCID" : "RETEN"}</span><span>${f.txt}</span></div>`).join("")
+      ? filas.slice(0, 80).map((f) => `<div class="logline"><span class="ts">${hhmm(f.ts)}</span><span class="tagx ${f.cls}">${TAG_LABEL[f.tag] || f.tag}</span><span>${f.txt}</span></div>`).join("")
       : `<div class="empty">Sin eventos. La red circula según horario.</div>`;
   }
 
   // ── Sparkline + estado de alerta del KPI de retraso ──────────────────────
   const spark = el("kpiSparkLine"), chip = el("kpiChip"), trend = el("kpiTrend");
+  const sparkL = el("kpiSparkLineLive"), chipL = el("kpiChipLive"), trendL = el("kpiTrendLive");
   const hist = [];
   function pintarSpark() {
-    hist.push(S.kpi);
+    hist.push(S.delayNow || 0);   // retraso vivo de la red (min): traza sube/baja, no el total monótono
     if (hist.length > 48) hist.shift();
     if (hist.length < 2) return;
     const min = Math.min(...hist), max = Math.max(...hist), span = (max - min) || 1;
     const pts = hist.map((v, i) => `${(i / (hist.length - 1) * 96).toFixed(1)},${(32 - (v - min) / span * 28).toFixed(1)}`).join(" ");
     spark.setAttribute("points", pts);
-    // Ritmo de crecimiento reciente (pax·min por muestra ~0.6s) → color de alerta.
-    const n = hist.length, rate = n >= 6 ? (hist[n - 1] - hist[n - 6]) / 5 : 0;
-    chip.classList.toggle("warn", rate > 8 && rate <= 40);
-    chip.classList.toggle("crit", rate > 40);
-    trend.textContent = rate > 8 ? "▲" : (rate < -8 ? "▼" : "");
+    if (sparkL) sparkL.setAttribute("points", pts); // el recuadro VIVO traza el mismo retraso de red
+    // Color de alerta por el retraso VIVO de la red (min sumados de los trenes en marcha AHORA):
+    // independiente de la velocidad de reproducción. Normal ~40–70 min, punta ~90; incidencia →
+    // dispara. La flecha indica si ese retraso vivo sube o baja respecto a la muestra anterior.
+    const live = S.delayNow || 0, prev = pintarSpark._prevLive || 0; pintarSpark._prevLive = live;
+    const warn = live > 70 && live <= 110, crit = live > 110;
+    const arrow = live - prev > 4 ? "▲" : (live - prev < -4 ? "▼" : "");
+    chip.classList.toggle("warn", warn);
+    chip.classList.toggle("crit", crit);
+    trend.textContent = arrow;
+    // El recuadro del retraso VIVO comparte alerta, tendencia y número (por si la cadencia de
+    // `actualizarKpi` no ha refrescado aún: la alerta es del retraso de red, su hogar natural).
+    if (chipL) { chipL.classList.toggle("warn", warn); chipL.classList.toggle("crit", crit); }
+    if (trendL) trendL.textContent = arrow;
+    if (el("kLive")) el("kLive").textContent = Math.round(live).toLocaleString("es-ES");
   }
 
   // ── Contador del asa del cajón (trenes retenidos ahora) ──────────────────
@@ -1613,6 +1660,9 @@ iniciar();
       tr.byId = new Map();
       for (const t of tr.trains) tr.byId.set(t.id, t);
       S.trace = tr; // se conserva S.simT: el trace hasta 'ahora' es idéntico (misma semilla)
+      // Reinicia el contador de retraso: el bucle re-suma las llegadas hasta 'ahora' (idénticas) y
+      // sigue con las nuevas que provoque la incidencia inyectada.
+      S.arrivals = tr.arrivals || []; S.arrPtr = 0; S.kpi = 0;
       // El trace re-generado ya incluye TODAS las incidencias del día (incluida la lanzada).
       S.dayIncidents = (tr.incidents || []).map((i) => ({ ...i, launched: i.t0 >= t0 - 1 }));
       pintarIncidenciasDia();

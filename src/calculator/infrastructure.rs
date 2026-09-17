@@ -287,6 +287,13 @@ fn pt_seg_dist_m(lat: f64, lon: f64, a: [f64; 2], b: [f64; 2], coslat: f64) -> (
     (d, [cy / K, cx / (coslat * K)])
 }
 
+/// Suelo de velocidad para el perfil de vía OSM (km/h). OSM etiqueta vías de maniobra/apartadero de
+/// la garganta de las estaciones a ~5 km/h; el enganche geométrico las aplica al paso principal y
+/// clava a los trenes (falso atasco, p. ej. Mataró). Ninguna vía principal circula a <30 km/h, así
+/// que subimos esos valores fantasma a una velocidad de garganta plausible. (Fuente OSM: solo hay
+/// segmentos a 5 y a 30 km/h por debajo de 40 → este suelo solo toca el ruido, no límites reales.)
+const OSM_SPEED_FLOOR_KMH: f64 = 30.0;
+
 impl AdifNet {
     /// Carga las velocidades de vía preferentes: primero OSM/OpenRailwayMap (mejor calidad y sin la
     /// alta velocidad que contamina la CVM), y si no, la CVM de ADIF. `None` si no hay ninguna.
@@ -302,9 +309,17 @@ impl AdifNet {
         let arr = v.as_array()?;
         let mut segs: Vec<([f64; 2], [f64; 2], f64)> = Vec::new();
         for f in arr {
-            let sp = f.get("speed_kmh").and_then(|x| x.as_f64()).unwrap_or(0.0);
+            let mut sp = f.get("speed_kmh").and_then(|x| x.as_f64()).unwrap_or(0.0);
             if sp <= 0.0 {
                 continue;
+            }
+            // Suelo de velocidad: OSM etiqueta algunas vías de MANIOBRA/APARTADERO de la garganta de
+            // estación (agujas, culatas) a ~5 km/h, y el enganche geométrico las aplica al PASO
+            // principal → un tren se arrastra ~7 min por esos metros (falso atasco, p. ej. Mataró).
+            // 5 km/h no es nunca una velocidad de vía principal: la tratamos como ruido de datos y la
+            // subimos a una velocidad de garganta plausible (30 km/h). No toca LTV ni límites reales.
+            if sp < OSM_SPEED_FLOOR_KMH {
+                sp = OSM_SPEED_FLOOR_KMH;
             }
             let Some(coords) = f.get("coords").and_then(|c| c.as_array()) else { continue };
             let mut prev: Option<[f64; 2]> = None;

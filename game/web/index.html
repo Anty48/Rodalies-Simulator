@@ -63,13 +63,54 @@
       </button>
     </div>
     <div class="divider"></div>
-    <div class="kpi-chip" id="kpiChip" title="Retraso acumulado ponderado por pasajeros">
-      <svg class="spark" id="kpiSpark" viewBox="0 0 96 34" preserveAspectRatio="none" aria-hidden="true">
-        <polyline id="kpiSparkLine" fill="none" stroke-width="1.6" points=""></polyline>
-      </svg>
-      <div class="kpi-body">
-        <div class="kpi-num" id="kDelay">0</div>
-        <div class="kpi-lbl">pax·min retraso <span class="trend" id="kpiTrend"></span></div>
+    <div class="kpi-wrap">
+      <div class="kpi-chip" id="kpiChip">
+        <svg class="spark" id="kpiSpark" viewBox="0 0 96 34" preserveAspectRatio="none" aria-hidden="true">
+          <polyline id="kpiSparkLine" fill="none" stroke-width="1.6" points=""></polyline>
+        </svg>
+        <div class="kpi-body">
+          <div class="kpi-num" id="kDelay">0</div>
+          <div class="kpi-lbl">min de retraso <span class="trend" id="kpiTrend"></span></div>
+        </div>
+      </div>
+      <div class="kpi-formula" role="tooltip">
+        <div class="kf-title">Minutos de retraso acumulados<span class="kf-note">suma de la tardanza de cada llegada tarde a estación, toda la red</span></div>
+        <div class="kf-eq">
+          <span class="kf-lhs"><i>M</i></span>
+          <span class="kf-op">=</span>
+          <span class="kf-sum"><span class="kf-sig">Σ</span><span class="kf-lim"><span class="kf-hi">&nbsp;</span><span class="kf-lo"><i>a</i>∈llegadas tarde</span></span></span>
+          <span class="kf-var">δ<sub><i>a</i></sub></span>
+        </div>
+        <ul class="kf-legend">
+          <li><span class="kf-k">δ<sub>a</sub></span> retraso de la llegada <i>a</i> (min) = hora real − hora prevista</li>
+          <li><span class="kf-k">llegada tarde</span> δ ≥ 1 min, en cualquier estación y línea</li>
+          <li><span class="kf-k">acumulado</span> a lo largo de la jornada (solo cuenta lo ya ocurrido)</li>
+        </ul>
+      </div>
+    </div>
+    <div class="kpi-wrap">
+      <div class="kpi-chip" id="kpiChipLive">
+        <svg class="spark" id="kpiSparkLive" viewBox="0 0 96 34" preserveAspectRatio="none" aria-hidden="true">
+          <polyline id="kpiSparkLineLive" fill="none" stroke-width="1.6" points=""></polyline>
+        </svg>
+        <div class="kpi-body">
+          <div class="kpi-num" id="kLive">0</div>
+          <div class="kpi-lbl">min en la red ahora <span class="trend" id="kpiTrendLive"></span></div>
+        </div>
+      </div>
+      <div class="kpi-formula" role="tooltip">
+        <div class="kf-title">Retraso vivo de la red<span class="kf-note">minutos de retraso sumados de TODOS los trenes en circulación en este instante (sube y baja)</span></div>
+        <div class="kf-eq">
+          <span class="kf-lhs"><i>D</i>(<i>t</i>)</span>
+          <span class="kf-op">=</span>
+          <span class="kf-sum"><span class="kf-sig">Σ</span><span class="kf-lim"><span class="kf-hi">&nbsp;</span><span class="kf-lo"><i>i</i>∈trenes en marcha</span></span></span>
+          <span class="kf-var">d<sub><i>i</i></sub>(<i>t</i>)</span>
+        </div>
+        <ul class="kf-legend">
+          <li><span class="kf-k">d<sub>i</sub>(t)</span> retraso ACTUAL del tren <i>i</i> (min) respecto a su horario</li>
+          <li><span class="kf-k">instantáneo</span> se recalcula cada fotograma → sube y baja</li>
+          <li><span class="kf-k">acumulado ≠ vivo</span> el de al lado suma toda la jornada; este es la foto de ahora</li>
+        </ul>
       </div>
     </div>
     <div class="kpi-chip mini" title="Trenes en circulación">

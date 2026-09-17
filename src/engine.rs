@@ -449,6 +449,8 @@ pub struct EngineCfg {
     pub seed: u64,
 }
 impl EngineCfg {
+    /// Jornada completa. `start_sec` (05:00) es solo un FALLBACK: `Engine::new` lo sobrescribe con la
+    /// salida del primer tren por horario (evita el artefacto de "nacer tarde"). `end_sec` = 24:00.
     pub fn day() -> Self {
         EngineCfg { start_sec: 5 * 3600, end_sec: 24 * 3600, dt_sec: 2.0, seed: 1 }
     }
@@ -489,8 +491,11 @@ pub struct FrameTrain {
 
 /// Trayectoria de un tren para el REPRODUCTOR del frontend: arrays paralelos muestreados cada `dt`
 /// desde `t0`. `a`/`b` = índices en la tabla `ids` del cantón (o del cantón de llegada si está
-/// parado); `f` = fracción·1000 (0..1000; 1000 = parado en `b`); `v` = velocidad km/h. Compacto
-/// (enteros) para que la jornada entera quepa en un JSON razonable.
+/// parado); `f` = fracción·1000 (0..1000; 1000 = parado en `b`); `v` = velocidad km/h; `d` =
+/// retraso REAL del tren en ese instante (segundos, respecto a su llegada programada — el mismo
+/// `delay_s` que el motor calcula por tren). Compacto (enteros) para que la jornada entera quepa
+/// en un JSON razonable. `d` permite al visor mostrar el retraso honesto por tren y calcular el
+/// KPI de pax·min con la MISMA fórmula que el motor (sin el proxy de "trenes retenidos").
 #[derive(Serialize)]
 pub struct TraceTrain {
     pub id: String,
@@ -500,9 +505,24 @@ pub struct TraceTrain {
     pub b: Vec<u32>,
     pub f: Vec<u16>,
     pub v: Vec<u16>,
+    pub d: Vec<u16>,
+}
+
+/// Una LLEGADA TARDE de un tren a una estación (registro de CTC). `t` = instante de la llegada
+/// (s desde medianoche); `stop` = stop_id (el frontend resuelve el nombre); `delay` = retraso en la
+/// llegada respecto a la hora prevista GTFS (s). Solo se registran las llegadas de ≥ `LATE_LOG_THRESHOLD_S`.
+#[derive(Serialize, Clone)]
+pub struct LateArrival {
+    pub t: u32,
+    pub train: String,
+    pub line: String,
+    pub stop: String,
+    pub delay: u16,
 }
 
 /// Trace completo de una jornada (lo que reproduce el frontend visual: velocidad variable REAL).
+/// `arrivals` = todas las llegadas tarde a estación de la jornada (orden temporal), para el contador
+/// de minutos de retraso y el registro de CTC del visor.
 #[derive(Serialize)]
 pub struct Trace {
     pub start: f64,
@@ -510,6 +530,7 @@ pub struct Trace {
     pub dt: f64,
     pub ids: Vec<String>,
     pub trains: Vec<TraceTrain>,
+    pub arrivals: Vec<LateArrival>,
 }
 
 pub struct Engine {
@@ -529,7 +550,14 @@ pub struct Engine {
     /// cada `SAMPLE_STEP_S` de tiempo simulado. Base del PAX-weighted delay, pico y recuperación.
     timeline: Vec<(u32, f64)>,
     next_sample: f64,
+    /// Registro de todas las llegadas tarde a estación (≥ `LATE_LOG_THRESHOLD_S`) de la jornada,
+    /// en orden temporal. Alimenta el contador de minutos de retraso y el log de CTC del visor.
+    late_arrivals: Vec<LateArrival>,
 }
+
+/// Umbral para registrar una llegada como "tarde": un tren cuenta como retrasado en una estación si
+/// llega ≥ 1 min por detrás de su hora prevista GTFS (evita el ruido sub-minuto de la física).
+const LATE_LOG_THRESHOLD_S: f64 = 60.0;
 
 impl Engine {
     /// Construye el motor desde la red. Consume el MISMO horario descompuesto que la API del juego
@@ -538,7 +566,7 @@ impl Engine {
     /// (main/server); si faltan, cae a un Vmax de vía por defecto documentado.
     pub fn new(
         net: &Network,
-        cfg: EngineCfg,
+        mut cfg: EngineCfg,
         adif: Option<&infrastructure::AdifNet>,
         ltv: Option<&ltv::LtvSet>,
         templates: &[IncidentTemplate],
@@ -633,6 +661,20 @@ impl Engine {
             });
         }
 
+        // Inicio de la jornada = salida del PRIMER tren por HORARIO (menor `pts[0].d`), DERIVADO de
+        // los datos, no fijado. Con un inicio fijo (p. ej. 05:00), los trenes cuya salida GTFS es
+        // anterior "nacían" ya retrasados y arrastraban ese retraso falso toda la línea (artefacto de
+        // ventana). Arrancar en la primera salida real elimina ese artefacto. `arrived_at` de cada
+        // tren en su origen se ancla al inicio (dwell trivialmente cubierto; la salida la gobierna
+        // su hora programada + señal de salida, como en la realidad).
+        if let Some(first_dep) = trains.iter().map(|t| t.pts[0].d as u32).min() {
+            cfg.start_sec = first_dep.min(cfg.end_sec);
+            let start = cfg.start_sec as f64;
+            for t in &mut trains {
+                t.arrived_at = start;
+            }
+        }
+
         // Parada mínima por estación (densidad de servicio) — floor de dwell (no rebaquea horarios).
         let dwell_map = dwell_por_estacion(&trains);
         for t in &mut trains {
@@ -673,6 +715,7 @@ impl Engine {
             held_events: 0,
             timeline: Vec::new(),
             next_sample: cfg.start_sec as f64,
+            late_arrivals: Vec::new(),
         }
     }
 
@@ -688,7 +731,7 @@ impl Engine {
         // Efectos de incidencias vigentes AHORA (señales en rojo por cantón, cantones en vía única).
         let (dyn_red, dyn_single) = dyn_effects(&self.infra, &self.incidents, now);
 
-        let Engine { trains, infra, occ, .. } = self;
+        let Engine { trains, infra, occ, late_arrivals, .. } = self;
         let dynp = Dyn { red: &dyn_red, single: &dyn_single };
         for v in occ.iter_mut() {
             v.clear(); // reutiliza la capacidad; nada de realojar por step
@@ -728,7 +771,7 @@ impl Engine {
             if !active[idx] {
                 continue;
             }
-            let held = avanzar_tren(idx, trains, infra, &dynp, occ, now, dt);
+            let held = avanzar_tren(idx, trains, infra, &dynp, occ, now, dt, late_arrivals);
             if held {
                 waiting += 1;
             }
@@ -747,13 +790,16 @@ impl Engine {
                 continue;
             }
             if t.delay_s > 0.0 {
-                add_train_min += (t.delay_s / 60.0) * dt_min;
+                let dmin = t.delay_s / 60.0;
+                add_train_min += dmin * dt_min;
                 total_delay += t.delay_s;
+                // pax·min de retraso: pasajeros a bordo (nominal × demanda horaria) × minutos de
+                // retraso REAL de ESTE tren, integrado en el tiempo. Cada tren pesa por LO TARDE que
+                // va (no un 0/1 por estar retenido), así el KPI del visor (derivado del `d` del
+                // trace) y el de /numeros son la MISMA magnitud honesta, no un proxy por retenidos.
+                add_pax += dmin * pax * dt_min;
             }
             step_max = step_max.max(t.delay_s);
-            if t.waiting {
-                add_pax += dt_min * pax;
-            }
             // Conflicto DISTINTO: el tren entra en retención (flanco de subida de `waiting`).
             if t.waiting && !t.was_waiting {
                 new_conflicts += 1;
@@ -799,6 +845,7 @@ impl Engine {
                 b: Vec::new(),
                 f: Vec::new(),
                 v: Vec::new(),
+                d: Vec::new(),
             })
             .collect();
 
@@ -818,13 +865,18 @@ impl Engine {
                         tt[i].b.push(bi);
                         tt[i].f.push((frac * 1000.0).round().clamp(0.0, 1000.0) as u16);
                         tt[i].v.push((v * 3.6).round().max(0.0) as u16);
+                        // Retraso real del tren en este instante (s). El techo de u16 (~18 h) nunca
+                        // se alcanza en una jornada; el peor caso real ronda 35 min.
+                        tt[i].d.push(self.trains[i].delay_s.round().clamp(0.0, 65535.0) as u16);
                     }
                 }
                 next_sample += sample_dt;
             }
         }
         tt.retain(|t| !t.a.is_empty());
-        Trace { start: self.cfg.start_sec as f64, end, dt: sample_dt, ids, trains: tt }
+        let mut arrivals = std::mem::take(&mut self.late_arrivals);
+        arrivals.sort_by_key(|a| a.t); // orden temporal para el contador incremental y el log
+        Trace { start: self.cfg.start_sec as f64, end, dt: sample_dt, ids, trains: tt, arrivals }
     }
 
     /// Estado observable de los trenes EN MARCHA ahora (para el trace/reproductor).
@@ -918,6 +970,75 @@ impl Engine {
             recovery_time,
         }
     }
+
+    /// Registro de todas las llegadas tarde (≥ `LATE_LOG_THRESHOLD_S`) acumuladas en la jornada,
+    /// en orden de aparición. Diagnóstico: permite listar los retrasos más severos por tren/estación.
+    pub fn late_arrivals(&self) -> &[LateArrival] {
+        &self.late_arrivals
+    }
+
+    /// Diagnóstico de UN tren por id, en el instante actual del reloj: estado de fase, retraso,
+    /// retención por señal, y ubicación (estación de dwell o cantón en marcha, por stop_id). Para
+    /// rastrear DÓNDE y POR QUÉ se acumula el retraso (física lenta vs retención). `None` = no existe.
+    pub fn train_diag(&self, id: &str) -> Option<TrainDiag> {
+        let t = self.trains.iter().find(|t| t.id == id)?;
+        let (phase, from_id, to_id) = match t.phase {
+            Phase::Dwell => {
+                let k = t.station_idx;
+                let from = t.pts[k].id.clone();
+                let to = t.pts.get(t.target_stop).map(|p| p.id.clone()).unwrap_or_default();
+                (0u8, from, to)
+            }
+            Phase::Running => {
+                let i = t.canton_idx.min(t.pts.len().saturating_sub(2));
+                (1u8, t.pts[i].id.clone(), t.pts[i + 1].id.clone())
+            }
+            Phase::Done => (2u8, String::new(), String::new()),
+        };
+        Some(TrainDiag {
+            phase,
+            line: t.line.clone(),
+            delay_s: t.delay_s,
+            waiting: t.waiting,
+            from_id,
+            to_id,
+            speed_kmh: t.v * 3.6,
+        })
+    }
+
+    /// Diagnóstico: ids de los trenes que ocupan AHORA cada sub-bloque del cantón dirigido
+    /// `from_id → to_id` (según el estado de `occ` tras el último `step`). `(sub_bloque, id)`.
+    /// `None` = el cantón no existe. Sirve para ver QUIÉN bloquea un tramo y cuánto.
+    pub fn block_occupants(&self, from_id: &str, to_id: &str) -> Option<Vec<(u32, String)>> {
+        let a = self.infra.nid(from_id)?;
+        let b = self.infra.nid(to_id)?;
+        let canon = self.infra.canon_res(a, b)?;
+        let stat_single = self.infra.single_track.contains(&canon);
+        let m = self.infra.sub_m_id(a, b);
+        let mut out = Vec::new();
+        for sb in 0..m {
+            let res = if stat_single {
+                canon
+            } else {
+                self.infra.dir_res(a, b, sb).unwrap_or(canon)
+            };
+            for &idx in &self.occ[res as usize] {
+                out.push((sb, self.trains[idx].id.clone()));
+            }
+        }
+        Some(out)
+    }
+}
+
+/// Foto de diagnóstico de un tren en el instante actual (ver `Engine::train_diag`).
+pub struct TrainDiag {
+    pub phase: u8, // 0=dwell (parado en estación), 1=en marcha, 2=finalizado
+    pub line: String,
+    pub delay_s: f64,
+    pub waiting: bool,
+    pub from_id: String, // estación de dwell, o inicio del cantón en marcha
+    pub to_id: String,   // próxima parada real (dwell) o fin del cantón
+    pub speed_kmh: f64,
 }
 
 /// Avanza un tren un `step` completo (sub-pasos físicos ≤ `PHYS_SUBSTEP_S`). Devuelve `true` si el
@@ -930,6 +1051,7 @@ fn avanzar_tren(
     occ: &mut Vec<Vec<usize>>,
     now: f64,
     dt: f64,
+    late: &mut Vec<LateArrival>,
 ) -> bool {
     // --- Parado en estación: gestión de dwell / hora de salida / señal de salida ---
     if trains[idx].phase == Phase::Dwell {
@@ -1023,6 +1145,17 @@ fn avanzar_tren(
             trains[idx].v = 0.0;
             trains[idx].canton_idx = (k.saturating_sub(1)).min(trains[idx].pts.len() - 2);
             trains[idx].delay_s = (now - trains[idx].pts[k].a).max(0.0);
+            // Registro de CTC: si el tren llega ≥1 min tarde a esta estación, se anota (instante,
+            // tren, línea, stop, retraso). Vale para paradas intermedias Y terminal (mismo punto).
+            if trains[idx].delay_s >= LATE_LOG_THRESHOLD_S {
+                late.push(LateArrival {
+                    t: now as u32,
+                    train: trains[idx].id.clone(),
+                    line: trains[idx].line.clone(),
+                    stop: trains[idx].pts[k].id.clone(),
+                    delay: trains[idx].delay_s.min(65535.0) as u16,
+                });
+            }
             if k >= trains[idx].pts.len() - 1 {
                 // Terminal: libera el bloque y termina.
                 ocupar(occ, dynp, idx, &trains[idx].seq[trains[idx].cb], false);

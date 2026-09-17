@@ -71,6 +71,24 @@ async fn main() {
         run_engine_demo(&net);
         return;
     }
+    // Diagnóstico de UN tren: `cargo run --release -- diag <trainid>` (rastrea retraso/retenciones).
+    if std::env::args().any(|a| a == "diag") {
+        if let Some(id) = std::env::args().skip_while(|a| a != "diag").nth(1) {
+            run_train_diag(&net, &id);
+        } else {
+            eprintln!("Ús: diag <train_id>");
+        }
+        return;
+    }
+    // Sonda de ocupación de un tramo: `probe "<from>" "<to>" [hIni hFin]` (quién ocupa el cantón).
+    if std::env::args().any(|a| a == "probe") {
+        let mut it = std::env::args().skip_while(|a| a != "probe").skip(1);
+        let (from, to) = (it.next().unwrap_or_default(), it.next().unwrap_or_default());
+        let h0: f64 = it.next().and_then(|s| s.parse().ok()).unwrap_or(0.0);
+        let h1: f64 = it.next().and_then(|s| s.parse().ok()).unwrap_or(24.0);
+        run_block_probe(&net, &from, &to, h0, h1);
+        return;
+    }
     // Modo optimizador del SISTEMA: `cargo run --release -- optimize`
     if std::env::args().any(|a| a == "optimize" || a == "--optimize") {
         run_system_optimizer(&net);
@@ -311,7 +329,9 @@ fn run_engine_demo(net: &Network) {
         Some(a) => println!("✓ CVM ADIF: {} segments de via (física per cantó)", a.n_segments()),
         None => println!("· CVM ADIF no trobada → Vmax de via per defecte (100 km/h). Executa scripts/fetch_adif_cvm.py"),
     }
-    let templates = engine::default_templates();
+    // `simulate noinc` → jornada SIN incidencias (solo retrasos estructurales GTFS vs física).
+    let noinc = std::env::args().any(|a| a == "noinc");
+    let templates = if noinc { Vec::new() } else { engine::default_templates() };
     let mut eng = Engine::new(net, cfg, adif.as_ref(), ltv.as_ref(), &templates, None, None);
     let incs = eng.incidents().to_vec();
     if incs.is_empty() {
@@ -369,6 +389,139 @@ fn run_engine_demo(net: &Network) {
     println!(
         "   (Fase B = velocitats per FÍSICA: Vmax de via CVM/ADIF + LTV + material real 447/450/465/470, sortida no abans de l'horari; PENDENT: incidències — veure docs/PLAN-motor-unificado.md)"
     );
+
+    // Diagnóstico: retrasos SEVEROS (>15 min) — dónde se quedó parado cada tren y a qué hora.
+    const SEVERE_S: u16 = 15 * 60;
+    let mut severe: Vec<&engine::LateArrival> =
+        eng.late_arrivals().iter().filter(|a| a.delay >= SEVERE_S).collect();
+    // Peor retraso por (tren, estación): el motor registra una llegada por parada; nos quedamos
+    // con el instante en que ese tren tocó su pico de retraso en cada estación afectada.
+    severe.sort_by(|a, b| b.delay.cmp(&a.delay));
+    println!(
+        "\n── RETARDS SEVERS (>15 min){} ──────────────────────────────",
+        if noinc { " · SENSE INCIDÈNCIES" } else { "" }
+    );
+    if severe.is_empty() {
+        println!("  (cap tren supera els 15 min de retard)");
+    } else {
+        println!("  {} llegades ≥15 min tard. {:<6} {:<5} {:>8}  {}", severe.len(), "tren", "línia", "retard", "estació @ hora");
+        for a in severe.iter().take(60) {
+            println!(
+                "  {:<6} {:<5} {:>5} min  {} @ {}",
+                a.train, a.line, a.delay / 60,
+                net.stop_name(&a.stop), fmt_hms(a.t)
+            );
+        }
+        if severe.len() > 60 {
+            println!("  … i {} més", severe.len() - 60);
+        }
+    }
+}
+
+/// Rastreo por step de UN tren durante la jornada SIN incidencias: imprime cada llegada a estación
+/// (con retraso e incremento respecto a la parada anterior) y cada tramo de RETENCIÓN por señal/vía
+/// única (dónde empieza, dónde acaba, cuánto). Sirve para ver si el retraso viene de la FÍSICA
+/// (marcha más lenta que el GTFS) o de RETENCIONES (señales/cruces).
+fn run_train_diag(net: &Network, id: &str) {
+    use engine::{Engine, EngineCfg};
+    let cfg = EngineCfg::day();
+    let adif = calculator::infrastructure::AdifNet::load_default();
+    let ltv = calculator::ltv::load_default();
+    let mut eng = Engine::new(net, cfg, adif.as_ref(), ltv.as_ref(), &[], None, None);
+
+    println!("┌─ DIAGNÒSTIC DEL TREN {} (jornada SENSE incidències) ─┐", id);
+    println!("  {:<8} {:<7} {:<32} {:>7} {:>7}", "hora", "fase", "ubicació", "retard", "Δ");
+
+    let mut prev_phase = 3u8;
+    let mut prev_from = String::new();
+    let mut prev_delay = 0.0f64;
+    let mut held_since: Option<(f64, String, String)> = None;
+    let mut found_any = false;
+
+    let end = 24.0 * 3600.0;
+    while eng.clock() < end {
+        eng.step(cfg.dt_sec);
+        let now = eng.clock();
+        let Some(d) = eng.train_diag(id) else { continue };
+        if !found_any {
+            println!("  (línia {} · {:.0} km/h màx)", d.line, d.speed_kmh);
+        }
+        found_any = true;
+
+        // Inicio/fin de una retención por señal.
+        match (&held_since, d.waiting) {
+            (None, true) => held_since = Some((now, d.from_id.clone(), d.to_id.clone())),
+            (Some((t0, f, t)), false) => {
+                println!(
+                    "  {:<8} {:<7} {:<32} {:>6.0}s  (RETINGUT {:.0}s a {} → {})",
+                    fmt_hms(now as u32), "▓hold", "", now - t0, now - t0,
+                    net.stop_name(f), net.stop_name(t)
+                );
+                held_since = None;
+            }
+            _ => {}
+        }
+
+        // Llegada a una estación nueva (transición a dwell en una estación distinta).
+        let arrived_station = d.phase == 0 && (prev_phase != 0 || d.from_id != prev_from);
+        if arrived_station && !d.from_id.is_empty() {
+            let delta = d.delay_s - prev_delay;
+            let flag = if d.delay_s >= 900.0 { " ⚠" } else { "" };
+            println!(
+                "  {:<8} {:<7} {:<32} {:>5.0}m  {:>+5.0}s{}",
+                fmt_hms(now as u32), "parada", trunc(net.stop_name(&d.from_id), 32),
+                d.delay_s / 60.0, delta, flag
+            );
+            prev_delay = d.delay_s;
+            prev_from = d.from_id.clone();
+        }
+        prev_phase = d.phase;
+        if d.phase == 2 {
+            break;
+        }
+    }
+    if !found_any {
+        println!("  (el tren {} no apareix a la jornada — comprova l'id)", id);
+    }
+    println!("└──────────────────────────────────────────────────────────────┘");
+}
+
+/// Sonda de ocupación de un cantón dirigido `from → to` durante una franja: imprime cada CAMBIO
+/// en la lista de trenes que ocupan sus sub-bloques (jornada SIN incidencias). Revela quién bloquea
+/// un tramo y cuánto (cabeza de un atasco).
+fn run_block_probe(net: &Network, from: &str, to: &str, h0: f64, h1: f64) {
+    use engine::{Engine, EngineCfg};
+    let (Some(fs), Some(ts)) = (net.find_stop_by_name(from), net.find_stop_by_name(to)) else {
+        eprintln!("No trobo alguna estació: '{}' / '{}'", from, to);
+        return;
+    };
+    let (fid, tid) = (fs.stop_id.clone(), ts.stop_id.clone());
+    println!("┌─ SONDA cantó {} → {} ({}–{}h) ─┐", fs.stop_name, ts.stop_name, h0, h1);
+    let cfg = EngineCfg::day();
+    let adif = calculator::infrastructure::AdifNet::load_default();
+    let ltv = calculator::ltv::load_default();
+    let mut eng = Engine::new(net, cfg, adif.as_ref(), ltv.as_ref(), &[], None, None);
+
+    let (s0, s1) = (h0 * 3600.0, h1 * 3600.0);
+    let mut prev = String::new();
+    while eng.clock() < 24.0 * 3600.0 {
+        eng.step(cfg.dt_sec);
+        let now = eng.clock();
+        if now < s0 || now > s1 {
+            if now > s1 { break; }
+            continue;
+        }
+        if let Some(mut occ) = eng.block_occupants(&fid, &tid) {
+            occ.sort();
+            let sig = occ.iter().map(|(sb, id)| format!("sb{}:{}", sb, id)).collect::<Vec<_>>().join("  ");
+            if sig != prev {
+                let show = if sig.is_empty() { "—lliure—" } else { sig.as_str() };
+                println!("  {}  [{}]", fmt_hms(now as u32), show);
+                prev = sig;
+            }
+        }
+    }
+    println!("└──────────────────────────────────────────────────────────────┘");
 }
 
 fn write_static_dashboard(
