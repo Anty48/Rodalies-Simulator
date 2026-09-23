@@ -16,6 +16,7 @@ mod gtfs_update;
 mod map;
 mod optimizer;
 mod report;
+mod runs_export;
 mod scenario;
 mod server;
 mod topology;

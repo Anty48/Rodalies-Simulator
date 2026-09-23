@@ -182,6 +182,10 @@ async fn handle(mut stream: TcpStream, state: Arc<ServerState>) -> std::io::Resu
             let j = state.gtfs_job.lock().unwrap().clone();
             ("200 OK", "application/json", serde_json::to_vec(&j).unwrap_or_default())
         }
+        // Exportación de los resultados de /numeros (xlsx|pdf, con o sin horarios usados).
+        "/api/runs/export" if is_post => export_runs(&state, query, &body),
+        "/incidencias" | "/incidents" => ("200 OK", "text/html", report::render_incidents_page().into_bytes()),
+        "/api/gtfs/info" => ("200 OK", "application/json", gtfs_info_json(&state).into_bytes()),
         "/api/gtfs/upload" if is_post => {
             ("200 OK", "application/json", start_gtfs_upload(&state, &body).into_bytes())
         }
@@ -300,13 +304,25 @@ fn serve_game_file(name: &str) -> Option<(&'static str, Vec<u8>)> {
 const INCIDENTS_PATH: &str = "report/incidents.json";
 
 /// Plantilla tal y como la ve/edita el frontend. `effect` = "red_one" | "red_both" | "single".
+/// Tasa: probabilidad `prob` de que ocurra cada `every_h` horas. `id` = identificador ESTABLE (la
+/// selección por modo y la edición se refieren a él, no a la posición en la lista). Ficheros viejos
+/// con `daily_prob` se leen como `prob` cada 24 h (misma semántica que antes).
 #[derive(Serialize, Deserialize, Clone)]
 struct TemplateDto {
+    #[serde(default)]
+    id: String,
     motivo: String,
     effect: String,
     dur_min: f64,
-    daily_prob: f64,
+    #[serde(alias = "daily_prob")]
+    prob: f64,
+    #[serde(default = "every_h_default")]
+    every_h: f64,
     enabled: bool,
+}
+
+fn every_h_default() -> f64 {
+    24.0
 }
 
 fn effect_str(e: crate::engine::IncidentEffect) -> &'static str {
@@ -327,41 +343,104 @@ fn to_template(d: &TemplateDto) -> crate::engine::IncidentTemplate {
         motivo: d.motivo.clone(),
         effect,
         dur_min: d.dur_min,
-        daily_prob: d.daily_prob.clamp(0.0, 1.0),
+        prob: d.prob.clamp(0.0, 1.0),
+        every_h: d.every_h.max(crate::engine::MIN_EVERY_H),
         enabled: d.enabled,
     }
 }
 
-/// Carga las plantillas de disco; si no existen, siembra las de por defecto (eliminables).
-fn load_incident_dtos() -> Vec<TemplateDto> {
-    if let Ok(s) = std::fs::read_to_string(INCIDENTS_PATH) {
-        if let Ok(v) = serde_json::from_str::<Vec<TemplateDto>>(&s) {
-            return v;
+/// Id nuevo, único en la lista (`tpl` + base36 del instante + índice).
+fn new_template_id(i: usize) -> String {
+    let n = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0);
+    let mut x = n + i as u128;
+    let mut s = String::new();
+    while x > 0 {
+        let d = (x % 36) as u32;
+        s.insert(0, std::char::from_digit(d, 36).unwrap_or('0'));
+        x /= 36;
+    }
+    format!("tpl{s}")
+}
+
+/// Garantiza ids no vacíos y únicos; devuelve `true` si tuvo que asignar alguno.
+fn ensure_ids(v: &mut [TemplateDto]) -> bool {
+    let mut seen = std::collections::HashSet::new();
+    let mut changed = false;
+    for (i, d) in v.iter_mut().enumerate() {
+        let ok = !d.id.is_empty() && d.id.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-');
+        if !ok || !seen.insert(d.id.clone()) {
+            d.id = new_template_id(i);
+            seen.insert(d.id.clone());
+            changed = true;
         }
     }
-    crate::engine::default_templates()
-        .iter()
-        .map(|t| TemplateDto {
-            motivo: t.motivo.clone(),
-            effect: effect_str(t.effect).to_string(),
-            dur_min: t.dur_min,
-            daily_prob: t.daily_prob,
-            enabled: t.enabled,
-        })
-        .collect()
+    changed
+}
+
+fn write_incident_dtos(v: &[TemplateDto]) -> bool {
+    std::fs::create_dir_all("report").ok();
+    std::fs::write(INCIDENTS_PATH, serde_json::to_string_pretty(v).unwrap_or_default()).is_ok()
+}
+
+/// Carga las plantillas de disco; si no existen, siembra las de por defecto (eliminables). Si el
+/// fichero es antiguo (sin ids / con `daily_prob`), se migra y se reescribe una vez.
+fn load_incident_dtos() -> Vec<TemplateDto> {
+    let mut v: Vec<TemplateDto> = std::fs::read_to_string(INCIDENTS_PATH)
+        .ok()
+        .and_then(|s| serde_json::from_str::<Vec<TemplateDto>>(&s).ok())
+        .unwrap_or_else(|| {
+            crate::engine::default_templates()
+                .iter()
+                .map(|t| TemplateDto {
+                    id: String::new(),
+                    motivo: t.motivo.clone(),
+                    effect: effect_str(t.effect).to_string(),
+                    dur_min: t.dur_min,
+                    prob: t.prob,
+                    every_h: t.every_h,
+                    enabled: t.enabled,
+                })
+                .collect()
+        });
+    if ensure_ids(&mut v) {
+        write_incident_dtos(&v);
+    }
+    v
 }
 
 fn incident_templates_json() -> String {
     serde_json::to_string(&load_incident_dtos()).unwrap_or_else(|_| "[]".into())
 }
 
+/// Plantillas ACTIVAS para una ejecución. Si la query trae `sel=id1,id2` (ids ESTABLES), se usa esa
+/// selección (independiente por modo: visual vs números); si no, se respeta el `enabled` guardado.
+/// Así las plantillas son compartidas pero la SELECCIÓN de cada modo no contamina a la otra.
+fn active_templates(q: &HashMap<String, String>) -> Vec<crate::engine::IncidentTemplate> {
+    let dtos = load_incident_dtos();
+    let sel: Option<std::collections::HashSet<&str>> =
+        q.get("sel").map(|s| s.split(',').map(str::trim).filter(|x| !x.is_empty()).collect());
+    dtos.iter()
+        .map(|d| {
+            let mut t = to_template(d);
+            if let Some(ref set) = sel {
+                t.enabled = set.contains(d.id.as_str());
+            }
+            t
+        })
+        .collect()
+}
+
 /// Guarda la lista COMPLETA de plantillas (el frontend envía todo el conjunto al añadir/borrar/toggle).
 fn save_incident_templates(body: &[u8]) -> String {
     match serde_json::from_slice::<Vec<TemplateDto>>(body) {
-        Ok(v) => {
-            std::fs::create_dir_all("report").ok();
-            let ok = std::fs::write(INCIDENTS_PATH, serde_json::to_string_pretty(&v).unwrap_or_default()).is_ok();
-            serde_json::json!({ "ok": ok, "n": v.len() }).to_string()
+        Ok(mut v) => {
+            ensure_ids(&mut v);
+            let ok = write_incident_dtos(&v);
+            // Devuelve la lista con ids definitivos (el cliente los adopta).
+            serde_json::json!({ "ok": ok, "n": v.len(), "templates": v }).to_string()
         }
         Err(e) => serde_json::json!({ "ok": false, "error": e.to_string() }).to_string(),
     }
@@ -373,8 +452,7 @@ fn save_incident_templates(body: &[u8]) -> String {
 fn simulate_json(state: &ServerState, query: &str) -> String {
     let q = parse_query(query);
     let seed: u64 = q.get("seed").and_then(|s| s.parse().ok()).unwrap_or(1);
-    let templates: Vec<crate::engine::IncidentTemplate> =
-        load_incident_dtos().iter().map(to_template).collect();
+    let templates: Vec<crate::engine::IncidentTemplate> = active_templates(&q);
 
     let net_guard = state.net.read().unwrap();
     let ltv_guard = state.ltv.read().unwrap();
@@ -432,8 +510,7 @@ fn simulate_json(state: &ServerState, query: &str) -> String {
 fn trace_json(state: &ServerState, query: &str) -> String {
     let q = parse_query(query);
     let seed: u64 = q.get("seed").and_then(|s| s.parse().ok()).unwrap_or(1);
-    let templates: Vec<crate::engine::IncidentTemplate> =
-        load_incident_dtos().iter().map(to_template).collect();
+    let templates: Vec<crate::engine::IncidentTemplate> = active_templates(&q);
     let net_guard = state.net.read().unwrap();
     let ltv_guard = state.ltv.read().unwrap();
     let mut cfg = crate::engine::EngineCfg::day();
@@ -737,6 +814,69 @@ fn start_optimization(state: &ServerState, _query: &str) -> String {
     let opt = state.opt.clone();
     std::thread::spawn(move || run_optimization(net, opt));
     "{\"started\":true}".into()
+}
+
+/// Genera el fichero de resultados de las runs (`fmt=xlsx|pdf`, `horarios=1` añade el horario
+/// usado). El cuerpo es el JSON que ya tiene el navegador (runs + plantillas seleccionadas); el
+/// servidor añade de qué GTFS salen los horarios. Responde el binario (el navegador lo descarga).
+fn export_runs(state: &ServerState, query: &str, body: &[u8]) -> (&'static str, &'static str, Vec<u8>) {
+    let q = parse_query(query);
+    let req: crate::runs_export::ExportReq = match serde_json::from_slice(body) {
+        Ok(r) => r,
+        Err(e) => return ("400 Bad Request", "text/plain", format!("JSON inválido: {e}").into_bytes()),
+    };
+    let info: serde_json::Value = serde_json::from_str(&gtfs_info_json(state)).unwrap_or_default();
+    let meta = crate::runs_export::Meta {
+        generated: now_utc_string(),
+        gtfs_date: info["date"].as_str().unwrap_or("desconocida").to_string(),
+        service_id: info["service_id"].as_str().unwrap_or("").to_string(),
+    };
+    let net = state.net.read().unwrap();
+    let sched = if q.get("horarios").map(|v| v == "1").unwrap_or(false) {
+        Some(crate::game::build_schedule(&net, false, None))
+    } else {
+        None
+    };
+    let sched_ref = sched.as_deref().map(|s| (&**net, s));
+    let out = if q.get("fmt").map(|f| f == "pdf").unwrap_or(false) {
+        crate::runs_export::pdf(&req, &meta, sched_ref).map(|b| ("application/pdf", b))
+    } else {
+        crate::runs_export::xlsx(&req, &meta, sched_ref)
+            .map(|b| ("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", b))
+    };
+    match out {
+        Ok((ct, b)) => ("200 OK", ct, b),
+        Err(e) => ("500 Internal Server Error", "text/plain", e.into_bytes()),
+    }
+}
+
+/// Ficha del GTFS GUARDADO (el cargado ahora): de qué día es (mtime de `stop_times.txt`, que se
+/// reescribe en cada descarga/importación), servicio dominante y tamaño. Alimenta el selector de
+/// horarios del juego y de /numeros ("GTFS guardado del …").
+fn gtfs_info_json(state: &ServerState) -> String {
+    let date = std::fs::metadata("data/gtfs/stop_times.txt")
+        .and_then(|m| m.modified())
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| scenario::date_from_unix(d.as_secs()));
+    let net = state.net.read().unwrap();
+    let n_lines = state.lines.read().unwrap().len();
+    let sid = net.dominant_service().unwrap_or_default();
+    // Salida del PRIMER tren del día (s): el motor arranca la jornada ahí (no a las 05:00 fijas).
+    let first_dep = net
+        .services
+        .iter()
+        .filter(|s| !s.is_bus && s.service_id == sid)
+        .filter_map(|s| s.first_time())
+        .min();
+    serde_json::json!({
+        "date": date,
+        "first_dep": first_dep,
+        "service_id": sid,
+        "n_trips": net.services.len(),
+        "n_lines": n_lines,
+    })
+    .to_string()
 }
 
 /// Lanza la actualización del GTFS (descarga oficial de Renfe) en un hilo aparte. Mismo

@@ -265,17 +265,22 @@ pub enum IncidentEffect {
     SingleTrack,
 }
 
-/// Plantilla de incidencia definida por el usuario (creador del frontend). Se tira "los dados"
-/// antes del día: con probabilidad `daily_prob` aparece una instancia, ubicada y fechada según las
-/// distribuciones espacial/temporal del sistema.
+/// Plantilla de incidencia definida por el usuario (creador del menú principal). Tasa: probabilidad
+/// `prob` de que ocurra **cada `every_h` horas**. Antes del día se trocea la jornada en secciones de
+/// `every_h` h y se tiran los dados en CADA sección → la misma plantilla puede aparecer varias veces
+/// en un día sin tener que poner 100 %/día (proceso de Bernoulli por intervalo ≈ tasa constante).
 #[derive(Clone)]
 pub struct IncidentTemplate {
     pub motivo: String,
     pub effect: IncidentEffect,
     pub dur_min: f64,
-    pub daily_prob: f64, // 0..1 (probabilidad de aparecer en un día completo)
+    pub prob: f64,    // 0..1: probabilidad de aparecer en una sección de `every_h` horas
+    pub every_h: f64, // longitud de la sección (h); 24 ≈ la antigua "probabilidad diaria"
     pub enabled: bool,
 }
+
+/// Sección mínima (h): evita trocear la jornada en miles de tiradas por un valor absurdo.
+pub const MIN_EVERY_H: f64 = 0.25;
 
 /// Una incidencia CONCRETA ya ubicada y fechada tras la tirada (lo que aplica el motor).
 #[derive(Clone)]
@@ -295,28 +300,32 @@ pub fn default_templates() -> Vec<IncidentTemplate> {
             motivo: "Avería de señalización".into(),
             effect: IncidentEffect::RedSignal { both: false },
             dur_min: 15.0,
-            daily_prob: 0.40,
+            prob: 0.40,
+            every_h: 24.0,
             enabled: true,
         },
         IncidentTemplate {
             motivo: "Persona en la vía".into(),
             effect: IncidentEffect::RedSignal { both: true },
             dur_min: 20.0,
-            daily_prob: 0.20,
+            prob: 0.20,
+            every_h: 24.0,
             enabled: true,
         },
         IncidentTemplate {
             motivo: "Obras: vía única provisional".into(),
             effect: IncidentEffect::SingleTrack,
             dur_min: 45.0,
-            daily_prob: 0.30,
+            prob: 0.30,
+            every_h: 24.0,
             enabled: true,
         },
         IncidentTemplate {
             motivo: "Falta de tensión en catenaria".into(),
             effect: IncidentEffect::RedSignal { both: true },
             dur_min: 30.0,
-            daily_prob: 0.15,
+            prob: 0.15,
+            every_h: 24.0,
             enabled: true,
         },
     ]
@@ -358,8 +367,18 @@ fn sample_canton<'a>(rng: &mut StdRng, cantons: &'a [(String, String, f64)]) -> 
     cantons.last()
 }
 
-/// Tira los dados ANTES del día: para cada plantilla activa, Bernoulli(`daily_prob`); si sale,
-/// ubica (∝ pesos espaciales) y fecha (∝ pesos temporales) una instancia. Sin máximo. Determinista.
+/// Nº de secciones ENTERAS en que se trocea la jornada para una plantilla "cada X horas": el entero
+/// más cercano a `jornada / X` (mínimo 1). Secciones IGUALES (≈ X h) sin restos: así "cada 24 h"
+/// en una jornada de ~19,6 h es exactamente UNA tirada = la antigua probabilidad diaria.
+pub fn n_sections(day_s: f64, every_h: f64) -> usize {
+    let x = every_h.max(MIN_EVERY_H) * 3600.0;
+    ((day_s / x).round() as usize).max(1)
+}
+
+/// Tira los dados ANTES del día. Para cada plantilla activa, la jornada `[start,end)` se trocea en
+/// `n_sections` secciones iguales y en CADA una se tira Bernoulli(`prob`); si sale, se ubica
+/// (∝ pesos espaciales) y se fecha DENTRO de esa sección (∝ demanda horaria) una instancia. Media
+/// de instancias/día = `prob × n`. Sin máximo. Determinista con `seed`.
 fn roll_incidents(
     cantons: &[(String, String, f64)],
     templates: &[IncidentTemplate],
@@ -370,20 +389,27 @@ fn roll_incidents(
     let mut rng = StdRng::seed_from_u64(seed);
     let mut out = Vec::new();
     for tpl in templates.iter().filter(|t| t.enabled) {
-        if rng.gen::<f64>() > tpl.daily_prob {
-            continue; // no aparece hoy
+        let n = n_sections(end - start, tpl.every_h);
+        let sec = (end - start) / n as f64;
+        for k in 0..n {
+            let s0 = start + k as f64 * sec;
+            let s1 = if k + 1 == n { end } else { s0 + sec };
+            if rng.gen::<f64>() < tpl.prob.clamp(0.0, 1.0) {
+                if let Some((from, to, _)) = sample_canton(&mut rng, cantons) {
+                    let t0 = sample_time(&mut rng, s0, s1);
+                    out.push(ActiveIncident {
+                        from: from.clone(),
+                        to: to.clone(),
+                        effect: tpl.effect,
+                        t0,
+                        t1: t0 + tpl.dur_min * 60.0,
+                        motivo: tpl.motivo.clone(),
+                    });
+                }
+            }
         }
-        let Some((from, to, _)) = sample_canton(&mut rng, cantons) else { continue };
-        let t0 = sample_time(&mut rng, start, end);
-        out.push(ActiveIncident {
-            from: from.clone(),
-            to: to.clone(),
-            effect: tpl.effect,
-            t0,
-            t1: t0 + tpl.dur_min * 60.0,
-            motivo: tpl.motivo.clone(),
-        });
     }
+    out.sort_by(|a, b| a.t0.total_cmp(&b.t0));
     out
 }
 
@@ -1617,6 +1643,38 @@ mod tests {
             assert_eq!((&x.from, &x.to), (&y.from, &y.to));
             assert!((x.t0 - y.t0).abs() < 1e-9);
         }
+    }
+
+    /// Tasa "cada X horas": con prob 1 cada 4 h en una jornada de 19 h → round(4,75) = 5 secciones
+    /// iguales de 3,8 h → exactamente 5 instancias, cada una DENTRO de su sección.
+    #[test]
+    fn roll_por_secciones_de_x_horas() {
+        let cantons = vec![("A".to_string(), "B".to_string(), 1.0)];
+        let tpl = vec![IncidentTemplate {
+            motivo: "t".into(),
+            effect: IncidentEffect::RedSignal { both: false },
+            dur_min: 10.0,
+            prob: 1.0,
+            every_h: 4.0,
+            enabled: true,
+        }];
+        let (s, e) = (5.0 * 3600.0, 24.0 * 3600.0);
+        for seed in 0..20 {
+            let r = roll_incidents(&cantons, &tpl, s, e, seed);
+            assert_eq!(r.len(), 5, "seed {seed}");
+            let sec = (e - s) / 5.0;
+            for (k, inc) in r.iter().enumerate() {
+                let s0 = s + k as f64 * sec;
+                assert!(inc.t0 >= s0 && inc.t0 < s0 + sec);
+            }
+        }
+        // "cada 24 h" en una jornada más corta = 1 sola tirada (la antigua probabilidad diaria).
+        assert_eq!(n_sections(e - s, 24.0), 1);
+        assert_eq!(n_sections(e - s, 100.0), 1);
+        // prob 0 → nunca.
+        let mut t0 = tpl.clone();
+        t0[0].prob = 0.0;
+        assert!(roll_incidents(&cantons, &t0, s, e, 7).is_empty());
     }
 
     /// `Infra` mínima para probar la resolución de efectos a índices: A=0,B=1,C=2,D=3; C|D tiene

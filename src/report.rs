@@ -191,33 +191,42 @@ pub struct Controls {
     pub random: bool,
 }
 
-const STYLE: &str = r#"<style>
+const STYLE: &str = r#"<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@600;700;800&family=Inter:wght@400;500;600;700&family=Roboto+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
 /* Paleta Rodalies de Catalunya / Renfe: blancos y grises de la librea de los
    trenes, con el rojo corporativo de Rodalies como único acento, usado con
    mesura. Aspecto instrumental/científico: superficies planas, sin degradados. */
 :root {
-  /* Paleta Renfe/Rodalies combinada: morado Renfe (#830065) y naranja Rodalies (#EC6E15)
-     como dos acentos repartidos por la interfaz, sobre blanco cálido (#F9F5F1) y gris
-     oscuro (#26272D) para texto y estructura. */
-  --bg:#f9f5f1; --panel:#ffffff; --panel2:#f4efe9; --border:#e3dace;
+  /* ANDANA — identidad Rodalies: naranja (#EC6E15) como acento primario y morado
+     Renfe (#830065) como secundario menor (tags/datos). Se conservan TODOS los
+     nombres de variable (los usan JS/Rust); solo cambian los valores. */
+  --bg:#f9f5f1; --panel:#ffffff; --panel2:#f6efe7; --border:#e6dccd;
   --text:#26272d; --muted:#6c6a72; --ink:#26272d;
-  --accent:#830065; --accent-soft:rgba(131,0,101,.08); --accent2:#ec6e15;
-  --accent2-soft:rgba(236,110,21,.10);
+  --accent:#ec6e15; --accent-soft:rgba(236,110,21,.10); --accent2:#830065;
+  --accent2-soft:rgba(131,0,101,.08);
   --arr:#1b7f3b; --dep:#1f6feb; --late:#c5221f; --warn:#b25a00;
   --grid:#ece3d8;
+  /* ANDANA — tipografía display (títulos/números de línea) + gradiente CTA naranja
+     + lavado naranja de fondo (claro). */
+  --display:'Montserrat','Segoe UI',system-ui,sans-serif;
+  --grad-cta:linear-gradient(180deg, #FF8A3D 0%, #EC6E15 55%, #C8590E 100%);
+  --wash:radial-gradient(120% 90% at 50% -15%, rgba(236,110,21,0.08), transparent 60%), radial-gradient(90% 70% at 100% 0%, rgba(255,138,61,0.05), transparent 55%);
 }
 * { box-sizing:border-box; }
-body { margin:0; background:var(--bg); color:var(--text);
-  font-family:'Segoe UI',system-ui,-apple-system,sans-serif; line-height:1.5;
+/* `hidden` debe ganar a .rod-load{display:flex} (si no, el loader del tren no se ocultaría). */
+[hidden] { display:none !important; }
+body { margin:0; background:var(--bg); background-image:var(--wash); color:var(--text);
+  font-family:'Inter',system-ui,-apple-system,'Segoe UI',sans-serif; line-height:1.5;
   -webkit-font-smoothing:antialiased; }
-.mono { font-family:'Cascadia Code',Consolas,'Courier New',monospace; }
+.mono { font-family:'Roboto Mono',ui-monospace,'Cascadia Code',Consolas,monospace; }
 .muted { color:var(--muted); font-size:.9em; }
 code { background:var(--panel2); padding:1px 5px; border-radius:4px; font-size:.85em; border:1px solid var(--border); }
 .wrap { max-width:1200px; margin:0 auto; padding:24px 20px 60px; }
 header.top { display:flex; align-items:center; gap:16px; padding:8px 0 20px; border-bottom:2px solid var(--ink); margin-bottom:24px; }
-.logo { width:46px; height:46px; border-radius:6px; background:var(--accent); color:#fff;
-  display:flex; align-items:center; justify-content:center; font-size:24px; font-weight:800;
-  letter-spacing:-.02em; flex:0 0 auto; font-family:'Segoe UI',system-ui,sans-serif; }
+/* Logo pixel-art de Rodalies (mismo sprite que el juego), ampliado con bordes duros. */
+.logo { width:46px; height:46px; border-radius:9px; flex:0 0 auto; display:block; object-fit:cover;
+  image-rendering:pixelated; image-rendering:crisp-edges;
+  box-shadow:0 3px 12px rgba(236,110,21,.38); }
 h1 { font-size:1.45rem; margin:0; font-weight:700; letter-spacing:-.01em; }
 h2 { font-size:.82rem; margin:0 0 14px; letter-spacing:.06em; text-transform:uppercase; color:var(--muted); font-weight:700; }
 h3 { margin:0 0 4px; font-size:1.05rem; }
@@ -274,10 +283,10 @@ footer { color:var(--muted); font-size:.8rem; text-align:center; padding-top:20p
 .field input[type=range] { width:100%; accent-color:var(--accent); }
 .field select { background:var(--panel); color:var(--text); border:1px solid var(--border); border-radius:4px; padding:7px 8px; }
 .field .chk { display:flex; align-items:center; gap:7px; color:var(--text); font-size:.9rem; }
-.btn { background:var(--accent); color:#fff; border:none; border-radius:4px;
+.btn { background:var(--grad-cta); color:#fff; border:none; border-radius:4px;
   padding:11px 22px; font-size:.95rem; font-weight:600; cursor:pointer;
   text-decoration:none; display:inline-block; }
-.btn:hover { background:#b71d16; }
+.btn:hover { filter:brightness(1.06); }
 .btn:disabled { opacity:.55; cursor:progress; }
 #dashboard { transition:opacity .15s; }
 .optchart { width:100%; height:auto; display:block; background:var(--panel); border:1px solid var(--border); border-radius:6px; margin-top:12px; }
@@ -290,6 +299,8 @@ footer { color:var(--muted); font-size:.8rem; text-align:center; padding-top:20p
 .tab.active { color:var(--accent); border-bottom-color:var(--accent); }
 .tabpane { display:none; }
 .tabpane.active { display:block; }
+/* Panel sin pestañas: las secciones se apilan; separa el calculador del simulador. */
+#pane-calc.tabpane.active { margin-top:30px; padding-top:24px; border-top:2px solid var(--border); }
 h4 { margin:16px 0 8px; font-size:.98rem; }
 .series-row { display:flex; flex-wrap:wrap; gap:14px; }
 .serie-chk { display:flex; align-items:center; gap:6px; color:var(--text); font-size:.9rem; background:var(--panel2); border:1px solid var(--border); border-radius:4px; padding:6px 12px; }
@@ -312,7 +323,7 @@ h4 { margin:16px 0 8px; font-size:.98rem; }
 .zoombtn { float:right; background:var(--panel2); border:1px solid var(--border); color:var(--text); border-radius:4px; padding:4px 10px; cursor:pointer; font-size:.8rem; }
 .modal { display:none; position:fixed; inset:0; background:rgba(27,33,39,.55); z-index:1000; padding:3vh 3vw; }
 .modal.open { display:block; }
-.modal-inner { background:var(--panel); border:1px solid var(--border); border-radius:6px; width:100%; height:100%; padding:16px; position:relative; }
+.modal-inner { background:var(--panel); border:1px solid var(--border); border-top:3px solid var(--accent); border-radius:6px; width:100%; height:100%; padding:16px; position:relative; }
 .modal-close { position:absolute; top:10px; right:14px; background:var(--accent); color:#fff; border:none; border-radius:4px; padding:6px 12px; cursor:pointer; font-weight:600; z-index:1; }
 .modal-plot { width:100%; height:100%; }
 .anom { background:rgba(154,103,0,.08); border-left:3px solid var(--warn); padding:8px 12px; border-radius:0 4px 4px 0; margin-bottom:8px; font-size:.86rem; }
@@ -327,12 +338,14 @@ h4 { margin:16px 0 8px; font-size:.98rem; }
    THEME_INIT antes de pintar para evitar parpadeo). Mantiene la identidad Renfe/Rodalies
    subiendo la luminosidad de los acentos para que contrasten sobre fondo oscuro. ---- */
 :root[data-theme="dark"] {
-  --bg:#17181c; --panel:#212228; --panel2:#2a2c33; --border:#383a43;
-  --text:#ece9e4; --muted:#9d9aa4; --ink:#ece9e4;
-  --accent:#d072b8; --accent-soft:rgba(208,114,184,.14); --accent2:#ff8a3d;
-  --accent2-soft:rgba(255,138,61,.14);
+  --bg:#14161b; --panel:#1c1e25; --panel2:#252730; --border:#363843;
+  --text:#f2ede7; --muted:#a09ba4; --ink:#f2ede7;
+  --accent:#ff8a3d; --accent-soft:rgba(255,138,61,.15); --accent2:#d072b8;
+  --accent2-soft:rgba(208,114,184,.14);
   --arr:#3fbf6a; --dep:#5aa0ff; --late:#ff6b68; --warn:#e0a03a;
   --grid:#2f313a;
+  /* Lavado naranja + oscurecido inferior para el fondo oscuro. */
+  --wash:radial-gradient(120% 80% at 50% -10%, rgba(236,110,21,0.16), transparent 60%), radial-gradient(120% 80% at 50% 110%, rgba(11,13,18,0.55), transparent 55%);
 }
 :root[data-theme="dark"] .logo { color:#fff; }
 
@@ -352,7 +365,7 @@ h4 { margin:16px 0 8px; font-size:.98rem; }
   border-radius:10px; padding:34px 32px; transition:transform .15s,box-shadow .15s,border-color .15s; }
 .hero-card:hover { transform:translateY(-3px); box-shadow:0 12px 30px rgba(0,0,0,.14); border-left-color:var(--accent2); }
 .hero-badge { display:inline-block; font-size:.72rem; font-weight:700; letter-spacing:.08em;
-  text-transform:uppercase; color:#fff; background:var(--accent); padding:3px 10px; border-radius:20px; margin-bottom:14px; }
+  text-transform:uppercase; color:#fff; background:var(--grad-cta); padding:3px 10px; border-radius:20px; margin-bottom:14px; }
 .hero-card h2 { font-size:1.9rem; margin:0 0 8px; letter-spacing:-.02em; text-transform:none; color:var(--text); }
 .hero-card p { color:var(--muted); font-size:.98rem; margin:0 0 18px; max-width:60ch; }
 .hero-cta { font-weight:700; color:var(--accent); font-size:1.02rem; }
@@ -379,7 +392,7 @@ h4 { margin:16px 0 8px; font-size:.98rem; }
 .settings { display:none; position:fixed; inset:0; background:rgba(20,20,26,.55); z-index:2000;
   align-items:center; justify-content:center; padding:5vh 5vw; }
 .settings.open { display:flex; }
-.settings-inner { background:var(--panel); border:1px solid var(--border); border-radius:10px;
+.settings-inner { background:var(--panel); border:1px solid var(--border); border-top:3px solid var(--accent); border-radius:10px;
   width:100%; max-width:440px; padding:26px 26px 22px; position:relative; }
 .settings-inner h2 { margin:0 0 18px; }
 .settings-inner .settings-close { position:absolute; top:16px; right:18px; background:none; border:none;
@@ -391,11 +404,198 @@ h4 { margin:16px 0 8px; font-size:.98rem; }
 .seg button { background:var(--panel2); border:none; color:var(--muted); padding:8px 16px; cursor:pointer;
   font-size:.9rem; font-weight:600; border-right:1px solid var(--border); }
 .seg button:last-child { border-right:none; }
-.seg button.active { background:var(--accent); color:#fff; }
+.seg button.active { background:var(--grad-cta); color:#fff; }
+
+/* ── ANDANA · tipografía display + iconos SVG ─────────────────────────── */
+/* Montserrat (var --display) en títulos y números; se declara al final para
+   ganar en orden a reglas previas (p. ej. .logo con su font-family propia). */
+h1, h2, h3, .logo, .hero-card h2, .tile h3, .hero-badge, .kpi-val, .menu-brand h1 { font-family:var(--display); }
+.tile-ic { color:var(--accent); }
+.tile-ic svg { width:26px; height:26px; color:var(--accent); }
+.ic-h { display:inline-flex; align-items:center; vertical-align:-4px; }
+.ic-h svg { width:20px; height:20px; color:var(--accent); }
+#runBtn svg { width:15px; height:15px; vertical-align:-2px; margin-right:3px; }
+/* Banda/loader del tren pixel en flujo (menú y /numeros): fondo transparente,
+   se adapta a ambos temas. */
+.rod-band { background:transparent !important; padding:12px 0 4px; gap:10px; }
+.rod-band .rod-load-caption { color:var(--muted); font-size:12px; letter-spacing:.14em; }
+.rod-band .rod-load-dots i { background:var(--accent); }
+
+/* ════════════════════════════════════════════════════════════════════════
+   ANDANA · Tren pixel-art de càrrega (Rodalies) — 100% autocontingut, sense
+   imatges externes. Sprite = SVG inline blocky (crispEdges), taronja temable
+   amb var(--rod-orange). Rodes = <g> independents que giren. Pista de traves
+   amb gradients "hard-stop" que es desplacen (moviment relatiu cap a la dreta).
+   Rendiment: només transforms/opacity + background-position (GPU-friendly).
+   ════════════════════════════════════════════════════════════════════════ */
+
+/* ── Contenidor / escena ─────────────────────────────────────────────── */
+.rod-load{
+  /* Tokens de marca (temables des de fora; fallback = taronja Rodalies) */
+  --rod-orange:      #EC6E15;
+  --rod-orange-lift: #FF8A3D;
+  --rod-orange-deep: #C8590E;
+  --rod-purple:      #830065;   /* accent secundari, ús mínim */
+  --rod-white:       #F9F5F1;   /* blanc càlid */
+  --rod-carbon:      #0B0D12;
+  --rod-window:      #0B0D12;
+  --rod-steel:       #6b7078;
+  /* Pista (sobreescrit per cada skin) */
+  --rod-rail:        #4a4d55;
+  --rod-tie:         #2a2d34;
+  --rod-track-speed: .62s;      /* sincronitzat amb el gir de roda */
+
+  display:flex; flex-direction:column; align-items:center; justify-content:center;
+  gap:22px; padding:32px 24px;
+  font-family:'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  -webkit-user-select:none; user-select:none;
+  transition:opacity .45s ease;
+}
+/* Modificador d'overlay: el contenidor superior del joc ocupa tota la pantalla */
+#rodLoad{ position:fixed; inset:0; z-index:9999; }
+
+/* Fade-out en acabar (JS afegeix .is-done abans d'amagar) */
+.rod-load.is-done{ opacity:0; pointer-events:none; }
+
+/* ── Escena del tren (bob + xup-xup horitzontal) ─────────────────────── */
+.rod-load-scene{ display:flex; flex-direction:column; align-items:center; }
+.rod-train-scene{
+  position:relative; width:264px; height:96px;
+  display:flex; align-items:flex-end; justify-content:center;
+  animation:rod-train-bob .55s ease-in-out infinite;
+  will-change:transform;
+}
+/* Ombra tova que "respira" a contratemps del bot */
+.rod-train-scene::after{
+  content:""; position:absolute; left:50%; bottom:2px; translate:-50% 0;
+  width:210px; height:12px; border-radius:50%;
+  background:radial-gradient(ellipse at center, rgba(0,0,0,.42), rgba(0,0,0,0) 70%);
+  animation:rod-shadow-breathe .55s ease-in-out infinite;
+  z-index:0;
+}
+
+/* ── Sprite SVG: crisp/pixel ─────────────────────────────────────────── */
+.rod-train{
+  position:relative; z-index:1;
+  width:264px; height:auto;
+  shape-rendering:crispEdges;      /* vores dures = look pixel */
+  image-rendering:pixelated;
+  image-rendering:-moz-crisp-edges;
+  filter:drop-shadow(0 2px 0 rgba(0,0,0,.18));
+}
+/* Farciments (temables via CSS custom props) */
+.rod-train-hull   rect{ fill:var(--rod-orange, #EC6E15); }
+.rod-train-lift   rect{ fill:var(--rod-orange-lift, #FF8A3D); }  /* reflex de sostre */
+.rod-train-shade  rect{ fill:var(--rod-orange-deep, #C8590E); }  /* ombra inferior */
+.rod-train-stripe      { fill:var(--rod-white, #F9F5F1); }       /* franja blanca */
+.rod-train-glass  rect{ fill:var(--rod-window, #0B0D12); }       /* finestres/portes */
+.rod-train-lamp        { fill:#FFD9A0; }                          /* far càlid */
+.rod-train-frame  rect{ fill:#0f1013; }                           /* baix + bogies */
+
+/* Rodes: cada <g> gira sobre el seu propi centre (fill-box) */
+.rod-train-wheel{
+  transform-box:fill-box; transform-origin:center;
+  animation:rod-wheel-spin var(--rod-track-speed) linear infinite;
+  will-change:transform;
+}
+.rod-train-wheel .tyre { fill:#17181C; }
+.rod-train-wheel .hub  { fill:var(--rod-steel, #6b7078); }
+.rod-train-wheel .spoke{ stroke:var(--rod-steel, #6b7078); stroke-width:1; }
+.rod-train-wheel-set{ shape-rendering:geometricPrecision; } /* rodes rodones netes */
+
+/* ── Bafarades opcionals (toc lúdic; s'amaguen amb .no-steam) ─────────── */
+.rod-load-puff{
+  position:absolute; left:26px; bottom:56px;
+  width:6px; height:6px; border-radius:1px;
+  background:var(--rod-white, #F9F5F1);
+  image-rendering:pixelated; opacity:0; z-index:2;
+  animation:rod-puff-rise 2.2s ease-out infinite;
+}
+.rod-load-puff:nth-child(2){ animation-delay:.73s; }
+.rod-load-puff:nth-child(3){ animation-delay:1.46s; }
+.rod-load.no-steam .rod-load-puff{ display:none; }
+
+/* ── Via/pista de traves (desplaçament = sensació d'avanç) ────────────── */
+.rod-load-track{
+  width:280px; height:14px; margin-top:-7px;   /* s'encaixa sota les rodes */
+  border-radius:1px;
+  image-rendering:pixelated;
+  background-image:
+    repeating-linear-gradient(90deg, var(--rod-tie) 0 6px, transparent 6px 18px), /* traves */
+    linear-gradient(var(--rod-rail) 0 0);                                          /* carril */
+  background-size:18px 14px, 100% 3px;
+  background-position:0 9px, 0 1px;
+  background-repeat:repeat-x, repeat-x;
+  animation:rod-track-scroll var(--rod-track-speed) linear infinite;
+}
+
+/* ── Peu: llegenda + tres punts de càrrega ───────────────────────────── */
+.rod-load-caption{
+  font-family:'Montserrat', 'Inter', system-ui, sans-serif;
+  font-weight:800; font-size:15px; letter-spacing:.16em; text-transform:uppercase;
+  display:inline-flex; align-items:baseline;
+}
+.rod-load-dots{ display:inline-flex; margin-left:8px; }
+.rod-load-dots i{
+  width:6px; height:6px; margin-left:5px; display:inline-block;
+  background:var(--rod-orange, #EC6E15); border-radius:1px; image-rendering:pixelated;
+  animation:rod-dot 1.05s ease-in-out infinite;
+}
+.rod-load-dots i:nth-child(2){ animation-delay:.18s; }
+.rod-load-dots i:nth-child(3){ animation-delay:.36s; }
+
+/* ── Skins de context ────────────────────────────────────────────────── */
+/* Joc: overlay carbó gairebé opac */
+.rod-load.on-dark{
+  background:
+    radial-gradient(120% 90% at 50% 40%, rgba(24,27,35,.94), rgba(11,13,18,.985));
+  color:var(--rod-white, #F9F5F1);
+  --rod-rail:#565a63; --rod-tie:#23262e;
+}
+.rod-load.on-dark .rod-load-caption{ color:var(--rod-white, #F9F5F1); }
+/* Informes: paper blanc càlid */
+.rod-load.on-light{
+  background:var(--rod-white, #F9F5F1);
+  color:#17181C;
+  --rod-window:#14161c;
+  --rod-rail:#b7afa5; --rod-tie:#d9cfc3;
+}
+.rod-load.on-light .rod-load-caption{ color:#17181C; }
+.rod-load.on-light .rod-train{ filter:drop-shadow(0 2px 0 rgba(120,90,60,.22)); }
+
+/* ── Keyframes (tot transform/opacity/background-position) ────────────── */
+@keyframes rod-train-bob{
+  0%   { transform:translate3d(-1px, 0, 0); }
+  25%  { transform:translate3d( 0, -3px, 0); }
+  50%  { transform:translate3d( 1px, 0, 0); }
+  75%  { transform:translate3d( 0, -2px, 0); }
+  100% { transform:translate3d(-1px, 0, 0); }
+}
+@keyframes rod-shadow-breathe{
+  0%,50%,100%{ transform:scaleX(1);   opacity:.85; }
+  25%,75%    { transform:scaleX(.9);  opacity:.55; }
+}
+@keyframes rod-wheel-spin{ to{ transform:rotate(360deg); } }
+@keyframes rod-track-scroll{ to{ background-position:-18px 9px, 0 1px; } }
+@keyframes rod-puff-rise{
+  0%  { transform:translate(0,0) scale(.7);      opacity:0;   }
+  18% { opacity:.6; }
+  100%{ transform:translate(-16px,-26px) scale(2.1); opacity:0; }
+}
+@keyframes rod-dot{
+  0%,70%,100%{ opacity:.25; transform:translateY(0); }
+  35%        { opacity:1;   transform:translateY(-4px); }
+}
+
+/* Accessibilitat: respecta qui demana menys moviment */
+@media (prefers-reduced-motion:reduce){
+  .rod-train-scene, .rod-train-scene::after, .rod-train-wheel,
+  .rod-load-track, .rod-load-puff, .rod-load-dots i{ animation:none !important; }
+}
 </style>"#;
 
 const HEADER: &str = r#"<header class="top">
-    <div class="logo">R</div>
+    <img class="logo" src="/game/lines/r_logo.png" alt="Rodalies" width="46" height="46">
     <div>
       <h1>Rodalies Simulator <span class="sub">· panel de análisis</span> <span style="font-size:10px;opacity:.5;font-weight:400">v2.0</span></h1>
       <div class="sub">Simulación de tráfico ferroviario e incidencias · red de Rodalies de Catalunya · modelo construido a partir de datos GTFS</div>
@@ -435,20 +635,6 @@ fn optimizer_panel() -> String {
   </div>"#.to_string()
 }
 
-/// Panel lanzador del simulador de red (juego web). El juego se sirve en `/game` y carga la
-/// topología y los horarios directamente desde la API (GTFS u optimizados).
-fn game_panel() -> String {
-    r#"<div class="card">
-    <h2>Simulador de red · visualización dinámica del sistema</h2>
-    <p class="muted" style="margin-top:8px">Simulador 2D de la red construido íntegramente a partir del GTFS de Fomento_Transit: estaciones, vías reales por estación y la <b>secuencia real de cada línea</b> (sin aproximaciones). Los trenes circulan por su ruta siguiendo el horario a lo largo de la jornada (05:00–00:00), con reloj y control de velocidad. Puede cargar el <b>horario programado (GTFS)</b> o los <b>horarios optimizados</b> que produce el optimizador, e inyectar incidencias para observar el retraso acumulado.</p>
-    <div style="margin-top:14px;display:flex;gap:10px;flex-wrap:wrap">
-      <a class="btn" href="/game" target="_blank" rel="noopener">Abrir con horario programado (GTFS)</a>
-      <a class="btn" href="/game?source=optimized" target="_blank" rel="noopener" style="background:var(--accent2)">Abrir con horario optimizado</a>
-    </div>
-    <p class="muted" style="margin-top:10px">El horario optimizado requiere haber ejecutado antes el optimizador (los CSV en <code>report/optimized/</code>); si no existen, el juego usa el programado.</p>
-  </div>"#.to_string()
-}
-
 const OPT_SCRIPT: &str = r#"<script>
 (function(){
  const $=id=>document.getElementById(id);
@@ -483,26 +669,14 @@ const OPT_SCRIPT: &str = r#"<script>
 })();
 </script>"#;
 
-/// Cambio de pestañas (sin frameworks).
-const TAB_SCRIPT: &str = r#"<script>
-document.querySelectorAll('.tab').forEach(t=>t.addEventListener('click',()=>{
-  document.querySelectorAll('.tab').forEach(x=>x.classList.remove('active'));
-  document.querySelectorAll('.tabpane').forEach(x=>x.classList.remove('active'));
-  t.classList.add('active');
-  document.getElementById(t.dataset.pane).classList.add('active');
-}));
-</script>"#;
-
-/// Enlaces profundos desde el menú principal: `/panel#calc`, `/panel#opt`, `/panel#game`
-/// activan la pestaña correspondiente. Se ejecuta el ÚLTIMO (tras CALC2_SCRIPT) para que el
-/// `click()` sintético dispare también el listener que inicializa el mapa del calculador.
+/// Enlaces profundos desde el menú principal: `/panel#calc` y `/panel#opt` hacen scroll a la
+/// sección correspondiente (ya no hay pestañas: ambas secciones se muestran apiladas).
 const HASH_TAB_SCRIPT: &str = r#"<script>
 (function(){
-  const m={'#calc':'pane-calc','#game':'pane-game','#opt':'pane-sim'};
-  const pane=m[location.hash]; if(!pane) return;
-  const btn=document.querySelector('.tab[data-pane="'+pane+'"]');
-  if(btn) btn.click();
-  if(location.hash==='#opt'){ const el=document.getElementById('o_run'); if(el) setTimeout(()=>el.scrollIntoView({behavior:'smooth',block:'center'}),80); }
+  const m={'#calc':'pane-calc','#opt':'o_run'};
+  const id=m[location.hash]; if(!id) return;
+  const el=document.getElementById(id);
+  if(el) setTimeout(()=>el.scrollIntoView({behavior:'smooth',block:location.hash==='#opt'?'center':'start'}),120);
 })();
 </script>"#;
 
@@ -725,8 +899,8 @@ const CALC2_SCRIPT: &str = r#"<script>
  ltvStatus();
 
  // ---- Init mapa al abrir la pestaña ----
- const calcTab=document.querySelector('.tab[data-pane="pane-calc"]');
- if(calcTab)calcTab.addEventListener('click',()=>setTimeout(initMap,60));
+ // Sin pestañas: el mapa del calculador se inicializa al cargar (su sección ya es visible).
+ setTimeout(initMap,300);
 })();
 </script>"#;
 
@@ -804,14 +978,7 @@ fn settings_modal() -> String {
           <button data-theme-choice="auto">Auto</button>
         </div>
       </div>
-      <div class="set-row">
-        <label>Horario al lanzar el simulador</label>
-        <div class="seg" id="sourceSeg" role="group" aria-label="Fuente de horarios del juego">
-          <button data-source-choice="gtfs">GTFS programado</button>
-          <button data-source-choice="optimized">Malla optimizada</button>
-        </div>
-      </div>
-      <p class="muted" style="margin:0">La malla optimizada requiere haber ejecutado antes el optimizador; si no existe, el simulador usa el horario programado.</p>
+      <p class="muted" style="margin:0">Los horarios (GTFS guardado / nuevo / importado) se eligen en la pantalla previa al lanzar el simulador visual.</p>
     </div>
   </div>"#.to_string()
 }
@@ -872,6 +1039,96 @@ pub fn render_html(
     document(&head, &page)
 }
 
+/// Iconos SVG de línea (ANDANA) que sustituyen a los emojis de la interfaz. Usan `currentColor`
+/// para heredar el color del contenedor (normalmente el naranja de marca). Fuente: assets ANDANA.
+fn icon(name: &str) -> &'static str {
+    match name {
+        "info" => r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><line x1="12" y1="11" x2="12" y2="16"/><path d="M12 7.6h.01"/></svg>"#,
+        "runs" => r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2 4.5 13.2a.6.6 0 0 0 .48.96H11l-1 7.84 8.5-11.2a.6.6 0 0 0-.48-.96H12z"/></svg>"#,
+        "ruler" => r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="7" width="20" height="10" rx="1.5"/><line x1="6" y1="7" x2="6" y2="12"/><line x1="10" y1="7" x2="10" y2="11"/><line x1="14" y1="7" x2="14" y2="12"/><line x1="18" y1="7" x2="18" y2="11"/></svg>"#,
+        "optimize" => r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="4" y1="21" x2="4" y2="15"/><line x1="4" y1="11" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="13"/><line x1="12" y1="9" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="17"/><line x1="20" y1="13" x2="20" y2="3"/><line x1="1.5" y1="13" x2="6.5" y2="13"/><line x1="9.5" y1="9" x2="14.5" y2="9"/><line x1="17.5" y1="15" x2="22.5" y2="15"/></svg>"#,
+        "timer" => r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="13" r="8"/><line x1="9.5" y1="2" x2="14.5" y2="2"/><line x1="12" y1="2" x2="12" y2="5"/><line x1="12" y1="13" x2="12" y2="9.5"/><line x1="18.5" y1="6.5" x2="20" y2="5"/></svg>"#,
+        "warning" => r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.3 3.6 1.9 18a2 2 0 0 0 1.7 3h16.8a2 2 0 0 0 1.7-3L13.7 3.6a2 2 0 0 0-3.4 0Z"/><line x1="12" y1="9" x2="12" y2="13.5"/><path d="M12 17h.01"/></svg>"#,
+        "play" => r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 4.5v15a.6.6 0 0 0 .92.5l12-7.5a.6.6 0 0 0 0-1L7.92 4a.6.6 0 0 0-.92.5Z"/></svg>"#,
+        "refresh" => r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 11.5a8 8 0 1 0-.8 4.5"/><polyline points="20 4 20 11.5 12.5 11.5"/></svg>"#,
+        "back-arrow" => r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="20" y1="12" x2="5" y2="12"/><polyline points="11 6 5 12 11 18"/></svg>"#,
+        "download" => r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="3" x2="12" y2="15"/><polyline points="7 10 12 15 17 10"/><path d="M4 20h16"/></svg>"#,
+        _ => "",
+    }
+}
+
+/// Escena reutilizable del tren pixel (ANDANA): sprite SVG crisp + vía de traves. La usan la banda
+/// decorativa del menú y el loader de "varias runs". El contenedor (`.rod-load …`) y el caption los
+/// pone quien la incruste. Sin recursos externos (el color naranja lo dan las custom props del CSS).
+const TRAIN_SCENE: &str = r#"<div class="rod-load-scene">
+        <div class="rod-train-scene">
+          <svg class="rod-train" viewBox="0 0 128 44" width="264" height="91" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Tren de Rodalies">
+            <g class="rod-train-lift"><rect x="14" y="7" width="86" height="3"/></g>
+            <g class="rod-train-hull">
+              <rect x="8"  y="14" width="98" height="14"/>
+              <rect x="12" y="10" width="92" height="4"/>
+              <rect x="6"  y="17" width="2"  height="9"/>
+              <rect x="106" y="12" width="4" height="16"/>
+              <rect x="110" y="14" width="4" height="14"/>
+              <rect x="114" y="17" width="4" height="11"/>
+              <rect x="118" y="21" width="3" height="7"/>
+            </g>
+            <g class="rod-train-shade">
+              <rect x="8"   y="26" width="98" height="2"/>
+              <rect x="106" y="26" width="4"  height="2"/>
+              <rect x="110" y="26" width="4"  height="2"/>
+            </g>
+            <rect class="rod-train-stripe" x="8" y="22" width="98" height="3"/>
+            <g class="rod-train-glass">
+              <rect x="14" y="15" width="7" height="6"/>
+              <rect x="24" y="15" width="7" height="6"/>
+              <rect x="34" y="15" width="7" height="6"/>
+              <rect x="44" y="15" width="7" height="10"/>
+              <rect x="54" y="15" width="7" height="6"/>
+              <rect x="64" y="15" width="7" height="6"/>
+              <rect x="74" y="15" width="7" height="6"/>
+              <rect x="84" y="15" width="7" height="10"/>
+              <rect x="94" y="15" width="7" height="6"/>
+              <rect x="103" y="14" width="7" height="6"/>
+              <rect x="110" y="16" width="4" height="4"/>
+            </g>
+            <rect class="rod-train-lamp" x="116" y="24" width="3" height="3"/>
+            <g class="rod-train-frame">
+              <rect x="10" y="28" width="98" height="2"/>
+              <rect x="16" y="29" width="30" height="4"/>
+              <rect x="72" y="29" width="34" height="4"/>
+            </g>
+            <g class="rod-train-wheel-set">
+              <g class="rod-train-wheel">
+                <circle class="tyre" cx="22" cy="33" r="5"/>
+                <circle class="hub"  cx="22" cy="33" r="1.6"/>
+                <line class="spoke" x1="22" y1="28.5" x2="22" y2="37.5"/>
+                <line class="spoke" x1="17.5" y1="33" x2="26.5" y2="33"/>
+              </g>
+              <g class="rod-train-wheel">
+                <circle class="tyre" cx="40" cy="33" r="5"/>
+                <circle class="hub"  cx="40" cy="33" r="1.6"/>
+                <line class="spoke" x1="40" y1="28.5" x2="40" y2="37.5"/>
+                <line class="spoke" x1="35.5" y1="33" x2="44.5" y2="33"/>
+              </g>
+              <g class="rod-train-wheel">
+                <circle class="tyre" cx="82" cy="33" r="5"/>
+                <circle class="hub"  cx="82" cy="33" r="1.6"/>
+                <line class="spoke" x1="82" y1="28.5" x2="82" y2="37.5"/>
+                <line class="spoke" x1="77.5" y1="33" x2="86.5" y2="33"/>
+              </g>
+              <g class="rod-train-wheel">
+                <circle class="tyre" cx="100" cy="33" r="5"/>
+                <circle class="hub"  cx="100" cy="33" r="1.6"/>
+                <line class="spoke" x1="100" y1="28.5" x2="100" y2="37.5"/>
+                <line class="spoke" x1="95.5" y1="33" x2="104.5" y2="33"/>
+              </g>
+            </g>
+          </svg>
+        </div>
+        <div class="rod-load-track" aria-hidden="true"></div>
+      </div>"#;
+
 /// Menú principal (`/`): el juego es la pieza central (hero), con lanzadores del calculador y
 /// del optimizador y un botón de configuración (tema + fuente de horarios del juego). El juego
 /// se abre en `/game`; el calculador y el optimizador viven en el panel (`/panel#calc`,
@@ -882,7 +1139,7 @@ pub fn render_menu_page() -> String {
         r#"<div class="menu-wrap">
     <div class="menu-top">
       <div class="menu-brand">
-        <div class="logo">R</div>
+        <img class="logo" src="/game/lines/r_logo.png" alt="Rodalies" width="46" height="46">
         <div>
           <h1>Rodalies Simulator <span style="font-size:11px;opacity:.5;font-weight:400">v2.0</span></h1>
           <div class="sub">Simulador de tráfico ferroviario · red de Rodalies de Catalunya · modelo construido a partir de datos GTFS</div>
@@ -891,6 +1148,12 @@ pub fn render_menu_page() -> String {
       <button class="gear" id="settingsBtn" title="Configuración" aria-label="Configuración">
         <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
       </button>
+    </div>
+
+    <!-- ANDANA · banda decorativa: tren pixel corriendo, ENCIMA del simulador visual. -->
+    <div class="rod-load rod-band no-steam" role="img" aria-label="Rodalies en marcha">
+      {TRAIN_SCENE}
+      <div class="rod-load-caption">La red en marcha<span class="rod-load-dots" aria-hidden="true"><i></i><i></i><i></i></span></div>
     </div>
 
     <div class="hero">
@@ -913,6 +1176,11 @@ pub fn render_menu_page() -> String {
         <h3>Varias runs (solo números)</h3>
         <p>Corre el motor headless muchas veces (varias semillas) sin dibujar nada y compara solo las métricas: retraso, retenidos, PAX·min e incidencias del día. Mismo motor que el visual.</p>
       </a>
+      <a class="tile" href="/incidencias">
+        <div class="tile-ic">🚨</div>
+        <h3>Incidencias</h3>
+        <p>Crea, edita y borra las plantillas de incidencia (señal roja o vía única) con su probabilidad <b>cada X horas</b>. Las usan el modo visual y las runs.</p>
+      </a>
       <a class="tile" href="/panel#calc">
         <div class="tile-ic">📐</div>
         <h3>Calcular tramos</h3>
@@ -931,6 +1199,13 @@ pub fn render_menu_page() -> String {
   {SETTINGS_SCRIPT}"#,
         modal = settings_modal(),
     );
+    // Sustituye los emojis de las tiles por iconos SVG de línea (ANDANA).
+    let body = body
+        .replace("ℹ️", icon("info"))
+        .replace("⚡", icon("runs"))
+        .replace("📐", icon("ruler"))
+        .replace("🧮", icon("optimize"))
+        .replace("🚨", icon("warning"));
     document(&head, &body)
 }
 
@@ -940,14 +1215,15 @@ pub fn render_info_page() -> String {
     let head = format!("<title>Rodalies Simulator · Información</title>\n{STYLE}");
     let body = r#"<style>
 .info-card{max-width:840px;margin:14px auto;text-align:left;line-height:1.55}
-.info-card h2{margin:.2em 0 .5em;font-size:18px}
-.info-card pre{background:rgba(255,255,255,.06);padding:8px 10px;border-radius:8px;overflow-x:auto;font-size:12.5px;white-space:pre-wrap}
+.info-card h2{margin:.2em 0 .5em;font-size:18px;display:flex;align-items:center;gap:9px}
+.info-card h2 svg{width:21px;height:21px;flex:0 0 auto;color:var(--accent)}
+.info-card pre{background:var(--panel2);border:1px solid var(--border);padding:8px 10px;border-radius:8px;overflow-x:auto;font-size:12.5px;white-space:pre-wrap}
 .info-card ul{margin:.3em 0 .6em 1.1em}
 .info-card li{margin:.2em 0}
 </style>
 <div class="menu-wrap">
     <div class="panel-bar"><a class="back-link" href="/">← Menú</a></div>
-    <div class="menu-top"><div class="menu-brand"><div class="logo">R</div><div>
+    <div class="menu-top"><div class="menu-brand"><img class="logo" src="/game/lines/r_logo.png" alt="Rodalies" width="46" height="46"><div>
       <h1>Información del modelo</h1>
       <div class="sub">Cómo el motor unificado calcula los tiempos entre estaciones y las probabilidades de las incidencias.</div>
     </div></div></div>
@@ -975,8 +1251,8 @@ pub fn render_info_page() -> String {
 
     <section class="card info-card">
       <h2>⚠️ Incidencias — probabilidades del modelo</h2>
-      <p>Toda incidencia es de <b>dos tipos</b>: una <b>señal en rojo</b> sin tren delante (en un sentido o en ambos), o un <b>tramo de vía doble que pasa a vía única</b>. Cada plantilla que creas tiene un <b>motivo</b>, un <b>efecto</b>, una <b>duración</b> y una <b>probabilidad diaria</b>.</p>
-      <p><b>Antes de empezar el día</b>, el motor "tira los dados" (reproducible con la <b>semilla</b>): para cada plantilla activa saca un número y, con su probabilidad diaria, decide si aparece. No hay máximo de incidencias.</p>
+      <p>Toda incidencia es de <b>dos tipos</b>: una <b>señal en rojo</b> sin tren delante (en un sentido o en ambos), o un <b>tramo de vía doble que pasa a vía única</b>. Cada plantilla que creas (apartado <a href="/incidencias">Incidencias</a> del menú) tiene un <b>motivo</b>, un <b>efecto</b>, una <b>duración</b> y una <b>probabilidad p cada X horas</b>.</p>
+      <p><b>Antes de empezar el día</b>, el motor "tira los dados" (reproducible con la <b>semilla</b>): la jornada (de la salida del primer tren a las 24:00) se trocea en un <b>número entero de secciones iguales</b>, el más cercano a <i>horas de jornada / X</i> (mínimo 1), y, para cada plantilla activa, en <b>cada sección</b> se saca un número: con probabilidad <b>p</b> aparece una instancia dentro de esa sección. Así una misma incidencia puede ocurrir <b>varias veces</b> en un día; de media, <b>p × nº de secciones</b> veces. "Cada 24 h" = una sola tirada al día (la antigua probabilidad diaria). No hay máximo de incidencias.</p>
       <p>Si aparece, se decide <b>dónde</b> y <b>cuándo</b> con distribuciones iguales para todos los tipos:</p>
       <ul>
         <li><b>Dónde (distribución espacial):</b> más probable en <b>nudos (Barcelona)</b>, <b>estaciones grandes</b>, <b>tramos más frecuentados</b> y <b>terminales</b>. Peso por cantón:
@@ -984,10 +1260,15 @@ pub fn render_info_page() -> String {
           donde <i>vías</i> = nº de vías de andén, <i>frecuencia</i> = nº de servicios que pasan, <i>terminal</i> = extremo de línea, <i>nudo_BCN</i> = estación de Barcelona.</li>
         <li><b>Cuándo (distribución temporal):</b> más probable en <b>hora punta</b> que en horas valle o primera/última hora (sigue el perfil de demanda del día).</li>
       </ul>
-      <p>El creador de incidencias (plantillas eliminables y activables) está en el panel <b>INCID.</b> del modo visual y se comparte con el modo de números.</p>
+      <p>El creador de incidencias (crear, editar y borrar plantillas) es el apartado <a href="/incidencias">Incidencias</a> del menú. Las plantillas se comparten; cada modo (visual / varias runs) elige por su cuenta cuáles entran en juego. Además, en el modo visual se puede <b>lanzar una incidencia AHORA</b> (panel <b>INCID.</b>) en el tramo que elijas.</p>
     </section>
   </div>"#;
-    document(&head, body)
+    // Sustituye los emojis de las cabeceras por iconos SVG de línea (ANDANA). Se cubre la forma con
+    // selector de variación (️, U+FE0F) y la base por si acaso.
+    let body = body
+        .replace("⏱️", icon("timer")).replace("⏱", icon("timer"))
+        .replace("⚠️", icon("warning")).replace("⚠", icon("warning"));
+    document(&head, &body)
 }
 
 /// Página del modo "VARIAS RUNS (solo números)": corre el motor headless para varias semillas y
@@ -995,55 +1276,227 @@ pub fn render_info_page() -> String {
 pub fn render_numbers_page() -> String {
     let head = format!("<title>Rodalies Simulator · Varias runs (números)</title>\n{STYLE}");
     let body = r##"<style>
-.info-card{max-width:920px;margin:14px auto;text-align:left;box-sizing:border-box}
-.num-tbl{width:100%;border-collapse:collapse;margin-top:12px;font-size:13px;table-layout:fixed}
-.num-tbl th,.num-tbl td{border-bottom:1px solid rgba(255,255,255,.1);padding:6px 8px;text-align:right;vertical-align:top;overflow-wrap:anywhere;word-break:break-word}
-.num-tbl th{opacity:.7;font-weight:600}
-.num-tbl td:last-child,.num-tbl th:last-child{text-align:left;width:40%}
-.info-card label{font-size:13px;display:inline-flex;flex-direction:column;gap:3px;opacity:.85}
-.info-card input{background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.15);border-radius:7px;padding:5px 7px;color:inherit;font:inherit}
-.inc-cell{line-height:1.35}
-.inc-line{padding:3px 0;border-bottom:1px dashed rgba(255,255,255,.08)}
+/* Esta página necesita ancho para la tabla de runs (la columna de incidencias es la clave). */
+.menu-wrap{max-width:1320px}
+.num-layout{display:grid;grid-template-columns:330px minmax(0,1fr);gap:20px;align-items:start;max-width:1320px;margin:14px auto}
+@media(max-width:840px){.num-layout{grid-template-columns:1fr}}
+.num-side h2{margin:0 0 4px}
+.num-side .sub{margin:0 0 14px}
+.num-seeds{display:flex;gap:10px;margin-bottom:14px}
+.fld{display:flex;flex-direction:column;gap:4px;font-size:.74rem;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--muted)}
+.num-seeds .fld{flex:1;min-width:0}
+.fld input{width:100%;min-width:0;background:var(--panel2);border:1px solid var(--border);border-radius:7px;padding:8px 9px;color:var(--text);font:inherit;font-weight:400;text-transform:none;letter-spacing:0}
+.gtfs-box{border:1px solid var(--border);border-radius:9px;padding:11px 12px;margin-bottom:14px;background:var(--panel2)}
+.gtfs-box .lbl{font-size:.72rem;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:var(--muted);margin-bottom:6px}
+.gtfs-box b{color:var(--text)}
+.sched-opts{display:flex;flex-direction:column;gap:6px}
+.sched-opt{display:flex;gap:9px;align-items:flex-start;padding:8px 10px;border:1px solid var(--border);border-radius:8px;background:var(--panel);cursor:pointer;transition:.14s}
+.sched-opt:hover{border-color:var(--accent)}
+.sched-opt:has(input:checked){border-color:var(--accent);box-shadow:inset 0 0 0 1px var(--accent);background:var(--accent-soft)}
+.sched-opt input{margin-top:3px;accent-color:var(--accent)}
+.sched-opt>span{display:flex;flex-direction:column;line-height:1.3;font-size:.86rem}
+.sched-opt small{color:var(--muted);font-size:.74rem}
+.sched-opt small svg{width:12px;height:12px;vertical-align:-2px}
+.file-pick{position:relative;display:block;margin-top:8px}
+.file-pick input{position:absolute;inset:0;opacity:0;cursor:pointer}
+.file-pick span{display:block;text-align:center;font-size:.8rem;color:var(--muted);border:1px dashed var(--border);border-radius:8px;padding:8px}
+.file-pick:hover span{border-color:var(--accent);color:var(--text)}
+.fmt-help{position:relative;display:inline-flex;align-items:center;justify-content:center;width:16px;height:16px;margin-left:5px;border-radius:50%;font-size:10px;font-weight:700;color:#fff;background:var(--accent);cursor:help;vertical-align:1px}
+.fmt-pop{position:absolute;left:-12px;top:calc(100% + 8px);width:320px;max-width:80vw;z-index:20;padding:10px 12px;border-radius:9px;font-size:.74rem;font-weight:400;line-height:1.5;color:var(--text);background:var(--panel);border:1px solid var(--border);box-shadow:0 12px 32px rgba(0,0,0,.18);opacity:0;visibility:hidden;transition:opacity .15s;text-transform:none;letter-spacing:0}
+.fmt-help:hover .fmt-pop,.fmt-help:focus .fmt-pop{opacity:1;visibility:visible}
+.tpl-title{font-size:.72rem;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:var(--muted);margin:2px 0 6px}
+.num-tpls{list-style:none;padding:0;margin:0;display:flex;flex-direction:column;gap:6px}
+.num-tpls li{display:flex;gap:9px;align-items:flex-start;font-size:.86rem;background:var(--panel2);border:1px solid var(--border);border-left:3px solid var(--accent);border-radius:7px;padding:8px 10px}
+.num-tpls li.off{border-left-color:var(--border);opacity:.55}
+.num-tpls li small{display:block;color:var(--muted);font-size:.72rem;margin-top:2px}
+.num-tpls input{margin-top:2px;width:15px;height:15px;accent-color:var(--accent);flex:0 0 auto;cursor:pointer}
+.num-tpls .empty{border-left-color:transparent;color:var(--muted);font-style:italic;background:none}
+/* Barra de acciones ENCIMA de los resultados: ejecutar + progreso + descargar. */
+.res-bar{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:16px;padding-bottom:14px;border-bottom:1px solid var(--border)}
+#runBtn{display:inline-flex;align-items:center;gap:8px;font-size:1rem;padding:11px 22px;border-radius:8px}
+#runBtn svg,.dl-menu svg{width:15px;height:15px;flex:0 0 auto}
+#prog{color:var(--muted);font-size:.85rem}
+.btn.ghost{background:var(--panel2);color:var(--text);border:1px solid var(--border)}
+.btn.ghost:hover:not(:disabled){border-color:var(--accent)}
+.dl-menu{position:relative;margin-left:auto}
+#dlBtn{display:inline-flex;align-items:center;gap:8px;border-radius:8px;padding:10px 16px}
+.dl-pop{position:absolute;right:0;top:calc(100% + 6px);z-index:30;min-width:230px;background:var(--panel);border:1px solid var(--border);border-radius:10px;box-shadow:0 14px 34px rgba(0,0,0,.16);padding:6px}
+.dl-grp{font-size:.68rem;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);padding:8px 10px 4px}
+.dl-pop button{display:block;width:100%;text-align:left;background:none;border:none;border-radius:7px;padding:8px 10px;font:inherit;font-size:.88rem;color:var(--text);cursor:pointer}
+.dl-pop button:hover{background:var(--accent-soft);color:var(--accent)}
+.all-toggle{display:flex;align-items:center;gap:9px;font-size:.84rem;font-weight:600;padding:7px 10px;margin-bottom:6px;border:1px dashed var(--border);border-radius:7px;cursor:pointer}
+.all-toggle input{width:15px;height:15px;accent-color:var(--accent);cursor:pointer}
+.num-tbl{width:100%;border-collapse:collapse;font-size:13px}
+.num-tbl th,.num-tbl td{border-bottom:1px solid var(--border);padding:8px 9px;text-align:right;vertical-align:top;white-space:nowrap}
+.num-tbl th{color:var(--muted);font-weight:700;font-size:.7rem;text-transform:uppercase;letter-spacing:.03em;border-bottom:2px solid var(--border);white-space:normal;vertical-align:bottom;line-height:1.25;max-width:92px}
+.num-tbl td:last-child,.num-tbl th:last-child{text-align:left;white-space:normal;min-width:220px;max-width:none}
+.num-tbl td:first-child,.num-tbl th:first-child{text-align:left}
+.inc-cell{line-height:1.4}
+.inc-line{padding:3px 0;border-bottom:1px dashed var(--border)}
 .inc-line:last-child{border-bottom:none}
-.inc-line .eff{opacity:.65;font-size:11px}
-.inc-line .when{opacity:.7;font-variant-numeric:tabular-nums}
-.num-tbl .muted{opacity:.5}
+.inc-line .eff{color:var(--muted);font-size:11px}
+.inc-line .when{color:var(--muted);font-variant-numeric:tabular-nums}
+.num-tbl .muted{color:var(--muted)}
+#numLoad{margin:14px auto;max-width:440px}
 </style>
 <div class="menu-wrap">
     <div class="panel-bar"><a class="back-link" href="/">← Menú</a></div>
-    <div class="menu-top"><div class="menu-brand"><div class="logo">R</div><div>
+    <div class="menu-top"><div class="menu-brand"><img class="logo" src="/game/lines/r_logo.png" alt="Rodalies" width="46" height="46"><div>
       <h1>Varias runs · solo motor y números</h1>
-      <div class="sub">Corre el motor unificado headless (física + incidencias) para un rango de semillas y compara métricas. Sin dibujar nada — el mismo motor que el modo visual.</div>
+      <div class="sub">Corre el motor unificado headless (física + incidencias) para un rango de semillas y compara métricas. Mismo motor que el modo visual.</div>
     </div></div></div>
 
-    <section class="card info-card">
-      <div style="display:flex;gap:12px;align-items:end;flex-wrap:wrap">
-        <label>Semillas (desde) <input type="number" id="s0" value="1" min="0" style="width:90px"></label>
-        <label>Semillas (hasta) <input type="number" id="s1" value="8" min="0" style="width:90px"></label>
-        <button class="hero-cta" id="runBtn" style="cursor:pointer;border:none">▶ Ejecutar runs</button>
-        <span id="prog" style="opacity:.7"></span>
-      </div>
-      <p class="sub" style="margin-top:6px">Cada run simula la jornada completa (~961 trenes); tarda unos segundos. Se ejecutan una a una.</p>
-      <table class="num-tbl" id="tbl">
-        <thead><tr><th>Semilla</th><th>Trenes</th><th>Retraso máx (min)</th><th>Pico retenidos</th><th>Final retenidos</th><th>PAX·min</th><th>Incidencias</th></tr></thead>
-        <tbody></tbody>
-      </table>
-    </section>
+    <div class="num-layout">
+      <aside class="card num-side">
+        <h2>Escenario</h2>
+        <p class="sub">Elige el rango de semillas y qué incidencias entran en juego, y ejecuta.</p>
+        <div class="num-seeds">
+          <label class="fld">Semilla desde<input type="number" id="s0" value="1" min="0"></label>
+          <label class="fld">Semilla hasta<input type="number" id="s1" value="8" min="0"></label>
+        </div>
+        <div class="gtfs-box">
+          <div class="lbl">Horarios</div>
+          <div class="sched-opts" id="schedOpts">
+            <label class="sched-opt"><input type="radio" name="sched" value="saved" checked><span><b>GTFS guardado</b><small id="gtfsSavedInfo">Comprobando…</small></span></label>
+            <label class="sched-opt"><input type="radio" name="sched" value="new"><span><b>GTFS nuevo</b><small>__DL__ Descarga el feed de hoy (Renfe) antes de correr</small></span></label>
+            <label class="sched-opt"><input type="radio" name="sched" value="import"><span><b>Importar horarios <span class="fmt-help" tabindex="0" aria-label="Formato">?<span class="fmt-pop" role="tooltip"><b>Formato: ZIP GTFS estándar</b><br>Debe contener <code>routes.txt</code>, <code>trips.txt</code>, <code>stop_times.txt</code> y <code>stops.txt</code> (CSV con cabecera, como el feed de Renfe/Fomento).<br>Columnas mínimas: <code>route_id, route_short_name</code> · <code>trip_id, route_id, service_id</code> · <code>trip_id, stop_id, stop_sequence, arrival_time, departure_time</code> (HH:MM:SS, admite &gt;24h) · <code>stop_id, stop_name, stop_lat, stop_lon</code>.<br>Se conservan las líneas cuyo <code>route_short_name</code> empieza por <b>R</b>.</span></span></b><small>Sube un .zip propio antes de correr</small></span></label>
+          </div>
+          <label class="file-pick" id="numFileWrap" hidden><input type="file" id="numGtfsFile" accept=".zip"><span id="numFileName">Elegir fichero .zip…</span></label>
+          <div id="numGtfsStatus" class="sub" style="margin:6px 0 0"></div>
+        </div>
+        <div class="tpl-title">Incidencias en juego <span class="sub" style="text-transform:none;letter-spacing:0;font-weight:400">· plantillas del apartado <a href="/incidencias">Incidencias</a>; esta selección es solo de este modo</span></div>
+        <label class="all-toggle"><input type="checkbox" id="selAll"><span>Todas / ninguna</span></label>
+        <ul class="num-tpls" id="numTpls"><li class="empty">Cargando plantillas…</li></ul>
+      </aside>
+
+      <section class="card num-main">
+        <div class="res-bar">
+          <button class="btn" id="runBtn">__PLAY__ Ejecutar runs</button>
+          <span id="prog"></span>
+          <div class="dl-menu">
+            <button class="btn ghost" id="dlBtn" disabled aria-haspopup="true" aria-expanded="false">__DL__ Descargar resultados ▾</button>
+            <div class="dl-pop" id="dlPop" hidden>
+              <div class="dl-grp">Sin horarios</div>
+              <button data-fmt="xlsx" data-h="0">Excel (.xlsx)</button>
+              <button data-fmt="pdf" data-h="0">PDF</button>
+              <div class="dl-grp">Con los horarios usados</div>
+              <button data-fmt="xlsx" data-h="1">Excel + horarios</button>
+              <button data-fmt="pdf" data-h="1">PDF + horarios</button>
+            </div>
+          </div>
+        </div>
+        <div id="numLoad" class="rod-load rod-band no-steam" hidden>__SCENE__<div class="rod-load-caption">Simulando la jornada<span class="rod-load-dots" aria-hidden="true"><i></i><i></i><i></i></span></div></div>
+        <div class="scroll">
+        <table class="num-tbl" id="tbl">
+          <thead><tr><th>Semilla</th><th>Trenes</th><th>Retraso máx (min)</th><th>Pico retenidos</th><th>Final retenidos</th><th>PAX·min</th><th>Incidencias del día</th></tr></thead>
+          <tbody><tr><td class="muted" colspan="7" style="text-align:center;padding:22px">Pulsa «Ejecutar runs» para empezar.</td></tr></tbody>
+        </table>
+        </div>
+      </section>
+    </div>
   </div>
   <script>
   (function(){
     const $=id=>document.getElementById(id);
     const EFF={red_one:"roja 1 sentido",red_both:"roja 2 sentidos",single:"vía única"};
+    // Plantillas COMPARTIDAS (apartado /incidencias); la SELECCIÓN es independiente por modo
+    // (localStorage "rod-sel-numeros") y se guarda por ID ESTABLE de plantilla (editar una
+    // plantilla no la desmarca; borrar/añadir desde otro sitio no desplaza la selección).
+    let TPLS=[], SEL=null;
+    const SELKEY="rod-sel-numeros";
+    const rateTxt=t=>`${Math.round(t.prob*100)} % cada ${(Math.round(t.every_h*100)/100).toLocaleString("es-ES")} h`;
+    function loadSel(){
+      try{
+        const v=JSON.parse(localStorage.getItem(SELKEY));
+        if(Array.isArray(v)){
+          // Migración: versiones previas guardaban "motivo|efecto|dur|prob" en vez del id.
+          const old=new Set(v.filter(x=>typeof x==="string"&&x.includes("|")));
+          SEL=new Set(v.filter(x=>typeof x==="string"&&!x.includes("|")));
+          TPLS.forEach(t=>{ if(old.has([t.motivo,t.effect,t.dur_min,t.prob].join("|"))) SEL.add(t.id); });
+        }
+      }catch(e){}
+    }
+    function saveSel(){ try{ localStorage.setItem(SELKEY, JSON.stringify([...SEL])); }catch(e){} }
+    async function loadTpls(){
+      try{ TPLS=await (await fetch("/api/incidents/templates")).json(); }catch(e){ TPLS=[]; }
+      loadSel();
+      if(!SEL) SEL=new Set(TPLS.filter(t=>t.enabled).map(t=>t.id)); // 1ª vez: las activas del servidor
+      renderTpls();
+    }
+    function renderTpls(){
+      const ul=$("numTpls"), all=$("selAll");
+      const nOn=TPLS.filter(t=>SEL.has(t.id)).length;
+      all.checked=TPLS.length>0&&nOn===TPLS.length; all.indeterminate=nOn>0&&nOn<TPLS.length; all.disabled=!TPLS.length;
+      if(!TPLS.length){ ul.innerHTML='<li class="empty">Sin plantillas. Créalas en el apartado <a href="/incidencias">Incidencias</a> del menú.</li>'; return; }
+      ul.innerHTML="";
+      TPLS.forEach((t,i)=>{
+        const on=SEL.has(t.id);
+        const li=document.createElement("li"); if(!on) li.className="off";
+        li.innerHTML=`<input type="checkbox" ${on?"checked":""} data-i="${i}"><span><b>${t.motivo||"(sin motivo)"}</b><small>${EFF[t.effect]||t.effect} · ${t.dur_min} min · ${rateTxt(t)}</small></span>`;
+        ul.appendChild(li);
+      });
+      ul.querySelectorAll("input").forEach(c=>c.onchange=()=>{
+        const id=TPLS[+c.dataset.i].id;
+        if(c.checked) SEL.add(id); else SEL.delete(id);
+        saveSel(); renderTpls();
+      });
+    }
+    // Casilla maestra: marcar todas / ninguna de golpe.
+    $("selAll").onchange=()=>{ SEL=$("selAll").checked?new Set(TPLS.map(t=>t.id)):new Set(); saveSel(); renderTpls(); };
+    loadTpls();
+
+    // Selector de horarios (igual que el visual): guardado (con su fecha) / nuevo / importar.
+    async function infoGtfs(){
+      try{
+        const j=await (await fetch("/api/gtfs/info")).json();
+        const p=(j.date||"").split("-");
+        $("gtfsSavedInfo").textContent=(j.date?`Del ${p[2]}/${p[1]}/${p[0]}`:"Fecha desconocida")+` · ${j.n_lines} líneas · ${j.n_trips.toLocaleString("es-ES")} viajes (por defecto)`;
+      }catch(e){ $("gtfsSavedInfo").textContent="El que está cargado ahora (por defecto)"; }
+    }
+    infoGtfs();
+    const schedMode=()=>(document.querySelector('input[name="sched"]:checked')||{}).value||"saved";
+    $("schedOpts").onchange=()=>{ $("numFileWrap").hidden=schedMode()!=="import"; $("numGtfsStatus").textContent=""; };
+    $("numGtfsFile").onchange=()=>{ const f=$("numGtfsFile").files[0]; $("numFileName").textContent=f?f.name:"Elegir fichero .zip…"; };
+    // Arranca la descarga/importación en el servidor y espera a que acabe (true = OK).
+    async function jobGtfs(start){
+      const st=$("numGtfsStatus"); let r;
+      try{ r=await (await start()).json(); }catch(e){ r={started:false,reason:String(e)}; }
+      if(!r.started){ st.textContent=r.reason||"No se pudo iniciar."; return false; }
+      for(;;){
+        await new Promise(res=>setTimeout(res,900));
+        let j; try{ j=await (await fetch("/api/gtfs/status")).json(); }catch(e){ j={}; }
+        if(j.error){ st.textContent="Error: "+j.error; return false; }
+        st.textContent=j.step||"Trabajando…";
+        if(j.done){ st.textContent="GTFS actualizado."; await infoGtfs(); document.querySelector('input[name="sched"][value="saved"]').checked=true; $("numFileWrap").hidden=true; return true; }
+      }
+    }
+
     $("runBtn").onclick=async()=>{
       const a=+$("s0").value||0, b=+$("s1").value||0;
-      const tb=$("tbl").querySelector("tbody"); tb.innerHTML="";
+      const mode=schedMode();
       $("runBtn").disabled=true;
+      if(mode==="new"){
+        $("prog").textContent="Descargando el GTFS de hoy…";
+        if(!(await jobGtfs(()=>fetch("/api/gtfs/update")))){ $("prog").textContent=""; $("runBtn").disabled=false; return; }
+      }else if(mode==="import"){
+        const f=$("numGtfsFile").files[0];
+        if(!f){ $("numGtfsStatus").textContent="Elige el fichero .zip a importar."; $("runBtn").disabled=false; return; }
+        $("prog").textContent="Importando "+f.name+"…";
+        if(!(await jobGtfs(()=>fetch("/api/gtfs/upload",{method:"POST",body:f})))){ $("prog").textContent=""; $("runBtn").disabled=false; return; }
+      }
+      const tb=$("tbl").querySelector("tbody"); tb.innerHTML="";
+      const nl=$("numLoad"); if(nl) nl.hidden=false;
+      const chosen=TPLS.filter(t=>SEL.has(t.id));
+      const selQ = "&sel="+chosen.map(t=>encodeURIComponent(t.id)).join(",");
+      // Resultados de ESTA tanda (para exportar): runs + plantillas en juego + rango de semillas.
+      LAST={runs:[],templates:chosen.map(t=>({motivo:t.motivo,effect:t.effect,dur_min:t.dur_min,prob:t.prob,every_h:t.every_h})),a,b};
+      $("dlBtn").disabled=true;
       for(let s=a;s<=b;s++){
         $("prog").textContent="Ejecutando semilla "+s+"…";
         try{
-          const r=await (await fetch("/api/simulate?seed="+s)).json();
+          const r=await (await fetch("/api/simulate?seed="+s+selQ)).json();
+          LAST.runs.push(r);
           const esc=x=>String(x).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
-          // Log de incidencias: DÓNDE (nombres de estación) y CUÁNDO (HH:MM–HH:MM), una por línea.
           const inc=(r.incidents||[]).length
             ? (r.incidents).map(i=>`<div class="inc-line"><b>${esc(i.motivo)}</b> <span class="eff">${EFF[i.effect]||i.effect}</span><br><span class="where">${esc(i.from_name||i.from)} → ${esc(i.to_name||i.to)}</span> · <span class="when">${i.t0_hm||Math.floor(i.t0/3600)+"h"}–${i.t1_hm||""}</span></div>`).join("")
             : '<span class="muted">— sin incidencias hoy</span>';
@@ -1055,10 +1508,208 @@ pub fn render_numbers_page() -> String {
         }
       }
       $("prog").textContent="Hecho.";
+      if(nl) nl.hidden=true;
       $("runBtn").disabled=false;
+      $("dlBtn").disabled=!LAST.runs.length;
     };
+
+    // ── Descargar resultados (Excel / PDF, con o sin los horarios usados) ──
+    let LAST=null;
+    const pop=$("dlPop");
+    const closePop=()=>{ pop.hidden=true; $("dlBtn").setAttribute("aria-expanded","false"); };
+    $("dlBtn").onclick=e=>{ e.stopPropagation(); pop.hidden=!pop.hidden; $("dlBtn").setAttribute("aria-expanded",String(!pop.hidden)); };
+    document.addEventListener("click",e=>{ if(!pop.hidden&&!pop.contains(e.target)) closePop(); });
+    document.addEventListener("keydown",e=>{ if(e.key==="Escape") closePop(); });
+    pop.querySelectorAll("button").forEach(btn=>btn.onclick=async()=>{
+      closePop();
+      if(!LAST||!LAST.runs.length) return;
+      const fmt=btn.dataset.fmt, hor=btn.dataset.h==="1";
+      $("prog").textContent="Generando "+(fmt==="pdf"?"PDF":"Excel")+(hor?" con horarios":"")+"…";
+      $("dlBtn").disabled=true;
+      try{
+        const res=await fetch(`/api/runs/export?fmt=${fmt}&horarios=${hor?1:0}`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({runs:LAST.runs,templates:LAST.templates})});
+        if(!res.ok) throw new Error(await res.text());
+        const blob=await res.blob(), url=URL.createObjectURL(blob);
+        const a=document.createElement("a");
+        a.href=url; a.download=`rodalies_runs_semillas_${LAST.a}-${LAST.b}${hor?"_con_horarios":""}.${fmt}`;
+        document.body.appendChild(a); a.click(); a.remove();
+        setTimeout(()=>URL.revokeObjectURL(url),4000);
+        $("prog").textContent="Descargado.";
+      }catch(e){ $("prog").textContent="No se pudo generar el fichero: "+e.message; }
+      finally{ $("dlBtn").disabled=false; }
+    });
   })();
   </script>"##;
+    // Incrusta la escena del tren pixel y los iconos SVG (play / descarga).
+    let body = body
+        .replace("__SCENE__", TRAIN_SCENE)
+        .replace("__PLAY__", icon("play"))
+        .replace("__DL__", icon("download"));
+    document(&head, &body)
+}
+
+/// Página del CREADOR DE INCIDENCIAS (apartado propio del menú): crear, editar y borrar las
+/// plantillas compartidas por el modo visual y `/numeros`. Cada plantilla = motivo + efecto +
+/// duración + **probabilidad cada X horas** (el motor trocea la jornada en secciones de X h y tira
+/// los dados en cada una). La SELECCIÓN de qué plantillas entran se hace en cada modo, no aquí.
+pub fn render_incidents_page() -> String {
+    let head = format!("<title>Rodalies Simulator · Incidencias</title>\n{STYLE}");
+    let body = r##"<style>
+.menu-wrap{max-width:1180px}
+.inc-layout{display:grid;grid-template-columns:360px minmax(0,1fr);gap:20px;align-items:start;margin-top:14px}
+@media(max-width:860px){.inc-layout{grid-template-columns:1fr}}
+.inc-form h2{margin:0 0 4px}
+.inc-form .sub{margin:0 0 14px}
+.fld{display:flex;flex-direction:column;gap:4px;font-size:.74rem;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--muted);margin-bottom:12px;min-width:0}
+.fld input,.fld select{width:100%;min-width:0;height:38px;background:var(--panel2);border:1px solid var(--border);border-radius:7px;padding:0 10px;color:var(--text);font:inherit;font-weight:400;text-transform:none;letter-spacing:0}
+.fld-row{display:flex;gap:10px;align-items:flex-end}
+.sub a{color:var(--accent)}
+.fld-row .fld{flex:1}
+.rate-box{background:var(--accent-soft);border:1px solid var(--border);border-left:3px solid var(--accent);border-radius:8px;padding:10px 12px;font-size:.84rem;margin:2px 0 14px;line-height:1.45}
+.rate-box b{color:var(--text)}
+.form-btns{display:flex;gap:8px}
+.form-btns .btn{flex:1;display:inline-flex;align-items:center;justify-content:center;gap:7px;border-radius:8px}
+.btn.ghost{background:var(--panel2);color:var(--text);border:1px solid var(--border)}
+.btn.ghost:hover{border-color:var(--accent)}
+.inc-form.editing{border-color:var(--accent);box-shadow:0 0 0 2px var(--accent-soft)}
+.tpl-cards{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:8px}
+.tpl-card{display:grid;grid-template-columns:1fr auto;gap:10px;align-items:center;background:var(--panel);border:1px solid var(--border);border-left:4px solid var(--accent);border-radius:9px;padding:11px 14px}
+.tpl-card.sel{box-shadow:0 0 0 2px var(--accent-soft);border-color:var(--accent)}
+.tpl-card b{font-size:.98rem}
+.tpl-card .meta{color:var(--muted);font-size:.8rem;margin-top:2px}
+.tpl-card .rate{font-variant-numeric:tabular-nums}
+.tpl-card .acts{display:flex;gap:6px}
+.icon-act{border:1px solid var(--border);background:var(--panel2);color:var(--text);border-radius:7px;padding:6px 11px;font:inherit;font-size:.8rem;font-weight:600;cursor:pointer}
+.icon-act:hover{border-color:var(--accent);color:var(--accent)}
+.icon-act.del:hover{border-color:var(--late);color:var(--late)}
+.list-head{display:flex;align-items:baseline;justify-content:space-between;gap:10px;margin-bottom:10px}
+.empty-list{color:var(--muted);font-style:italic;padding:18px;text-align:center;border:1px dashed var(--border);border-radius:9px}
+#saveMsg{min-height:1.2em;font-size:.8rem;color:var(--muted);margin-top:8px}
+</style>
+<div class="menu-wrap">
+  <div class="panel-bar"><a class="back-link" href="/">← Menú</a></div>
+  <div class="menu-top"><div class="menu-brand"><img class="logo" src="/game/lines/r_logo.png" alt="Rodalies" width="46" height="46"><div>
+    <h1>Incidencias · creador de plantillas</h1>
+    <div class="sub">Plantillas compartidas por el <a href="/game">modo visual</a> y <a href="/numeros">Varias runs</a>. Cada modo elige después cuáles entran en juego.</div>
+  </div></div></div>
+
+  <div class="inc-layout">
+    <aside class="card inc-form" id="tplForm">
+      <h2 id="formTitle">Nueva plantilla</h2>
+      <p class="sub">La jornada se trocea en secciones de <b>X horas</b> y en cada una se tiran los dados con tu probabilidad: la misma incidencia puede ocurrir varias veces en un día.</p>
+      <label class="fld">Motivo<input id="fMotivo" type="text" placeholder="p. ej. Avería de puertas"></label>
+      <label class="fld">Efecto<select id="fEffect">
+        <option value="red_one">Señal roja (1 sentido)</option>
+        <option value="red_both">Señal roja (2 sentidos)</option>
+        <option value="single">Tramo → vía única</option>
+      </select></label>
+      <div class="fld-row">
+        <label class="fld">Duración (min)<input id="fDur" type="number" min="1" value="15"></label>
+        <label class="fld">Probabilidad (%)<input id="fProb" type="number" min="0" max="100" step="1" value="20"></label>
+        <label class="fld">Cada (horas)<input id="fEvery" type="number" min="0.25" step="0.25" value="4"></label>
+      </div>
+      <div class="rate-box" id="rateBox"></div>
+      <div class="form-btns">
+        <button class="btn" id="fSave">+ Añadir plantilla</button>
+        <button class="btn ghost" id="fCancel" hidden>Cancelar</button>
+      </div>
+      <div id="saveMsg"></div>
+    </aside>
+
+    <section class="card">
+      <div class="list-head"><h2 style="margin:0">Plantillas guardadas</h2><span class="sub" id="dayInfo"></span></div>
+      <ul class="tpl-cards" id="tplCards"><li class="empty-list">Cargando…</li></ul>
+    </section>
+  </div>
+</div>
+<script>
+(function(){
+  const $=id=>document.getElementById(id);
+  const EFF={red_one:"Señal roja (1 sentido)",red_both:"Señal roja (2 sentidos)",single:"Tramo → vía única"};
+  const esc=x=>String(x).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");
+  let TPLS=[], editId=null, dayH=19;   // duración de la jornada (h): de la 1ª salida a las 24:00
+  const hFmt=h=>(Math.round(h*100)/100).toLocaleString("es-ES");
+  // Nº de secciones y esperanza de incidencias/día con la MISMA regla que el motor
+  // (engine::n_sections): nº entero de secciones iguales más cercano a jornada/X, mínimo 1.
+  function rate(prob, every){
+    const X=Math.max(0.25, every||24), n=Math.max(1, Math.round(dayH/X));
+    return { n, esperadas: prob * n };
+  }
+  function rateTxt(t){ return `${Math.round(t.prob*100)} % cada ${hFmt(t.every_h)} h`; }
+  function paintRate(){
+    const p=Math.min(100,Math.max(0,+$("fProb").value||0))/100, X=Math.max(0.25,+$("fEvery").value||24);
+    const r=rate(p,X);
+    $("rateBox").innerHTML=`En una jornada de <b>${hFmt(dayH)} h</b>: <b>${r.n}</b> tirada${r.n===1?"":"s"} de dados (secciones iguales de ${hFmt(dayH/r.n)} h) → de media <b>${r.esperadas.toLocaleString("es-ES",{maximumFractionDigits:2})}</b> incidencia${r.esperadas===1?"":"s"} al día.`;
+  }
+  ["fProb","fEvery"].forEach(id=>$(id).addEventListener("input",paintRate));
+
+  async function load(){
+    try{
+      const g=await (await fetch("/api/gtfs/info")).json();
+      if(g.first_dep!=null){ dayH=(86400-g.first_dep)/3600; const h=Math.floor(g.first_dep/3600), m=Math.floor(g.first_dep%3600/60);
+        $("dayInfo").textContent=`Jornada ${String(h).padStart(2,"0")}:${String(m).padStart(2,"0")} → 24:00 (${hFmt(dayH)} h)`; }
+    }catch(e){}
+    try{ TPLS=await (await fetch("/api/incidents/templates")).json(); }catch(e){ TPLS=[]; }
+    render(); paintRate();
+  }
+  async function save(msg){
+    try{
+      const r=await (await fetch("/api/incidents/templates",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(TPLS)})).json();
+      if(r.templates) TPLS=r.templates;   // ids definitivos asignados por el servidor
+      $("saveMsg").textContent=r.ok?msg:"No se pudo guardar.";
+    }catch(e){ $("saveMsg").textContent="No se pudo guardar."; }
+    render();
+  }
+  function render(){
+    const ul=$("tplCards");
+    if(!TPLS.length){ ul.innerHTML='<li class="empty-list">Sin plantillas. Crea la primera a la izquierda.</li>'; return; }
+    ul.innerHTML=TPLS.map(t=>{
+      const r=rate(t.prob,t.every_h);
+      return `<li class="tpl-card${t.id===editId?" sel":""}"><div><b>${esc(t.motivo||"(sin motivo)")}</b>
+        <div class="meta">${EFF[t.effect]||t.effect} · ${t.dur_min} min · <span class="rate">${rateTxt(t)}</span> · ≈ ${r.esperadas.toLocaleString("es-ES",{maximumFractionDigits:2})}/día</div></div>
+        <div class="acts"><button class="icon-act" data-edit="${esc(t.id)}">Editar</button><button class="icon-act del" data-del="${esc(t.id)}">Eliminar</button></div></li>`;
+    }).join("");
+    ul.querySelectorAll("[data-edit]").forEach(b=>b.onclick=()=>startEdit(b.dataset.edit));
+    ul.querySelectorAll("[data-del]").forEach(b=>b.onclick=()=>{
+      const t=TPLS.find(x=>x.id===b.dataset.del); if(!t) return;
+      if(!confirm(`¿Eliminar la plantilla «${t.motivo}»? Se quita para los dos modos.`)) return;
+      TPLS=TPLS.filter(x=>x.id!==t.id); if(editId===t.id) resetForm();
+      save("Plantilla eliminada.");
+    });
+  }
+  function startEdit(id){
+    const t=TPLS.find(x=>x.id===id); if(!t) return;
+    editId=id;
+    $("fMotivo").value=t.motivo; $("fEffect").value=t.effect; $("fDur").value=t.dur_min;
+    $("fProb").value=Math.round(t.prob*1000)/10; $("fEvery").value=t.every_h;
+    $("formTitle").textContent="Editar plantilla"; $("fSave").textContent="Guardar cambios"; $("fCancel").hidden=false;
+    $("tplForm").classList.add("editing"); paintRate(); render(); $("fMotivo").focus();
+  }
+  function resetForm(){
+    editId=null; $("fMotivo").value=""; $("fEffect").value="red_one"; $("fDur").value=15; $("fProb").value=20; $("fEvery").value=4; paintRate();
+    $("formTitle").textContent="Nueva plantilla"; $("fSave").textContent="+ Añadir plantilla"; $("fCancel").hidden=true;
+    $("tplForm").classList.remove("editing"); render();
+  }
+  $("fCancel").onclick=resetForm;
+  $("fSave").onclick=()=>{
+    const v={
+      motivo:($("fMotivo").value||"").trim()||"Incidencia",
+      effect:$("fEffect").value,
+      dur_min:Math.max(1,+$("fDur").value||15),
+      prob:Math.min(1,Math.max(0,(+$("fProb").value||0)/100)),
+      every_h:Math.max(0.25,+$("fEvery").value||24),
+    };
+    if(editId){
+      const t=TPLS.find(x=>x.id===editId); if(t) Object.assign(t,v);
+      resetForm(); save("Cambios guardados.");
+    }else{
+      TPLS.push({id:"",enabled:true,...v}); $("fMotivo").value="";
+      save("Plantilla añadida.");
+    }
+  };
+  load();
+})();
+</script>"##;
     document(&head, body)
 }
 
@@ -1086,16 +1737,9 @@ pub fn render_interactive_page(
              <svg viewBox=\"0 0 24 24\" width=\"20\" height=\"20\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><circle cx=\"12\" cy=\"12\" r=\"3\"/><path d=\"M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z\"/></svg>\
            </button>\
          </div>\n  {HEADER}\n  \
-         <div class=\"tabs\">\
-           <button class=\"tab active\" data-pane=\"pane-sim\">Simulador · Optimizador</button>\
-           <button class=\"tab\" data-pane=\"pane-calc\">Calculador de tiempo mínimo</button>\
-           <button class=\"tab\" data-pane=\"pane-game\">Simulador de red (juego)</button>\
-         </div>\n  \
          <div id=\"pane-sim\" class=\"tabpane active\">\n  {ctrls}\n  {optp}\n  <div id=\"dashboard\">\n{body}\n  </div>\n  </div>\n  \
-         <div id=\"pane-calc\" class=\"tabpane\">\n  {calc_panel}\n  </div>\n  \
-         <div id=\"pane-game\" class=\"tabpane\">\n  {game_panel}\n  </div>\n\
-         </div>\n  {modal}\n{SCRIPT}\n{OPT_SCRIPT}\n{TAB_SCRIPT}\n{CALC_SCRIPT}\n{CALC2_SCRIPT}\n{SETTINGS_SCRIPT}\n{HASH_TAB_SCRIPT}",
-        game_panel = game_panel(),
+         <div id=\"pane-calc\" class=\"tabpane active\">\n  {calc_panel}\n  </div>\n\
+         </div>\n  {modal}\n{SCRIPT}\n{OPT_SCRIPT}\n{CALC_SCRIPT}\n{CALC2_SCRIPT}\n{SETTINGS_SCRIPT}\n{HASH_TAB_SCRIPT}",
         modal = settings_modal(),
     );
     document(&head, &page)

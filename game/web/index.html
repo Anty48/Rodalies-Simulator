@@ -9,10 +9,113 @@
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Roboto+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@600;700;800&family=Inter:wght@400;500;600;700&family=Roboto+Mono:wght@400;500;700&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="/game/style.css">
 </head>
 <body class="ctc">
+
+<!-- ═══════════════ Overlay de carga · tren pixel ANDANA (només presentació) ═══════════════ -->
+<!-- data-hook: ANDANA pixel-train loader · toggle amb #rodLoad[hidden] o .is-done ·
+     skins: .on-dark (joc, overlay) / .on-light (informes). Sense assets externs. -->
+<div id="rodLoad" class="rod-load on-dark" role="status" aria-live="polite" aria-label="Carregant">
+  <div class="rod-load-scene">
+
+    <div class="rod-train-scene">
+      <!-- Bafarades lúdiques (opcionals: afegeix .no-steam a .rod-load per amagar-les) -->
+      <span class="rod-load-puff"></span>
+      <span class="rod-load-puff"></span>
+      <span class="rod-load-puff"></span>
+
+      <!-- Sprite pixel: unitat tipus Civia/450, cabina esglaonada a la dreta (sentit de marxa) -->
+      <svg class="rod-train" viewBox="0 0 128 44" width="264" height="91"
+           xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Tren de Rodalies">
+
+        <!-- Reflex de sostre -->
+        <g class="rod-train-lift"><rect x="14" y="7" width="86" height="3"/></g>
+
+        <!-- Buc taronja (cos + nas esglaonat = corba pixel) -->
+        <g class="rod-train-hull">
+          <rect x="8"  y="14" width="98" height="14"/>
+          <rect x="12" y="10" width="92" height="4"/>
+          <rect x="6"  y="17" width="2"  height="9"/>
+          <rect x="106" y="12" width="4" height="16"/>
+          <rect x="110" y="14" width="4" height="14"/>
+          <rect x="114" y="17" width="4" height="11"/>
+          <rect x="118" y="21" width="3" height="7"/>
+        </g>
+
+        <!-- Ombra inferior (volum) -->
+        <g class="rod-train-shade">
+          <rect x="8"   y="26" width="98" height="2"/>
+          <rect x="106" y="26" width="4"  height="2"/>
+          <rect x="110" y="26" width="4"  height="2"/>
+        </g>
+
+        <!-- Franja blanca -->
+        <rect class="rod-train-stripe" x="8" y="22" width="98" height="3"/>
+
+        <!-- Finestres, portes i parabrisa (fosc) -->
+        <g class="rod-train-glass">
+          <rect x="14" y="15" width="7" height="6"/>
+          <rect x="24" y="15" width="7" height="6"/>
+          <rect x="34" y="15" width="7" height="6"/>
+          <rect x="44" y="15" width="7" height="10"/><!-- porta -->
+          <rect x="54" y="15" width="7" height="6"/>
+          <rect x="64" y="15" width="7" height="6"/>
+          <rect x="74" y="15" width="7" height="6"/>
+          <rect x="84" y="15" width="7" height="10"/><!-- porta -->
+          <rect x="94" y="15" width="7" height="6"/>
+          <rect x="103" y="14" width="7" height="6"/><!-- parabrisa -->
+          <rect x="110" y="16" width="4" height="4"/>
+        </g>
+
+        <!-- Far davanter -->
+        <rect class="rod-train-lamp" x="116" y="24" width="3" height="3"/>
+
+        <!-- Baix de caixa + bogies -->
+        <g class="rod-train-frame">
+          <rect x="10" y="28" width="98" height="2"/>
+          <rect x="16" y="29" width="30" height="4"/>
+          <rect x="72" y="29" width="34" height="4"/>
+        </g>
+
+        <!-- Rodes (cada <g> gira sol) -->
+        <g class="rod-train-wheel-set">
+          <g class="rod-train-wheel">
+            <circle class="tyre" cx="22" cy="33" r="5"/>
+            <circle class="hub"  cx="22" cy="33" r="1.6"/>
+            <line class="spoke" x1="22" y1="28.5" x2="22" y2="37.5"/>
+            <line class="spoke" x1="17.5" y1="33" x2="26.5" y2="33"/>
+          </g>
+          <g class="rod-train-wheel">
+            <circle class="tyre" cx="40" cy="33" r="5"/>
+            <circle class="hub"  cx="40" cy="33" r="1.6"/>
+            <line class="spoke" x1="40" y1="28.5" x2="40" y2="37.5"/>
+            <line class="spoke" x1="35.5" y1="33" x2="44.5" y2="33"/>
+          </g>
+          <g class="rod-train-wheel">
+            <circle class="tyre" cx="82" cy="33" r="5"/>
+            <circle class="hub"  cx="82" cy="33" r="1.6"/>
+            <line class="spoke" x1="82" y1="28.5" x2="82" y2="37.5"/>
+            <line class="spoke" x1="77.5" y1="33" x2="86.5" y2="33"/>
+          </g>
+          <g class="rod-train-wheel">
+            <circle class="tyre" cx="100" cy="33" r="5"/>
+            <circle class="hub"  cx="100" cy="33" r="1.6"/>
+            <line class="spoke" x1="100" y1="28.5" x2="100" y2="37.5"/>
+            <line class="spoke" x1="95.5" y1="33" x2="104.5" y2="33"/>
+          </g>
+        </g>
+      </svg>
+    </div>
+
+    <!-- Via de traves (es desplaça cap a l'esquerra → tren "avança" a la dreta) -->
+    <div class="rod-load-track" aria-hidden="true"></div>
+  </div>
+
+  <!-- Peu: llegenda (castellà) + tres punts -->
+  <div class="rod-load-caption"><span id="rodLoadTxt">Preparando la red</span> <span class="rod-load-dots" aria-hidden="true"><i></i><i></i><i></i></span></div>
+</div>
 
 <!-- Mapa satélite a pantalla completa (fondo) -->
 <div id="map"></div>
@@ -51,18 +154,8 @@
   </div>
 
   <!-- Derecha: capa de datos + KPI -->
+  <!-- (Los horarios se eligen en la pantalla previa; la barra ya no lleva fuente/filtro/recarga.) -->
   <div class="tb-cluster right glass">
-    <div class="source-switch" title="Horario mostrado">
-      <select id="source" aria-label="Origen del horario">
-        <option value="gtfs">GTFS programado</option>
-        <option value="optimized">Malla optimizada</option>
-      </select>
-      <select id="lineFilter" aria-label="Filtro de línea"><option value="">Todas las líneas</option></select>
-      <button id="reload" class="ghost-btn" title="Recargar horarios">
-        <svg viewBox="0 0 24 24" width="15" height="15"><path d="M4 12a8 8 0 1 1 2.3 5.6M4 20v-4h4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
-      </button>
-    </div>
-    <div class="divider"></div>
     <div class="kpi-wrap">
       <div class="kpi-chip" id="kpiChip">
         <svg class="spark" id="kpiSpark" viewBox="0 0 96 34" preserveAspectRatio="none" aria-hidden="true">
@@ -74,17 +167,13 @@
         </div>
       </div>
       <div class="kpi-formula" role="tooltip">
-        <div class="kf-title">Minutos de retraso acumulados<span class="kf-note">suma de la tardanza de cada llegada tarde a estación, toda la red</span></div>
+        <div class="kf-title">Minutos de retraso acumulados</div>
         <div class="kf-eq">
-          <span class="kf-lhs"><i>M</i></span>
-          <span class="kf-op">=</span>
-          <span class="kf-sum"><span class="kf-sig">Σ</span><span class="kf-lim"><span class="kf-hi">&nbsp;</span><span class="kf-lo"><i>a</i>∈llegadas tarde</span></span></span>
-          <span class="kf-var">δ<sub><i>a</i></sub></span>
+          <math display="block"><mi>M</mi><mo>=</mo><munder><mo movablelimits="false">∑</mo><mrow><mi>a</mi><mo>∈</mo><mi>𝒯</mi></mrow></munder><msub><mi>δ</mi><mi>a</mi></msub></math>
         </div>
         <ul class="kf-legend">
-          <li><span class="kf-k">δ<sub>a</sub></span> retraso de la llegada <i>a</i> (min) = hora real − hora prevista</li>
-          <li><span class="kf-k">llegada tarde</span> δ ≥ 1 min, en cualquier estación y línea</li>
-          <li><span class="kf-k">acumulado</span> a lo largo de la jornada (solo cuenta lo ya ocurrido)</li>
+          <li><math><msub><mi>δ</mi><mi>a</mi></msub></math> retraso de la llegada <i>a</i> = hora real − prevista (min)</li>
+          <li><math><mi>𝒯</mi></math> llegadas a estación con <math><mi>δ</mi><mo>≥</mo><mn>1</mn></math> min, toda la red, ya ocurridas</li>
         </ul>
       </div>
     </div>
@@ -99,17 +188,13 @@
         </div>
       </div>
       <div class="kpi-formula" role="tooltip">
-        <div class="kf-title">Retraso vivo de la red<span class="kf-note">minutos de retraso sumados de TODOS los trenes en circulación en este instante (sube y baja)</span></div>
+        <div class="kf-title">Retraso vivo de la red</div>
         <div class="kf-eq">
-          <span class="kf-lhs"><i>D</i>(<i>t</i>)</span>
-          <span class="kf-op">=</span>
-          <span class="kf-sum"><span class="kf-sig">Σ</span><span class="kf-lim"><span class="kf-hi">&nbsp;</span><span class="kf-lo"><i>i</i>∈trenes en marcha</span></span></span>
-          <span class="kf-var">d<sub><i>i</i></sub>(<i>t</i>)</span>
+          <math display="block"><mi>D</mi><mo stretchy="false">(</mo><mi>t</mi><mo stretchy="false">)</mo><mo>=</mo><munder><mo movablelimits="false">∑</mo><mrow><mi>i</mi><mo>∈</mo><mi>𝒜</mi><mo stretchy="false">(</mo><mi>t</mi><mo stretchy="false">)</mo></mrow></munder><msub><mi>d</mi><mi>i</mi></msub><mo stretchy="false">(</mo><mi>t</mi><mo stretchy="false">)</mo></math>
         </div>
         <ul class="kf-legend">
-          <li><span class="kf-k">d<sub>i</sub>(t)</span> retraso ACTUAL del tren <i>i</i> (min) respecto a su horario</li>
-          <li><span class="kf-k">instantáneo</span> se recalcula cada fotograma → sube y baja</li>
-          <li><span class="kf-k">acumulado ≠ vivo</span> el de al lado suma toda la jornada; este es la foto de ahora</li>
+          <li><math><msub><mi>d</mi><mi>i</mi></msub><mo stretchy="false">(</mo><mi>t</mi><mo stretchy="false">)</mo></math> retraso actual del tren <i>i</i> respecto a su horario (min)</li>
+          <li><math><mi>𝒜</mi><mo stretchy="false">(</mo><mi>t</mi><mo stretchy="false">)</mo></math> trenes en circulación ahora · foto instantánea: sube y baja</li>
         </ul>
       </div>
     </div>
@@ -135,47 +220,39 @@
   <div class="sp-body">
 
     <section class="card">
-      <div class="card-title">
-        <span class="dot morado"></span> Estado de la red
+      <div class="card-title"><span class="dot naranja"></span> Capas del mapa</div>
+      <div class="big-switches">
+        <label class="switch big">
+          <input type="checkbox" id="showSignals" checked>
+          <span class="track"></span>
+          <span class="switch-txt"><b>Semáforos de tramo</b><small>Visibles al acercar el zoom</small></span>
+        </label>
+        <label class="switch big">
+          <input type="checkbox" id="showVmax">
+          <span class="track"></span>
+          <span class="switch-txt"><b>Mapa por velocidad máxima</b><small>Vía coloreada por Vmax · LTV resaltadas</small></span>
+        </label>
       </div>
-      <div class="net-info" id="netInfo">Cargando la red desde el GTFS…</div>
-    </section>
-
-    <section class="card">
-      <div class="card-title">
-        <span class="dot naranja"></span> Líneas
-        <button class="pill-btn" id="legendReset" hidden>Ver todas</button>
-      </div>
-      <div class="legend" id="legend"></div>
-      <label class="switch">
-        <input type="checkbox" id="showSignals" checked>
-        <span class="track"></span>
-        <span class="switch-lbl">Semáforos de tramo (al acercar)</span>
-      </label>
-      <label class="switch">
-        <input type="checkbox" id="showVmax">
-        <span class="track"></span>
-        <span class="switch-lbl">Mapa por velocidad máxima (Vmax)</span>
-      </label>
       <div class="vmax-legend" id="vmaxLegend" hidden></div>
     </section>
 
     <section class="card">
-      <div class="card-title"><span class="dot verde"></span> Malla optimizada</div>
-      <p class="hint">Cambia la capa de datos con el selector <b>GTFS / Malla optimizada</b> de la barra superior. La vista optimizada carga los horarios recalculados por el optimizador (recocido simulado) del backend.</p>
+      <div class="card-title">
+        <span class="dot naranja"></span> Líneas <span class="ct-note">retraso vivo</span>
+        <button class="pill-btn" id="legendReset" hidden>Ver todas</button>
+      </div>
+      <div class="legend lines-list" id="legend"></div>
+      <p class="hint mini">Clic en una línea para aislarla en el mapa.</p>
     </section>
 
     <section class="card">
-      <div class="card-title"><span class="dot"></span> Actualizar GTFS</div>
-      <div class="hint" id="gtfsStatus">Fuente: <a href="https://data.renfe.com/dataset/horarios-cercanias" target="_blank" rel="noopener">data.renfe.com</a></div>
-      <button id="gtfsUpdate" class="btn block">Descargar feed de hoy</button>
-      <div class="upload">
-        <label class="file-label">
-          <input type="file" id="gtfsFile" accept=".zip">
-          <span>Elegir .zip manual…</span>
-        </label>
-        <button id="gtfsUpload" class="btn ghost block">Subir GTFS</button>
-      </div>
+      <div class="card-title"><span class="dot rojo"></span> Retraso de la red <span class="ct-note" id="tlNow"></span></div>
+      <div class="delay-chart" id="delayChart"><div class="muted">Se dibuja al generar el día.</div></div>
+    </section>
+
+    <section class="card subtle">
+      <div class="card-title"><span class="dot morado"></span> Estado de la red</div>
+      <div class="net-info" id="netInfo">Cargando la red desde el GTFS…</div>
     </section>
 
     <section class="card subtle">
@@ -212,7 +289,7 @@
         <datalist id="tramoList"></datalist>
       </div>
       <div class="btn-row">
-        <button id="liveLaunch" class="btn danger block">▶ Lanzar ahora</button>
+        <button id="liveLaunch" class="btn danger block"><span class="ic"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 4.5v15a.6.6 0 0 0 .92.5l12-7.5a.6.6 0 0 0 0-1L7.92 4a.6.6 0 0 0-.92.5Z"/></svg></span> Lanzar ahora</button>
       </div>
       <div class="hint mini" id="liveStatus"></div>
     </section>
@@ -229,6 +306,7 @@
 <!-- ═══════════════ HUD de estación (modal flotante) ═══════════════ -->
 <section class="hud glass" id="stationBox" hidden>
   <div class="hud-head">
+    <span class="hud-ic" aria-hidden="true"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="2.5" width="14" height="15.5" rx="3.5"/><path d="M5 11h14"/><path d="M8.5 6.5h7"/><circle cx="9" cy="14.5" r="1"/><circle cx="15" cy="14.5" r="1"/><line x1="8" y1="18" x2="6" y2="21.5"/><line x1="16" y1="18" x2="18" y2="21.5"/></svg></span>
     <div class="hud-title">
       <span class="hud-tag">ENCLAVAMIENTO</span>
       <h2 id="stName">Estación</h2>
@@ -238,11 +316,12 @@
   <div class="hud-meta" id="stMeta"></div>
   <div class="hud-next" id="stNext"></div>
   <div class="hud-scroll">
-    <div id="stTracks" class="tracks"></div>
     <details id="stNextWrap" class="next-wrap" open>
       <summary>Próximos trenes <span class="hint mini">(por horario)</span></summary>
       <div id="stNextList" class="next-list"></div>
     </details>
+    <div class="hud-sec">Vías y semáforos de salida</div>
+    <div id="stTracks" class="tracks"></div>
     <div id="stDiagrams" class="diagrams"></div>
   </div>
 </section>
@@ -250,6 +329,7 @@
 <!-- ═══════════════ HUD de semáforo de tramo (mismo dock derecho) ═══════════════ -->
 <section class="hud glass" id="signalBox" hidden>
   <div class="hud-head">
+    <span class="hud-ic" aria-hidden="true"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" width="16" height="16" fill="currentColor" style="shape-rendering:crispEdges" role="img" aria-label="Three-aspect signal"><rect x="5" y="1" width="6" height="11"/><rect x="7" y="12" width="2" height="3"/><rect x="4" y="15" width="8" height="1"/><rect x="7" y="2" width="2" height="2" fill="#ff4d4d"/><rect x="7" y="5" width="2" height="2" fill="#ffcb2e"/><rect x="7" y="8" width="2" height="2" fill="#2fd36f"/></svg></span>
     <div class="hud-title">
       <span class="hud-tag">SEMÁFORO DE TRAMO</span>
       <h2 id="sigTitle">Tramo</h2>
@@ -310,36 +390,67 @@
 
 <!-- ═══════════════ Pantalla PREVIA: selección de incidencias antes de generar el día ═══════════════ -->
 <div class="preday" id="preDay">
-  <div class="preday-inner glass">
-    <img class="findia-renfe" src="/game/lines/renfe_logo.png" alt="Renfe">
-    <h2>Antes de empezar la jornada</h2>
-    <p class="hint">Elige la <b>semilla</b> del día. Si quieres, define incidencias probabilísticas abajo (se guardan). Para ir rápido, pulsa <b>Confirmar</b> sin tocar nada.</p>
-    <div class="field" style="max-width:220px;margin:0 auto 10px">
-      <label>Semilla del día</label>
-      <input id="preSeed" type="number" min="0" value="0">
-    </div>
-    <section class="card preday-creator">
-      <div class="card-title"><span class="dot rojo"></span> Creador de incidencias (probabilístico)</div>
-      <p class="hint mini">Plantillas con <b>probabilidad diaria</b>. Antes del día el motor "tira los dados": las ubica (nudos/Barcelona, estaciones grandes, tramos frecuentados, terminales) y las fecha (más en hora punta).</p>
-      <div class="field"><label>Motivo</label><input id="tplMotivo" type="text" placeholder="p. ej. Avería de puertas"></div>
-      <div class="field-row">
-        <div class="field"><label>Efecto</label><select id="tplEffect">
-          <option value="red_one">Señal roja (1 sentido)</option>
-          <option value="red_both">Señal roja (2 sentidos)</option>
-          <option value="single">Tramo → vía única</option>
-        </select></div>
-        <div class="field"><label>Duración (min)</label><input id="tplDur" type="number" min="1" value="15"></div>
+  <div class="preday-page">
+    <header class="preday-head">
+      <div>
+        <div class="preday-kicker"><span class="ic" aria-hidden="true"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="2.5" width="14" height="15.5" rx="3.5"/><path d="M5 11h14"/><path d="M8.5 6.5h7"/><circle cx="9" cy="14.5" r="1"/><circle cx="15" cy="14.5" r="1"/><line x1="8" y1="18" x2="6" y2="21.5"/><line x1="16" y1="18" x2="18" y2="21.5"/></svg></span> Planificación de la jornada</div>
+        <h2>Antes de empezar la jornada</h2>
+        <p class="hint">Elige incidencias, semilla, horarios y desde qué hora quieres verla. Para ir rápido, pulsa <b>Confirmar</b> sin tocar nada.</p>
       </div>
-      <div class="field-row">
-        <div class="field"><label>Prob. diaria (%)</label><input id="tplProb" type="number" min="0" max="100" value="30"></div>
-        <div class="field end"><button id="tplAdd" class="btn block">+ Añadir plantilla</button></div>
+      <img class="preday-renfe" src="/game/lines/renfe_logo.png" alt="Renfe">
+    </header>
+
+    <div class="preday-grid">
+      <!-- Columna izquierda: incidencias probabilísticas -->
+      <section class="card preday-col">
+        <div class="card-title"><span class="dot rojo"></span> Incidencias del día <span class="ct-note">probabilísticas</span></div>
+        <p class="hint mini">Marca las que entran en juego en <b>esta</b> jornada (la selección del modo visual es independiente de la de <i>Varias runs</i>; las plantillas son compartidas). Antes del día el motor trocea la jornada en secciones de <b>X horas</b> y tira los dados en cada una: las ubica (nudos/Barcelona, estaciones grandes, tramos frecuentados, terminales) y las fecha (más en hora punta).</p>
+        <label class="all-toggle"><input type="checkbox" id="tplAll"><span>Todas / ninguna</span></label>
+        <ul class="inc tpl-list" id="tplList"><li class="empty">Cargando plantillas…</li></ul>
+        <a class="btn ghost block tpl-manage" href="/incidencias">Crear o editar plantillas (menú · Incidencias) →</a>
+      </section>
+
+      <!-- Columna derecha: semilla, arranque, horarios y confirmar -->
+      <div class="preday-col">
+        <section class="card">
+          <div class="card-title"><span class="dot naranja"></span> Jornada</div>
+          <div class="field-row">
+            <div class="field"><label for="preSeed">Semilla del día</label><input id="preSeed" type="number" min="0" value="0"></div>
+            <div class="field"><label for="preStart">Empezar a ver desde</label><input id="preStart" type="time" value="05:00" step="60"></div>
+          </div>
+          <p class="hint mini">La jornada se simula entera de golpe (es una grabación del motor); la hora solo decide desde dónde empieza la reproducción.</p>
+        </section>
+
+        <section class="card">
+          <div class="card-title"><span class="dot morado"></span> Horarios</div>
+          <div class="sched-opts" id="schedOpts" role="radiogroup" aria-label="Origen de los horarios">
+            <label class="sched-opt"><input type="radio" name="sched" value="saved" checked>
+              <span><b>GTFS guardado</b><small id="gtfsSavedInfo">Comprobando…</small></span></label>
+            <label class="sched-opt"><input type="radio" name="sched" value="new">
+              <span><b>GTFS nuevo</b><small>Descarga el feed de hoy de <a href="https://data.renfe.com/dataset/horarios-cercanias" target="_blank" rel="noopener">data.renfe.com</a> al confirmar</small></span></label>
+            <label class="sched-opt"><input type="radio" name="sched" value="import">
+              <span><b>Importar horarios
+                <span class="fmt-help" tabindex="0" aria-label="Formato">?
+                  <span class="fmt-pop" role="tooltip"><b>Formato: ZIP GTFS estándar</b><br>
+                    Debe contener <code>routes.txt</code>, <code>trips.txt</code>, <code>stop_times.txt</code> y <code>stops.txt</code> (CSV con cabecera, como el feed de Renfe/Fomento).<br>
+                    Columnas mínimas: <code>route_id, route_short_name</code> · <code>trip_id, route_id, service_id</code> · <code>trip_id, stop_id, stop_sequence, arrival_time, departure_time</code> (HH:MM:SS, admite &gt;24h) · <code>stop_id, stop_name, stop_lat, stop_lon</code>.<br>
+                    Se conservan las líneas cuyo <code>route_short_name</code> empieza por <b>R</b>.</span>
+                </span></b>
+                <small>Sube un .zip propio al confirmar</small></span></label>
+          </div>
+          <label class="file-label" id="gtfsFileWrap" hidden>
+            <input type="file" id="gtfsFile" accept=".zip">
+            <span id="gtfsFileName">Elegir fichero .zip…</span>
+          </label>
+          <div class="hint mini" id="gtfsStatus"></div>
+        </section>
+
+        <div class="btn-row">
+          <button id="preConfirm" class="btn block big"><span class="ic"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 4.5v15a.6.6 0 0 0 .92.5l12-7.5a.6.6 0 0 0 0-1L7.92 4a.6.6 0 0 0-.92.5Z"/></svg></span> Confirmar y generar el día</button>
+        </div>
+        <div class="hint mini" id="preStatus"></div>
       </div>
-      <ul class="inc" id="tplList"><li class="empty">Cargando plantillas…</li></ul>
-    </section>
-    <div class="btn-row">
-      <button id="preConfirm" class="btn block">▶ Confirmar y generar el día</button>
     </div>
-    <div class="hint mini" id="preStatus"></div>
   </div>
 </div>
 
@@ -348,10 +459,11 @@
   <div class="findia-inner glass">
     <img class="findia-renfe" src="/game/lines/renfe_logo.png" alt="Renfe">
     <div class="findia-badge">00:00</div>
+    <div class="preday-kicker"><span class="ic" aria-hidden="true"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="2.5" width="14" height="15.5" rx="3.5"/><path d="M5 11h14"/><path d="M8.5 6.5h7"/><circle cx="9" cy="14.5" r="1"/><circle cx="15" cy="14.5" r="1"/><line x1="8" y1="18" x2="6" y2="21.5"/><line x1="16" y1="18" x2="18" y2="21.5"/></svg></span> Balance del servicio</div>
     <h2>Fin de la jornada</h2>
     <div id="finStats"></div>
     <div class="btn-row">
-      <button id="finRepetir" class="btn">↻ Repetir el día</button>
+      <button id="finRepetir" class="btn"><span class="ic"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 11.5a8 8 0 1 0-.8 4.5"/><polyline points="20 4 20 11.5 12.5 11.5"/></svg></span> Repetir el día</button>
       <a class="btn ghost" href="/">Menú principal</a>
     </div>
   </div>

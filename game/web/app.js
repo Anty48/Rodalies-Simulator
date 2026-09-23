@@ -18,6 +18,20 @@ const VELOCIDADES = { "PAUSA": 0, "X0.05": 1 / 30, "X0.5": 10 / 30, "X1": 20 / 3
 const PERFIL = [[5, .05], [6, .3], [7, .9], [8, 1], [9, .8], [9.5, .4], [12, .35], [15, .35], [17, .6], [18, .9], [18.5, 1], [19.5, .7], [21, .3], [22.5, .15], [24, .03]];
 const NOMINAL_PAX = 300;   // pasajeros nominales por tren para el KPI (Godot usa la ocupación real por lotes)
 
+// Icono pixel de aparcamiento/depósito (ANDANA). Solo presentación (sustituye al glifo P de depósito).
+const ICON_PARK = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" width="16" height="16" fill="currentColor" style="shape-rendering:crispEdges" role="img" aria-label="Depot / parking"><rect x="4" y="2" width="3" height="12"/><rect x="4" y="2" width="8" height="2"/><rect x="9" y="2" width="3" height="6"/><rect x="4" y="6" width="8" height="2"/></svg>';
+
+// Icono de pausa (ANDANA) para trenes detenidos ante señal. Inline, hereda color del texto.
+const ICON_PAUSE = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="11" height="11" fill="currentColor" style="vertical-align:-1px" aria-hidden="true"><rect x="6" y="5" width="4" height="14" rx="1"/><rect x="14" y="5" width="4" height="14" rx="1"/></svg>';
+
+// Overlay de carga (tren pixel ANDANA). Solo presentación: muestra/oculta #rodLoad.
+function rodLoad(show, txt) {
+  const el = document.getElementById("rodLoad"); if (!el) return;
+  const t = document.getElementById("rodLoadTxt"); if (txt && t) t.textContent = txt;
+  if (show) { el.classList.remove("is-done"); el.hidden = false; }
+  else { el.classList.add("is-done"); setTimeout(function () { el.hidden = true; }, 480); }
+}
+
 // ---- Señalización por BLOQUES FIJOS -------------------------------------------------------
 // Cada cantón (tramo entre dos estaciones) se subdivide en N sub-bloques de vía por DISTANCIA.
 // Cada bloque admite UN solo tren (como en la señalización real de bloque fijo): su señal se
@@ -232,6 +246,15 @@ function trazarViaVmax(a, b, zones, entry) {
     entry.color.push(line);
   }
 }
+// JERARQUÍA DE COLOR en cantones compartidos: qué línea "pinta" un tramo por el que pasan varias
+// (orden fijado por el usuario, 2026-09-22). Las no listadas (R3, R3a…) van detrás, en su orden.
+const LINE_COLOR_PRIORITY = ["R4", "R2", "R2N", "R2S", "R1", "R8", "R7", "R11", "RG1", "R15", "R13", "R14", "R16", "R17", "RL3", "RL4", "RT1", "RT2"];
+const LINE_PRIO_IDX = new Map(LINE_COLOR_PRIORITY.map((l, i) => [l, i]));
+function lineaDominante(lines) {
+  let best = lines[0], bi = Infinity;
+  for (const l of lines) { const i = LINE_PRIO_IDX.has(l) ? LINE_PRIO_IDX.get(l) : 1000; if (i < bi) { bi = i; best = l; } }
+  return best;
+}
 // (Re)dibuja todas las vías. A zoom bajo: una sola línea centrada por cantón (rápido y legible).
 // A zoom ≥ LINE_SPLIT_ZOOM: la vía doble se desdobla en DOS líneas paralelas (una por sentido),
 // mientras la vía única sigue siendo UNA sola. Se llama al cargar la red y al cruzar el umbral.
@@ -255,7 +278,7 @@ function dibujarLineas() {
       // Vista Vmax: una sola línea centrada, coloreada por SUB-TRAMOS según el perfil ADIF del cantón.
       trazarViaVmax(a, b, S.edgeZones.get(key(e.from, e.to)), entry);
     } else {
-      const color = colorLinea(lines[0]);
+      const color = colorLinea(lineaDominante(lines));
       if (unica || !split) {
         trazarVia([a.lat, a.lon], [b.lat, b.lon], color, unica, entry);
       } else {
@@ -352,9 +375,11 @@ function dispersarFlota() {
   }
 }
 
+// Horario de TODA la red (sin filtro de línea: el aislado de líneas es solo visual). La fuente se
+// fija al arrancar (`S.source`, GTFS salvo `?source=optimized`); los horarios se eligen en la
+// pantalla previa (GTFS guardado / nuevo / importado), que recarga red + horarios si cambian.
 async function cargarHorarios() {
-  const source = $("source").value, line = $("lineFilter").value;
-  const q = new URLSearchParams({ source }); if (line) q.set("line", line);
+  const q = new URLSearchParams({ source: S.source || "gtfs" });
   const data = await (await fetch("/api/game/schedule?" + q.toString())).json();
   S.trains = [];
   for (const t of data.trains) {
@@ -659,13 +684,17 @@ function bearing(a, b) {
 // velocidad de cada tren muestreadas en el tiempo). Así "lo que ves = lo que se simula en masa":
 // los trenes aceleran/frenan de verdad (Vmax de vía + LTV + física del material). Si el trace no
 // carga (binario antiguo), se cae al motor JS de bloques (`paso`).
-async function cargarTrace(seed) {
+async function cargarTrace(seed, selQ) {
   S.traceSeed = seed || 0;
-  const tr = await (await fetch("/api/game/trace?seed=" + S.traceSeed)).json();
+  // Selección de plantillas del MODO VISUAL (`&sel=…`, independiente de /numeros). Se guarda para
+  // que "lanzar incidencia ahora" re-simule exactamente el mismo día (mismas incidencias rodadas).
+  S.traceSel = selQ || "";
+  const tr = await (await fetch("/api/game/trace?seed=" + S.traceSeed + S.traceSel)).json();
   if (!tr || !tr.trains) throw new Error("trace vacío");
   tr.byId = new Map();
   for (const t of tr.trains) tr.byId.set(t.id, t);
   S.trace = tr; S.repro = true; S.simT = tr.start;
+  construirTimelineRetraso(tr);
   // Rótulo de la jornada: el motor DERIVA el inicio de la 1ª salida por horario (no un 05:00 fijo),
   // así que reflejamos el rango real del trace en el subtítulo del reloj.
   const sub = document.querySelector(".clock-sub");
@@ -676,6 +705,78 @@ async function cargarTrace(seed) {
   // Incidencias del día que rodó el motor (para el registro y el cajón que se pone rojo).
   S.dayIncidents = (tr.incidents || []).map((i) => ({ ...i, launched: false }));
   pintarIncidenciasDia();
+}
+// Serie del RETRASO VIVO de la red por minuto de jornada, precalculada UNA vez del trace (no por
+// fotograma): para cada minuto, la media de D(t) = Σ retraso de los trenes en el trace. Cada muestra
+// (cada `dt` s) aporta d/60 min × dt/60 → media del minuto. Coste O(muestras) ≈ 1M sumas al cargar.
+// Es la misma magnitud que el chip "min en la red ahora", así el gráfico y el KPI cuadran.
+function construirTimelineRetraso(tr) {
+  const n = Math.max(1, Math.ceil((tr.end - tr.start) / 60) + 1);
+  const tl = new Float32Array(n), w = tr.dt / 60;
+  for (const rt of tr.trains) {
+    if (!rt.d) continue;
+    for (let i = 0; i < rt.d.length; i++) {
+      const b = Math.floor((rt.t0 + i * tr.dt - tr.start) / 60);
+      if (b >= 0 && b < n) tl[b] += (rt.d[i] / 60) * w;
+    }
+  }
+  let max = 0; for (const v of tl) if (v > max) max = v;
+  S.delayTL = { start: tr.start, end: tr.end, vals: tl, max };
+  S._dcKey = "";   // fuerza a redibujar el gráfico
+}
+// Gráfico compacto del retraso vivo de la red (panel izquierdo): área desde el inicio de la jornada
+// hasta AHORA (no enseña el futuro de la grabación), eje de horas y cursor del instante actual.
+// Solo redibuja cuando cambia el minuto de juego (barato).
+function pintarGraficoRetraso() {
+  const box = $("delayChart"), tl = S.delayTL; if (!box || !tl) return;
+  const idx = Math.max(0, Math.min(tl.vals.length - 1, Math.floor((S.simT - tl.start) / 60)));
+  const W = box.clientWidth || 290, H = box.clientHeight || 104;
+  const k = idx + "|" + W;
+  if (k === S._dcKey) return;
+  S._dcKey = k;
+  const padL = 26, padB = 13, padT = 4, iw = W - padL - 2, ih = H - padB - padT;
+  const n = tl.vals.length;
+  let pico = 0;
+  for (let i = 0; i <= idx; i++) if (tl.vals[i] > pico) pico = tl.vals[i];   // pico HASTA AHORA (sin spoilers)
+  const ymax = Math.max(10, Math.ceil(pico / 10) * 10);   // escala de lo ya visto, no del día entero
+  const X = (i) => padL + (i / (n - 1)) * iw, Y = (v) => padT + ih - (v / ymax) * ih;
+  let d = "";
+  const step = Math.max(1, Math.floor(n / iw));   // ~1 punto por píxel
+  for (let i = 0; i <= idx; i += step) d += (d ? "L" : "M") + X(i).toFixed(1) + "," + Y(tl.vals[i]).toFixed(1);
+  if (idx % step) d += "L" + X(idx).toFixed(1) + "," + Y(tl.vals[idx]).toFixed(1);
+  const area = d ? d + `L${X(idx).toFixed(1)},${Y(0)}L${X(0)},${Y(0)}Z` : "";
+  let grid = "";
+  for (const f of [0, 0.5, 1]) {
+    const y = Y(ymax * f).toFixed(1);
+    grid += `<line class="dc-grid" x1="${padL}" x2="${W - 2}" y1="${y}" y2="${y}"/><text class="dc-lbl" x="${padL - 4}" y="${+y + 3}" text-anchor="end">${Math.round(ymax * f)}</text>`;
+  }
+  for (let h = Math.ceil(tl.start / 3600 / 3) * 3; h * 3600 <= tl.end; h += 3) {
+    const x = X((h * 3600 - tl.start) / 60).toFixed(1);
+    grid += `<text class="dc-lbl" x="${x}" y="${H - 2}" text-anchor="middle">${String(h % 24).padStart(2, "0")}h</text>`;
+  }
+  const xn = X(idx).toFixed(1);
+  box.innerHTML = `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Retraso vivo de la red a lo largo de la jornada">
+    <defs><linearGradient id="dcGrad" x1="0" x2="0" y1="0" y2="1"><stop offset="0" stop-color="#ff8a3d" stop-opacity=".55"/><stop offset="1" stop-color="#ff8a3d" stop-opacity=".03"/></linearGradient></defs>
+    ${grid}<path class="dc-area" d="${area}"/><path class="dc-line" d="${d}"/>
+    <line class="dc-now" x1="${xn}" x2="${xn}" y1="${padT}" y2="${padT + ih}"/></svg>`;
+  const now = $("tlNow"); if (now) now.textContent = Math.round(tl.vals[idx]) + " min ahora · pico " + Math.round(pico);
+}
+// Retraso VIVO por línea (min sumados de sus trenes en el trace ahora) en la lista de líneas del
+// panel izquierdo. O(trenes) cada ~0,5 s; solo toca texto/anchura de barras ya creadas.
+function actualizarRetrasoLineas() {
+  const rows = S.legendRows; if (!rows) return;
+  const por = new Map();
+  for (const t of S.trains) if (t.repro) por.set(t.line, (por.get(t.line) || 0) + (t.reproDelay || 0) / 60);
+  let max = 1; for (const v of por.values()) if (v > max) max = v;
+  for (const [line, r] of rows) {
+    const v = por.get(line) || 0, m = Math.round(v);
+    if (r.last === m && r.lastMax === Math.round(max)) continue;
+    r.last = m; r.lastMax = Math.round(max);
+    r.val.textContent = m + " min";
+    r.val.classList.toggle("warn", m >= 10 && m < 25);
+    r.val.classList.toggle("crit", m >= 25);
+    r.bar.style.width = (100 * v / max).toFixed(1) + "%";
+  }
 }
 // Pinta el registro de incidencias del día (panel derecho) y la lista del cajón inferior.
 function pintarIncidenciasDia() {
@@ -798,7 +899,7 @@ function render() {
     late = dlyMin >= 2 && !hold;   // en marcha pero ≥2 min por detrás de su horario
     const kmh = Math.round(r.v);
     tip = `${t.line} · tren ${t.id}<br>Destino: ${nombre(t.pts[t.pts.length - 1].id)}<br>` +
-      (hold ? `<b>⏸ Detenido ante señal</b> en ${nombre(r.a)}` : `Velocidad: <b>${kmh} km/h</b>`) +
+      (hold ? `<b>${ICON_PAUSE} Detenido ante señal</b> en ${nombre(r.a)}` : `Velocidad: <b>${kmh} km/h</b>`) +
       (dlyMin > 0 ? `<br>Retraso: <b>+${dlyMin}′</b>` : ``);
     vivos.add(t.id);
     let m = trainMarkers.get(t.id);
@@ -975,7 +1076,7 @@ function actualizarSemaforoDinamico() {
     $("sigHeld").innerHTML = `<div class="held-card">
       ${lineImg(det.line, "line-logo big") || `<span class="badge" style="background:${det.color}">${det.line}</span>`}
       <div class="held-info"><b>Tren ${det.id}</b><span>→ ${nombre(det.pts[det.pts.length - 1].id)}</span>
-      <span class="held-motivo">⏸ ${MOTIVO_LABEL[det.esperaMotivo] || det.esperaMotivo} · +${Math.round(det.shift / 60)} min</span></div></div>`;
+      <span class="held-motivo">${ICON_PAUSE} ${MOTIVO_LABEL[det.esperaMotivo] || det.esperaMotivo} · +${Math.round(det.shift / 60)} min</span></div></div>`;
   } else {
     $("sigHeld").innerHTML = `<div class="held-empty">Sin tren detenido tras este semáforo.</div>`;
   }
@@ -1018,7 +1119,7 @@ function buildStationPanel() {
       // La interfaz se muestra VOLTEADA horizontalmente (Sur a la izquierda, Norte a la derecha) para
       // que las direcciones casen con la orientación del mapa (como las flechitas blancas). Es SOLO
       // presentación: `data-lado` (A/B) y toda la lógica de señalización quedan intactos.
-      const tags = esMain ? [g.mainB === v ? "◀ dir. Sur" : "", g.mainA === v ? "dir. Norte ▶" : ""].filter(Boolean).join(" ") : '<span class="dep-tag">🅿 depósito</span>';
+      const tags = esMain ? [g.mainB === v ? "◀ dir. Sur" : "", g.mainA === v ? "dir. Norte ▶" : ""].filter(Boolean).join(" ") : '<span class="dep-tag">' + ICON_PARK + ' depósito</span>';
       html += `<div class="trackrow${esMain ? "" : " siding"}">
         <button class="sig" data-v="${v}" data-lado="B" title="Señal sentido Sur">S</button>
         <div class="viac ${esMain ? "main" : "dep"}" data-v="${v}" data-corr="${c}">Vía ${v + 1} ${tags}<span class="occ-label"></span></div>
@@ -1079,7 +1180,7 @@ function actualizarEstacionDinamico() {
     il.occ[via] = d.unitId; park++;
     const svc = d.h.svc;
     const itin = svc ? "→ " + nombre(svc.pts[svc.pts.length - 1].id) + " · sale " + hhmm(svc.pts[0].d) : "pernocta";
-    etiqueta.set(via, `🅿 ${d.unitId} · ${d.line} ${itin}${d.h.depositoDe ? " · reubicado de " + nombre(d.h.depositoDe) : ""}`);
+    etiqueta.set(via, `${ICON_PARK} ${d.unitId} · ${d.line} ${itin}${d.h.depositoDe ? " · reubicado de " + nombre(d.h.depositoDe) : ""}`);
     if (svc) dormidoSalida.add(via + "|" + svc.side);
   }
   const pc = $("parkCount"); if (pc) pc.textContent = park;
@@ -1106,7 +1207,8 @@ function actualizarEstacionDinamico() {
   document.querySelectorAll("#stTracks .viac").forEach((cell) => {
     const v = +cell.dataset.v, occ = il.occ[v];
     cell.classList.toggle("occ", !!occ);
-    const lbl = cell.querySelector(".occ-label"); if (lbl) lbl.textContent = occ ? " · " + (etiqueta.get(v) || occ) : "";
+    const lbl = cell.querySelector(".occ-label"); const h = occ ? " · " + (etiqueta.get(v) || occ) : "";
+    if (lbl && lbl._h !== h) { lbl._h = h; lbl.innerHTML = h; }   // innerHTML: la etiqueta de depósito lleva el icono SVG; solo si cambia
   });
 }
 
@@ -1160,43 +1262,37 @@ function pintarProximos(s) {
 }
 
 // ---- Actualización del GTFS (descarga oficial o subida manual) ----------------------------
-let gtfsPolling = false;
-async function iniciarActualizacionGtfs() {
-  if (gtfsPolling) return;
-  const r = await (await fetch("/api/gtfs/update")).json();
-  if (!r.started) { $("gtfsStatus").textContent = r.reason || "No se pudo iniciar."; return; }
-  pollGtfsStatus();
-}
-async function subirGtfs() {
-  if (gtfsPolling) return;
-  const f = $("gtfsFile").files[0];
-  if (!f) { $("gtfsStatus").textContent = "Elige primero un fichero .zip."; return; }
-  $("gtfsStatus").textContent = "Subiendo " + f.name + "…";
-  const r = await (await fetch("/api/gtfs/upload", { method: "POST", body: f })).json();
-  if (!r.started) { $("gtfsStatus").textContent = r.reason || "No se pudo iniciar."; return; }
-  pollGtfsStatus();
-}
-async function pollGtfsStatus() {
-  gtfsPolling = true;
-  $("gtfsUpdate").disabled = true; $("gtfsUpload").disabled = true;
-  const tick = async () => {
-    const j = await (await fetch("/api/gtfs/status")).json();
-    if (j.error) {
-      $("gtfsStatus").textContent = "Error: " + j.error;
-      gtfsPolling = false; $("gtfsUpdate").disabled = false; $("gtfsUpload").disabled = false;
-      return;
-    }
-    $("gtfsStatus").textContent = j.step || "Actualizando…";
+// Se eligen en la pantalla previa: "GTFS nuevo" (descarga oficial) o "Importar horarios" (ZIP
+// propio). `ejecutarJobGtfs(start)` arranca el trabajo del servidor y resuelve true/false al acabar
+// (polling de /api/gtfs/status); si va bien, recarga red + horarios antes de generar el día.
+async function ejecutarJobGtfs(start) {
+  const st = $("gtfsStatus");
+  let r;
+  try { r = await (await start()).json(); } catch (e) { r = { started: false, reason: String(e) }; }
+  if (!r.started) { st.textContent = r.reason || "No se pudo iniciar."; return false; }
+  for (;;) {
+    await new Promise((res) => setTimeout(res, 900));
+    let j; try { j = await (await fetch("/api/gtfs/status")).json(); } catch (e) { j = {}; }
+    if (j.error) { st.textContent = "Error: " + j.error; return false; }
+    st.textContent = j.step || "Actualizando…";
     if (j.done) {
-      gtfsPolling = false; $("gtfsUpdate").disabled = false; $("gtfsUpload").disabled = false;
-      const st = j.stats;
-      if (st) $("gtfsStatus").textContent = `Actualizado: ${st.n_routes} líneas · ${st.n_trips} viajes · ${st.n_stops} estaciones. Recargando…`;
+      const s = j.stats;
+      if (s) st.textContent = `Actualizado: ${s.n_routes} líneas · ${s.n_trips} viajes · ${s.n_stops} estaciones.`;
       await cargarRed(); await cargarHorarios(); construirSemaforos();
-      return;
+      fijarHoraInicioDefecto();   // el GTFS nuevo puede empezar a otra hora
+      await pintarInfoGtfs();
+      return true;
     }
-    setTimeout(tick, 1000);
-  };
-  tick();
+  }
+}
+// "GTFS guardado del …": fecha del conjunto cargado ahora (opción por defecto del selector).
+async function pintarInfoGtfs() {
+  const el = $("gtfsSavedInfo"); if (!el) return;
+  try {
+    const j = await (await fetch("/api/gtfs/info")).json();
+    const [y, m, d] = (j.date || "").split("-");
+    el.textContent = (j.date ? `Del ${d}/${m}/${y}` : "Fecha desconocida") + ` · ${j.n_lines} líneas · ${j.n_trips.toLocaleString("es-ES")} viajes (por defecto)`;
+  } catch (e) { el.textContent = "El que está cargado ahora (por defecto)"; }
 }
 
 // ---- Generador de incidencias -------------------------------------------------------------
@@ -1210,7 +1306,6 @@ function poblarSelectores() {
   // Líneas (leyenda + filtros). El antiguo generador de incidencias PROGRAMADAS se sustituyó por
   // "Lanzar incidencia ahora" (ver el módulo `incidentTemplates`), así que aquí ya no se puebla.
   const ln = S.net.lines.map((l) => `<option value="${l.line}">${l.line}</option>`).join("");
-  $("lineFilter").innerHTML = '<option value="">Todas las líneas</option>' + ln;
   $("tFiltLine").innerHTML = '<option value="">Todas</option>' + ln;
 }
 function rellenarDonde() {
@@ -1258,7 +1353,7 @@ function refrescarTrenes() {
   filas.sort((x, y) => (y.t.esperando - x.t.esperando) || (sort === "delay" ? y.retr - x.retr : x.t.line.localeCompare(y.t.line)));
   $("trenesList").innerHTML = filas.slice(0, 200).map((f) =>
     `<div class="t${f.t.esperando ? " esperando" : ""}">${lineImg(f.t.line, "line-logo") || `<span class="badge" style="background:${f.t.color}">${f.t.line}</span>`}
-      <span>${f.t.esperando ? "⏸ " : ""}${f.ubic} → ${nombre(f.t.pts[f.t.pts.length - 1].id)}${f.t.esperando ? ` <span class="muted">(${MOTIVO_LABEL[f.t.esperaMotivo] || f.t.esperaMotivo})</span>` : ""}</span>
+      <span>${f.t.esperando ? ICON_PAUSE + " " : ""}${f.ubic} → ${nombre(f.t.pts[f.t.pts.length - 1].id)}${f.t.esperando ? ` <span class="muted">(${MOTIVO_LABEL[f.t.esperaMotivo] || f.t.esperaMotivo})</span>` : ""}</span>
       <span class="late">${f.retr > 0 ? "+" + f.retr + "m" : "·"}</span>
       <button class="goto" data-id="${f.t.id}">Ir</button></div>`).join("");
   $("trenesList").querySelectorAll(".goto").forEach((b) => b.onclick = () => irAlTren(b.dataset.id));
@@ -1272,11 +1367,13 @@ function irAlTren(id) {
 // ---- Fin del día --------------------------------------------------------------------------
 function finDelDia() {
   S.finished = true; setSpeed("PAUSA");
-  const retrasados = S.trains.filter((t) => t.shift > 60).length;
+  // Trenes que llegaron tarde (≥1 min) a alguna estación, según el registro del motor.
+  const retrasados = new Set(S.arrivals.map((a) => a.train)).size;
   $("finStats").innerHTML = `
-    <div class="stat"><span>KPI de retraso</span><b>${Math.round(S.kpi).toLocaleString("es-ES")} pax·min</b></div>
+    <div class="stat"><span>Minutos de retraso acumulados</span><b>${Math.round(S.kpi).toLocaleString("es-ES")} min</b></div>
     <div class="stat"><span>Trenes con retraso</span><b>${retrasados}</b></div>
-    <div class="stat"><span>Incidencias del día</span><b>${S.incidentes.length}</b></div>`;
+    <div class="stat"><span>Pico de retraso vivo</span><b>${S.delayTL ? Math.round(S.delayTL.max) : 0} min</b></div>
+    <div class="stat"><span>Incidencias del día</span><b>${(S.dayIncidents || []).length}</b></div>`;
   $("finDia").hidden = false;
 }
 
@@ -1305,9 +1402,13 @@ function pintarLeyenda() {
     const g = lineSortKey(l.line).group;
     if (prevGroup !== null && g !== prevGroup) html += `<div class="legend-sep" aria-hidden="true"></div>`;
     prevGroup = g;
-    html += `<div class="row" data-line="${l.line}">${lineImg(l.line, "line-logo") || `<span class="sw" style="background:${l.color}"></span>`}<span>${l.line}</span></div>`;
+    html += `<div class="row" data-line="${l.line}" title="Clic: aislar ${l.line} en el mapa">${lineImg(l.line, "line-logo") || `<span class="sw" style="background:${l.color}"></span>`}` +
+      `<span class="ln-name">${l.line}</span><span class="ln-bar"><i style="--c:${l.color}"></i></span><span class="ln-val">–</span></div>`;
   }
   $("legend").innerHTML = html;
+  // Referencias a las celdas vivas (retraso por línea) para actualizarlas sin recrear el DOM.
+  S.legendRows = new Map();
+  $("legend").querySelectorAll(".row").forEach((r) => S.legendRows.set(r.dataset.line, { bar: r.querySelector(".ln-bar > i"), val: r.querySelector(".ln-val"), last: null }));
 }
 
 // ---- Vista "mapa por velocidad máxima (Vmax)" ---------------------------------------------
@@ -1341,11 +1442,6 @@ function aplicarVistaVmax(on) {
 // ---- Controles ----------------------------------------------------------------------------
 function setSpeed(k) { S.speedKey = k; S.speed = VELOCIDADES[k]; document.querySelectorAll("#speeds button").forEach((b) => b.classList.toggle("active", b.dataset.speed === k)); }
 $("speeds").addEventListener("click", (e) => { const b = e.target.closest("button"); if (b) setSpeed(b.dataset.speed); });
-$("reload").addEventListener("click", cargarHorarios);
-$("gtfsUpdate").addEventListener("click", iniciarActualizacionGtfs);
-$("gtfsUpload").addEventListener("click", subirGtfs);
-$("source").addEventListener("change", cargarHorarios);
-$("lineFilter").addEventListener("change", cargarHorarios);
 $("showSignals").addEventListener("change", construirSemaforos);
 $("showVmax").addEventListener("change", (e) => aplicarVistaVmax(e.target.checked));
 $("btnTrenes").addEventListener("click", () => { const p = $("trenesPanel"); p.hidden = !p.hidden; refrescarTrenes(); });
@@ -1357,15 +1453,56 @@ $("finRepetir").addEventListener("click", () => location.reload());
 $("btnIncidDia").addEventListener("click", () => { const p = $("incidDiaPanel"); p.hidden = !p.hidden; pintarIncidenciasDia(); });
 $("incidDiaClose").addEventListener("click", () => $("incidDiaPanel").hidden = true);
 
-// Pantalla PREVIA: al confirmar, se genera el día con la semilla elegida y se oculta la pantalla.
+// Pantalla PREVIA — selector de horarios: el campo de fichero solo aparece con "Importar".
+const schedMode = () => (document.querySelector('input[name="sched"]:checked') || {}).value || "saved";
+$("schedOpts").addEventListener("change", () => { $("gtfsFileWrap").hidden = schedMode() !== "import"; $("gtfsStatus").textContent = ""; });
+$("gtfsFile").addEventListener("change", () => { const f = $("gtfsFile").files[0]; $("gtfsFileName").textContent = f ? f.name : "Elegir fichero .zip…"; });
+// "Empezar a ver desde" (HH:MM) → segundos de jornada. La jornada se simula ENTERA (es una
+// grabación del motor); esto solo sitúa el cabezal de reproducción.
+// Hora de inicio POR DEFECTO = salida del PRIMER tren del horario cargado (el motor arranca la
+// jornada ahí, no a las 05:00 fijas). Si el usuario ya tocó el campo, se respeta su hora. También
+// ajusta el reloj/rótulo mientras no hay jornada generada.
+function fijarHoraInicioDefecto() {
+  let first = Infinity;
+  for (const t of S.trains) if (t.pts[0].d < first) first = t.pts[0].d;
+  if (!Number.isFinite(first)) return;
+  const inp = $("preStart");
+  if (inp && !inp.dataset.touched) inp.value = hhmm(first);
+  if (!S.trace) {
+    S.simT = first;
+    const sub = document.querySelector(".clock-sub");
+    if (sub) sub.textContent = `Jornada · ${hhmm(first)} → 00:00`;
+  }
+}
+$("preStart").addEventListener("input", () => { $("preStart").dataset.touched = "1"; });
+function horaInicioSeg() {
+  const [h, m] = ($("preStart").value || "05:00").split(":").map(Number);
+  return (h || 0) * 3600 + (m || 0) * 60;
+}
+// Al confirmar: (1) si se pidió, descarga/importa el GTFS y recarga red+horarios; (2) genera el día
+// con la semilla y la selección de incidencias del modo visual; (3) salta a la hora de inicio.
 $("preConfirm").addEventListener("click", async () => {
-  const seed = +$("preSeed").value || 0;
-  $("preConfirm").disabled = true;
-  $("preStatus").textContent = "Generando la jornada con el motor (unos segundos)…";
-  await generarDia(seed);
-  $("preDay").classList.add("hidden");
-  $("preConfirm").disabled = false;
-  $("preStatus").textContent = "";
+  const seed = +$("preSeed").value || 0, mode = schedMode();
+  const btn = $("preConfirm"), st = $("preStatus");
+  btn.disabled = true;
+  try {
+    if (mode === "new") {
+      st.textContent = "Descargando el GTFS de hoy (puede tardar un minuto)…";
+      if (!(await ejecutarJobGtfs(() => fetch("/api/gtfs/update")))) { st.textContent = "No se pudo actualizar el GTFS (ver arriba)."; return; }
+    } else if (mode === "import") {
+      const f = $("gtfsFile").files[0];
+      if (!f) { st.textContent = "Elige el fichero .zip a importar."; return; }
+      st.textContent = "Importando " + f.name + "…";
+      if (!(await ejecutarJobGtfs(() => fetch("/api/gtfs/upload", { method: "POST", body: f })))) { st.textContent = "No se pudo importar el GTFS (ver arriba)."; return; }
+    }
+    st.textContent = "Generando la jornada con el motor (unos segundos)…";
+    const ok = await generarDia(seed, S.tplSelQuery ? S.tplSelQuery() : "", horaInicioSeg());
+    if (!ok) { st.textContent = "No se pudo generar la jornada (ver Estado de la red)."; return; }
+    $("preDay").classList.add("hidden");
+    st.textContent = "";
+  } finally {
+    btn.disabled = false;
+  }
 });
 window.addEventListener("resize", () => map.invalidateSize());
 
@@ -1384,33 +1521,51 @@ function bucle(now) {
   actualizarSemaforoDinamico();      // aspecto del panel de señal abierto: también por fotograma
   actualizarIncidenciasDia();        // cajón de incidencias en rojo si hay alguna en curso
   acumUI += dt;
-  if (acumUI > 0.5) { acumUI = 0; actualizarKpi(); refrescarTrenes(); actualizarEstacionDinamico(); pintarIncidenciasDia(); }
+  if (acumUI > 0.5) {
+    acumUI = 0; actualizarKpi(); refrescarTrenes(); actualizarEstacionDinamico(); pintarIncidenciasDia();
+    actualizarRetrasoLineas(); pintarGraficoRetraso();
+  }
   requestAnimationFrame(bucle);
 }
 
 // ---- Arranque -----------------------------------------------------------------------------
 async function iniciar() {
-  const src = new URLSearchParams(location.search).get("source");
-  if (src === "optimized" || src === "gtfs") $("source").value = src;
+  // Fuente del horario: GTFS; `?source=optimized` (enlace directo) carga la malla optimizada.
+  S.source = new URLSearchParams(location.search).get("source") === "optimized" ? "optimized" : "gtfs";
+  pintarInfoGtfs();
   try {
     await cargarRed(); await cargarHorarios(); construirSemaforos();
+    fijarHoraInicioDefecto();
     setTimeout(() => map.invalidateSize(), 120);
     // NO se genera el día directamente: primero la PANTALLA PREVIA de incidencias. El día (trace)
     // se genera al pulsar "Confirmar" (con o sin incidencias). Ver `generarDia`.
     const seedUrl = +(new URLSearchParams(location.search).get("seed"));
     if (Number.isFinite(seedUrl) && $("preSeed")) $("preSeed").value = seedUrl;
-  } catch (e) { $("netInfo").textContent = "Error cargando datos: " + e; }
+    rodLoad(false);   // red+horarios OK: oculta el overlay de carga
+  } catch (e) { $("netInfo").textContent = "Error cargando datos: " + e; rodLoad(false); }
   requestAnimationFrame(bucle);
 }
 // Genera el día: pide el TRACE físico al motor con la semilla elegida y reproduce la física real.
 // Es el ÚNICO motor visual (no hay respaldo JS). Se llama al confirmar la pantalla previa.
-async function generarDia(seed) {
+// `selQ` = selección de plantillas del modo visual (`&sel=…`); `startSec` = hora desde la que se
+// empieza a VER (la grabación cubre toda la jornada). Devuelve true si el trace cargó.
+async function generarDia(seed, selQ, startSec) {
+  rodLoad(true, "Calculando la jornada");
   $("netInfo").textContent = $("netInfo").textContent.replace(/ · .*$/, "") + " · Calculando la simulación física (motor Rust)…";
   try {
-    await cargarTrace(seed);
+    await cargarTrace(seed, selQ);
+    // Salta el cabezal a la hora pedida (acotada a la jornada del trace). Un paso de 0 s sitúa los
+    // trenes y pone al día el contador de retraso con las llegadas tarde anteriores a esa hora.
+    if (startSec > S.trace.start) S.simT = Math.min(startSec, S.trace.end - 60);
+    pasoRepro(0);
+    pintarIncidenciasDia();
     $("netInfo").textContent = $("netInfo").textContent.replace(" · Calculando la simulación física (motor Rust)…", " · Física del motor Rust (reproductor).");
+    return true;
   } catch (e) {
-    $("netInfo").textContent = "⚠ No se pudo cargar la simulación del motor Rust (trace): " + e;
+    $("netInfo").textContent = "No se pudo cargar la simulación del motor Rust (trace): " + e;
+    return false;
+  } finally {
+    rodLoad(false);
   }
 }
 iniciar();
@@ -1550,76 +1705,69 @@ iniciar();
   setTimeout(() => openPanel(leftPanel, true), 400);
 })();
 
-// ═══════════════ Creador de incidencias PROBABILÍSTICO + modo headless (Fase C) ═══════════════
+// ═══════════════ Selección de incidencias de la jornada + "lanzar incidencia ahora" ═══════════════
 // Módulo AISLADO del motor del juego: solo habla con la API (/api/incidents/templates y
-// /api/simulate) y con su propio DOM. Las plantillas son la fuente única compartida por el modo
-// visual y el modo sin visual (headless). Toggleables/eliminables antes del día.
+// /api/game/trace) y con su propio DOM. Las plantillas (compartidas con /numeros) se crean y
+// editan en el apartado /incidencias del menú; aquí solo se ELIGEN para la jornada visual.
 (function incidentTemplates() {
   const $ = (id) => document.getElementById(id);
   const EFF = { red_one: "Señal roja (1 sentido)", red_both: "Señal roja (2 sentidos)", single: "Tramo → vía única" };
   let tpls = [];
 
+  // SELECCIÓN por modo: las plantillas son COMPARTIDAS (servidor; se crean/editan en el apartado
+  // /incidencias del menú), pero qué plantillas entran en la jornada visual se guarda aparte
+  // (localStorage "rod-sel-visual", independiente de /numeros) por ID ESTABLE de plantilla: editar
+  // una plantilla no la desmarca y borrar/añadir desde otro sitio no desplaza la selección.
+  const SELKEY = "rod-sel-visual";
+  let sel = null;   // Set de ids seleccionados
+  const rateTxt = (t) => `${Math.round(t.prob * 100)} % cada ${(Math.round(t.every_h * 100) / 100).toLocaleString("es-ES")} h`;
+  function loadSel() {
+    try {
+      const v = JSON.parse(localStorage.getItem(SELKEY));
+      if (Array.isArray(v)) {
+        // Migración: versiones previas guardaban la firma "motivo|efecto|dur|prob" en vez del id.
+        const old = new Set(v.filter((x) => typeof x === "string" && x.includes("|")));
+        sel = new Set(v.filter((x) => typeof x === "string" && !x.includes("|")));
+        for (const t of tpls) if (old.has([t.motivo, t.effect, t.dur_min, t.prob].join("|"))) sel.add(t.id);
+      }
+    } catch (e) { /* sin storage */ }
+    // Primera vez: se parte de las marcadas como activas en el servidor.
+    if (!sel) sel = new Set(tpls.filter((t) => t.enabled).map((t) => t.id));
+  }
+  function saveSel() { try { localStorage.setItem(SELKEY, JSON.stringify([...sel])); } catch (e) { /* sin storage */ } }
+  // Parámetro de query para el motor con la selección actual (vacía → "&sel=" = ninguna).
+  S.tplSelQuery = () => "&sel=" + tpls.filter((t) => sel && sel.has(t.id)).map((t) => encodeURIComponent(t.id)).join(",");
+
   async function load() {
     try { tpls = await (await fetch("/api/incidents/templates")).json(); } catch (e) { tpls = []; }
+    loadSel();
     render();
-  }
-  async function save() {
-    try {
-      await fetch("/api/incidents/templates", {
-        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(tpls),
-      });
-    } catch (e) { /* localhost: si falla, se reintenta en el próximo cambio */ }
   }
   function render() {
     const ul = $("tplList"); if (!ul) return;
-    if (!tpls.length) { ul.innerHTML = '<li class="empty">Sin plantillas.</li>'; return; }
+    const all = $("tplAll"), nOn = tpls.filter((t) => sel.has(t.id)).length;
+    if (all) { all.checked = tpls.length > 0 && nOn === tpls.length; all.indeterminate = nOn > 0 && nOn < tpls.length; all.disabled = !tpls.length; }
+    if (!tpls.length) { ul.innerHTML = '<li class="empty">Sin plantillas. Créalas en el apartado Incidencias del menú.</li>'; return; }
     ul.innerHTML = "";
     tpls.forEach((t, i) => {
+      const on = sel.has(t.id);
       const li = document.createElement("li");
+      if (!on) li.className = "off";
       li.innerHTML =
-        `<label class="chk"><input type="checkbox" ${t.enabled ? "checked" : ""} data-i="${i}" class="tplTgl"></label>` +
+        `<label class="chk"><input type="checkbox" ${on ? "checked" : ""} data-i="${i}" class="tplTgl" aria-label="Incluir en esta jornada"></label>` +
         `<span class="tpl-main"><b>${t.motivo || "(sin motivo)"}</b>` +
-        `<small>${EFF[t.effect] || t.effect} · ${t.dur_min} min · ${Math.round(t.daily_prob * 100)}%/día</small></span>` +
-        `<button class="mini-del" data-i="${i}" title="Eliminar">✕</button>`;
+        `<small>${EFF[t.effect] || t.effect} · ${t.dur_min} min · ${rateTxt(t)}</small></span>`;
       ul.appendChild(li);
     });
-    ul.querySelectorAll(".tplTgl").forEach((c) => (c.onchange = () => { tpls[+c.dataset.i].enabled = c.checked; save(); }));
-    ul.querySelectorAll(".mini-del").forEach((b) => (b.onclick = () => { tpls.splice(+b.dataset.i, 1); save(); render(); }));
+    ul.querySelectorAll(".tplTgl").forEach((c) => (c.onchange = () => {
+      const id = tpls[+c.dataset.i].id;
+      if (c.checked) sel.add(id); else sel.delete(id);
+      saveSel(); render();
+    }));
   }
-
-  const addBtn = $("tplAdd");
-  if (addBtn) addBtn.onclick = () => {
-    const motivo = ($("tplMotivo").value || "").trim() || "Incidencia";
-    const effect = $("tplEffect").value;
-    const dur_min = Math.max(1, +$("tplDur").value || 15);
-    const daily_prob = Math.min(1, Math.max(0, (+$("tplProb").value || 0) / 100));
-    tpls.push({ motivo, effect, dur_min, daily_prob, enabled: true });
-    $("tplMotivo").value = "";
-    save(); render();
-  };
-
-  const runBtn = $("simRun");
-  if (runBtn) runBtn.onclick = async () => {
-    const seed = +$("simSeed").value || 0;
-    const out = $("simOut");
-    out.textContent = "Ejecutando la jornada completa…";
-    runBtn.disabled = true;
-    try {
-      const r = await (await fetch("/api/simulate?seed=" + seed)).json();
-      const inc = (r.incidents || [])
-        .map((i) => `• ${i.motivo} (${EFF[i.effect] || i.effect}) ${i.from}→${i.to} · ${Math.floor(i.t0 / 3600)}h`)
-        .join("<br>") || "ninguna hoy";
-      out.innerHTML =
-        `<b>${r.n_trains}</b> trenes · retraso máx <b>${r.max_delay_min.toFixed(0)} min</b> · ` +
-        `pico retenidos <b>${r.peak_waiting}</b> · final <b>${r.final_waiting}</b><br>` +
-        `KPI <b>${Math.round(r.pax_min).toLocaleString()}</b> pax·min<br>` +
-        `<small>Incidencias del día (semilla ${r.seed}):<br>${inc}</small>`;
-    } catch (e) {
-      out.textContent = "Error al simular.";
-    } finally {
-      runBtn.disabled = false;
-    }
-  };
+  // Casilla maestra: todas / ninguna de golpe.
+  const allBox = $("tplAll");
+  if (allBox) allBox.onchange = () => { sel = allBox.checked ? new Set(tpls.map((t) => t.id)) : new Set(); saveSel(); render(); };
 
   // ── "Lanzar incidencia AHORA": elige plantilla + tramo → re-simula la jornada con la
   // incidencia inyectada desde la hora actual (así el mapa visual la refleja de verdad). ──
@@ -1654,12 +1802,15 @@ iniciar();
     st.textContent = "Recalculando la jornada con la incidencia…";
     launchBtn.disabled = true;
     try {
-      const url = `/api/game/trace?seed=${S.traceSeed || 0}&eff=${tpl.effect}&from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}&t0=${t0}&dur=${tpl.dur_min}&motivo=${encodeURIComponent(tpl.motivo)}`;
+      // Misma semilla y MISMA selección de plantillas que la jornada en curso → el día re-simulado
+      // es idéntico hasta 'ahora' (mismas incidencias rodadas) + la incidencia lanzada.
+      const url = `/api/game/trace?seed=${S.traceSeed || 0}${S.traceSel || ""}&eff=${tpl.effect}&from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}&t0=${t0}&dur=${tpl.dur_min}&motivo=${encodeURIComponent(tpl.motivo)}`;
       const tr = await (await fetch(url)).json();
       if (!tr || !tr.trains) throw new Error("trace vacío");
       tr.byId = new Map();
       for (const t of tr.trains) tr.byId.set(t.id, t);
       S.trace = tr; // se conserva S.simT: el trace hasta 'ahora' es idéntico (misma semilla)
+      construirTimelineRetraso(tr);   // el gráfico de retraso incorpora el efecto de la incidencia
       // Reinicia el contador de retraso: el bucle re-suma las llegadas hasta 'ahora' (idénticas) y
       // sigue con las nuevas que provoque la incidencia inyectada.
       S.arrivals = tr.arrivals || []; S.arrPtr = 0; S.kpi = 0;

@@ -53,6 +53,13 @@ pub fn now_utc_string() -> String {
     format!("{:04}-{:02}-{:02} {:02}:{:02} UTC", y, m, d, tod / 3600, (tod % 3600) / 60)
 }
 
+/// Fecha civil `AAAA-MM-DD` (UTC) de un instante en segundos desde epoch (p. ej. el mtime del
+/// GTFS guardado, para mostrar "de qué día es" en el selector de horarios).
+pub fn date_from_unix(secs: u64) -> String {
+    let (y, m, d) = civil_from_days((secs / 86400) as i64);
+    format!("{:04}-{:02}-{:02}", y, m, d)
+}
+
 /// Algoritmo de Howard Hinnant: días desde epoch → (año, mes, día) civil.
 fn civil_from_days(z: i64) -> (i64, u32, u32) {
     let z = z + 719468;
