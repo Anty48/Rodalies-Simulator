@@ -28,7 +28,7 @@
 use crate::calculator::physics::{self, Restriction, SpeedZone, Vehicle};
 use crate::calculator::{infrastructure, ltv, rolling_stock, vehicle_of};
 use crate::gtfs_loader::Network;
-use crate::{game, topology};
+use crate::{game, topology, track_geometry};
 use rand::{rngs::StdRng, Rng, SeedableRng};
 use serde::Serialize;
 use std::collections::{HashMap, HashSet};
@@ -79,17 +79,32 @@ fn demanda(t: f64) -> f64 {
     0.03
 }
 
-/// Distancia Haversine entre coords (km) — para la densidad de sub-bloques.
+/// Distancia Haversine entre coords (km).
+#[cfg(test)]
 fn dist_km(a: (f64, f64), b: (f64, f64)) -> f64 {
     infrastructure::haversine_m(a.0, a.1, b.0, b.1) / 1000.0
 }
 
-/// Nº de sub-bloques del cantón a→b (≥1). 1 en vía única; en doble = señales por distancia + 1.
+/// Longitud de VÍA del cantón a→b (m): la del trazado real (OSM) si existe; si no, la recta.
+fn canton_len_m(a: &str, b: &str, ca: (f64, f64), cb: (f64, f64)) -> f64 {
+    track_geometry::global()
+        .and_then(|g| g.len_m(a, b))
+        .unwrap_or_else(|| infrastructure::haversine_m(ca.0, ca.1, cb.0, cb.1))
+        .max(1.0)
+}
+
+/// Nº de sub-bloques del cantón a→b (≥1) por la distancia en línea recta (tests / sin trazado).
+#[cfg(test)]
 fn calc_sub_blocks(a: (f64, f64), b: (f64, f64), unica: bool) -> usize {
+    calc_sub_blocks_len(dist_km(a, b), unica)
+}
+
+/// Nº de sub-bloques de un cantón de `d` km de VÍA (≥1). 1 en vía única; en doble = señales por
+/// distancia + 1 (la densidad la fija la longitud real de vía, no la recta entre estaciones).
+fn calc_sub_blocks_len(d: f64, unica: bool) -> usize {
     if unica {
         return 1;
     }
-    let d = dist_km(a, b);
     let max_sig = if d > 7.0 { 5 } else { 3 };
     let signals = ((d / SIGNAL_SPACING_KM).round() as i64).clamp(0, max_sig);
     let mut m = (signals + 1) as usize;
@@ -193,6 +208,7 @@ struct Train {
     cb: usize,          // bloque comprometido
     delay_s: f64,
     waiting: bool,      // retenido por señal/ocupación (no por dwell ni por su hora)
+    held_since: f64,    // instante en que empezó la retención actual (NaN = no retenido)
     was_waiting: bool,  // estado `waiting` del step anterior (para contar conflictos distintos)
 }
 
@@ -216,6 +232,18 @@ impl Train {
                 Some((&self.pts[k - 1].id, &self.pts[k].id, 1.0, 0.0))
             }
             _ => None,
+        }
+    }
+
+    /// ¿Está EN SERVICIO (ya ha salido de cabecera, o la hora de salida ya pasó y está retenido
+    /// allí acumulando retraso)? Los trenes que aún esperan su hora en cabecera NO cuentan: si
+    /// entraran en el denominador del retraso medio, la media se diluiría con trenes que ni existen
+    /// todavía para el viajero.
+    fn in_service(&self) -> bool {
+        match self.phase {
+            Phase::Running => true,
+            Phase::Dwell => self.station_idx > 0 || self.delay_s > 0.0,
+            Phase::Done => false,
         }
     }
 }
@@ -575,6 +603,9 @@ pub struct Engine {
     /// Línea temporal del retraso acumulado de la red: `(instante_s, retraso_total_s)`, muestreada
     /// cada `SAMPLE_STEP_S` de tiempo simulado. Base del PAX-weighted delay, pico y recuperación.
     timeline: Vec<(u32, f64)>,
+    /// Trenes EN SERVICIO en cada muestra de `timeline` (mismo índice): denominador del retraso
+    /// medio por tren del seguimiento de retrasos.
+    timeline_active: Vec<u32>,
     next_sample: f64,
     /// Registro de todas las llegadas tarde a estación (≥ `LATE_LOG_THRESHOLD_S`) de la jornada,
     /// en orden temporal. Alimenta el contador de minutos de retraso y el log de CTC del visor.
@@ -584,6 +615,23 @@ pub struct Engine {
 /// Umbral para registrar una llegada como "tarde": un tren cuenta como retrasado en una estación si
 /// llega ≥ 1 min por detrás de su hora prevista GTFS (evita el ruido sub-minuto de la física).
 const LATE_LOG_THRESHOLD_S: f64 = 60.0;
+/// A partir de cuánto tiempo (s) RETENIDO por una señal (en plena vía o en el andén con la salida en
+/// rojo) el retraso del tren se recalcula en vivo respecto al horario, sin esperar a llegar a la
+/// siguiente estación. Sin esto, una incidencia larga no se veía en las gráficas hasta que se
+/// levantaba y los trenes volvían a pasar por estaciones: el retraso aparecía de golpe, tarde.
+const HOLD_LIVE_DELAY_S: f64 = 60.0;
+
+/// Retraso (s) de un tren en la posición de ruta `s` (m) del cantón `i` (pts[i]→pts[i+1]) en el
+/// instante `now`, respecto al horario: la hora a la que DEBÍA pasar por ese punto se interpola
+/// linealmente entre la salida programada de pts[i] y la llegada programada a pts[i+1] según la
+/// fracción de vía recorrida. Equivale a la previsión de retraso en la siguiente estación si el
+/// tren reanuda la marcha al ritmo del horario (ahora + tiempo restante − llegada programada).
+fn retraso_en_posicion(pts: &[Pt], cum_l: &[f64], i: usize, s: f64, now: f64) -> f64 {
+    let (a, b) = (&pts[i], &pts[i + 1]);
+    let len = (cum_l[i + 1] - cum_l[i]).max(1.0);
+    let f = ((s - cum_l[i]) / len).clamp(0.0, 1.0);
+    now - (a.d + (b.a - a.d).max(0.0) * f)
+}
 
 impl Engine {
     /// Construye el motor desde la red. Consume el MISMO horario descompuesto que la API del juego
@@ -601,29 +649,45 @@ impl Engine {
     ) -> Self {
         let game_trains = game::build_schedule(net, false, line_filter);
 
-        let coord = |id: &str| -> Option<(f64, f64)> {
-            let node = net.node(id)?;
-            let n = &net.graph[node];
-            Some((n.lat?, n.lon?))
-        };
+        let coord = |id: &str| net.coord(id); // estaciones y bifurcaciones
 
         // Vía única (canónica por stop_id) — necesaria para sub-bloques y para el testigo.
         let mut single_track_str: HashSet<String> = HashSet::new();
         for (a, b) in topology::single_track_pairs(net) {
-            single_track_str.insert(canon(&net.graph[a].stop_id, &net.graph[b].stop_id));
+            let (sa, sb) = (&net.graph[a].stop_id, &net.graph[b].stop_id);
+            single_track_str.insert(canon(sa, sb));
+            // Si el cantón pasa por bifurcaciones, sus trozos A→J…→B heredan la vía única.
+            if let Some(g) = track_geometry::global() {
+                let (from, to, v) = if g.via(sa, sb).is_empty() { (sb, sa, g.via(sb, sa)) } else { (sa, sb, g.via(sa, sb)) };
+                if !v.is_empty() {
+                    let mut prev = from.as_str();
+                    for (j, _) in v {
+                        single_track_str.insert(canon(prev, j));
+                        prev = j;
+                    }
+                    single_track_str.insert(canon(prev, to));
+                }
+            }
         }
 
         // Cache de perfil de velocidad por cantón dirigido (una vez; no se recalcula por tren).
         let mut zone_cache: HashMap<(String, String), Vec<SpeedZone>> = HashMap::new();
+        // Trazado real de vía (OSM) si existe; si no, la recta entre estaciones.
+        let geom = track_geometry::global();
         let mut zones_for = |a: &str, b: &str, ca: (f64, f64), cb: (f64, f64)| -> Vec<SpeedZone> {
             let k = (a.to_string(), b.to_string());
             if let Some(z) = zone_cache.get(&k) {
                 return z.clone();
             }
-            let length = infrastructure::haversine_m(ca.0, ca.1, cb.0, cb.1).max(1.0);
+            // El perfil de Vmax se muestrea SOBRE la curva real: la recta puede pasar por encima de
+            // otras vías (y tomar su Vmax) o no tocar ninguna.
+            let (poly, length, ltv_tol) = match geom.and_then(|g| g.get(a, b)) {
+                Some(g) => (g.pts, g.len_m.max(1.0), infrastructure::LTV_TOL_TRACK_M),
+                None => (vec![ca, cb], infrastructure::haversine_m(ca.0, ca.1, cb.0, cb.1).max(1.0), infrastructure::LTV_TOL_CHORD_M),
+            };
             let zones = adif
                 .and_then(|net_adif| {
-                    infrastructure::adif_profile(net_adif, ltv, &[ca, cb], ADIF_STEP_M, ADIF_TOL_M)
+                    infrastructure::adif_profile_ltv_tol(net_adif, ltv, &poly, ADIF_STEP_M, ADIF_TOL_M, ltv_tol)
                 })
                 .map(|p| {
                     p.zones
@@ -659,7 +723,7 @@ impl Engine {
             for w in pts.windows(2) {
                 let ca = (w[0].lat, w[0].lon);
                 let cb = (w[1].lat, w[1].lon);
-                let len = infrastructure::haversine_m(ca.0, ca.1, cb.0, cb.1).max(1.0);
+                let len = canton_len_m(&w[0].id, &w[1].id, ca, cb);
                 cum_l.push(cum_l.last().unwrap() + len);
                 canton_zones.push(zones_for(&w[0].id, &w[1].id, ca, cb));
             }
@@ -684,6 +748,7 @@ impl Engine {
                 delay_s: 0.0,
                 waiting: false,
                 was_waiting: false,
+                held_since: f64::NAN,
             });
         }
 
@@ -740,6 +805,7 @@ impl Engine {
             pax_min: 0.0,
             held_events: 0,
             timeline: Vec::new(),
+            timeline_active: Vec::new(),
             next_sample: cfg.start_sec as f64,
             late_arrivals: Vec::new(),
         }
@@ -811,9 +877,13 @@ impl Engine {
         let mut add_pax = 0.0;
         let mut total_delay = 0.0_f64; // retraso ACUMULADO de la red en este instante (s)
         let mut new_conflicts = 0u64;
+        let mut in_service = 0u32;
         for (idx, t) in trains.iter_mut().enumerate() {
             if !active[idx] {
                 continue;
+            }
+            if t.in_service() {
+                in_service += 1;
             }
             if t.delay_s > 0.0 {
                 let dmin = t.delay_s / 60.0;
@@ -843,6 +913,7 @@ impl Engine {
         // Muestreo de la línea temporal de retraso acumulado (cada SAMPLE_STEP_S de tiempo simulado).
         while now + 1e-9 >= self.next_sample {
             self.timeline.push((self.next_sample as u32, total_delay));
+            self.timeline_active.push(in_service);
             self.next_sample += SAMPLE_STEP_S;
         }
     }
@@ -967,6 +1038,11 @@ impl Engine {
         &self.timeline
     }
 
+    /// Trenes en servicio en cada muestra de [`Engine::timeline`] (mismo índice).
+    pub fn timeline_active(&self) -> &[u32] {
+        &self.timeline_active
+    }
+
     pub fn metrics(&self) -> RunMetrics {
         // Pico del retraso acumulado y su instante, a partir de la línea temporal.
         let (peak_total_delay_s, peak_time) = self
@@ -1086,6 +1162,7 @@ fn avanzar_tren(
         let dwell_ok = now - trains[idx].arrived_at >= trains[idx].dwell_min[k];
         let sched_ok = now >= trains[idx].pts[k].d; // NUNCA sale antes de su hora programada
         if !(dwell_ok && sched_ok) {
+            trains[idx].held_since = f64::NAN; // parado por su dwell/hora, no retenido
             return false;
         }
         // Intentar cruzar la señal de salida (primer bloque del cantón k→k+1 = seq[cb+1]).
@@ -1097,8 +1174,15 @@ fn avanzar_tren(
         let nb = trains[idx].seq[cb + 1].clone();
         if !bloque_entrada(infra, occ, dynp, trains, idx, &nb, now) {
             trains[idx].waiting = true; // salida bloqueada por ocupación
+            // Retenido en el andén con la salida en rojo: pasado el umbral, el retraso vivo es lo que
+            // lleva de más sobre su hora de salida.
+            let t = &mut trains[idx];
+            if marcar_retencion(t, now) {
+                t.delay_s = t.delay_s.max(now - t.pts[k].d);
+            }
             return true;
         }
+        trains[idx].held_since = f64::NAN;
         // Sale: libera el bloque de andén y ocupa el primer bloque del cantón de salida.
         ocupar(occ, dynp, idx, &trains[idx].seq[cb], false);
         trains[idx].cb = cb + 1;
@@ -1227,7 +1311,27 @@ fn avanzar_tren(
             break;
         }
     }
+    // Retenido en plena vía: pasado el umbral, retraso vivo = el de su posición respecto al horario.
+    let t = &mut trains[idx];
+    if held {
+        if marcar_retencion(t, now) {
+            let live = retraso_en_posicion(&t.pts, &t.cum_l, t.canton_idx, t.s, now);
+            t.delay_s = t.delay_s.max(live);
+        }
+    } else {
+        t.held_since = f64::NAN;
+    }
     held
+}
+
+/// Anota el inicio de la retención y dice si ya supera `HOLD_LIVE_DELAY_S` (→ recalcular el retraso
+/// en vivo). Mientras sigue retenido el retraso solo puede crecer; al llegar a la siguiente
+/// estación se vuelve a medir exacto (hora real − llegada programada).
+fn marcar_retencion(t: &mut Train, now: f64) -> bool {
+    if t.held_since.is_nan() {
+        t.held_since = now;
+    }
+    now - t.held_since >= HOLD_LIVE_DELAY_S
 }
 
 // ---- Física de bloques pura (reutilizada de la Fase 1b) ------------------------------------
@@ -1465,11 +1569,7 @@ fn construir_secuencia(pts: &[Pt], cum_l: &[f64], infra: &Infra) -> Vec<Block> {
 }
 
 fn build_infra(net: &Network, trains: &[Train], single_track_str: HashSet<String>) -> Infra {
-    let coord = |id: &str| -> Option<(f64, f64)> {
-        let node = net.node(id)?;
-        let n = &net.graph[node];
-        Some((n.lat?, n.lon?))
-    };
+    let coord = |id: &str| net.coord(id); // estaciones y bifurcaciones
 
     // 1. Internar cada stop_id → nid (índices 0..N contiguos, en orden de primer uso: determinista).
     let mut stop_index: HashMap<String, u32> = HashMap::new();
@@ -1497,9 +1597,11 @@ fn build_infra(net: &Network, trains: &[Train], single_track_str: HashSet<String
             }
             let unica = single_track_str.contains(&canon(&w[0].id, &w[1].id));
             let m = match (coord(&w[0].id), coord(&w[1].id)) {
-                (Some(ca), Some(cb)) => calc_sub_blocks(ca, cb, unica) as u32,
+                (Some(ca), Some(cb)) => calc_sub_blocks_len(canton_len_m(&w[0].id, &w[1].id, ca, cb) / 1000.0, unica) as u32,
                 _ => 1,
             };
+            // Señales extra declaradas en topología (solo vía doble: en vía única manda el testigo).
+            let m = if unica { m } else { m + topology::extra_block_signals(&w[0].id, &w[1].id) };
             sub_blocks.insert((a, b), m);
             edges_from.entry(a).or_default().push(b);
             let ckey = if a < b { (a, b) } else { (b, a) };
@@ -1618,6 +1720,21 @@ mod tests {
         let v = vehicle_for_line("R1"); // R1 → 465
         assert!((v.vmax - 120.0 / 3.6).abs() < 1e-6);
         assert!(v.mass_kg > 150_000.0);
+    }
+
+    #[test]
+    fn retraso_vivo_por_posicion() {
+        let pt = |d: f64, a: f64| Pt { id: String::new(), a, d, lat: 0.0, lon: 0.0, pass: false };
+        // Sale de A a las 1000 s, debe llegar a B a las 1600 s; 3000 m de vía.
+        let pts = vec![pt(1000.0, 0.0), pt(1700.0, 1600.0)];
+        let cum = vec![0.0, 3000.0];
+        // A mitad de vía (1500 m) debía pasar a las 1300 s; retenido ahí a las 2500 s → 1200 s tarde,
+        // = previsión en B: 2500 + 300 s restantes (al ritmo del horario) − 1600.
+        let d = retraso_en_posicion(&pts, &cum, 0, 1500.0, 2500.0);
+        assert!((d - 1200.0).abs() < 1e-9);
+        assert!((d - (2500.0 + 300.0 - 1600.0)).abs() < 1e-9);
+        // Justo en la salida y a su hora: 0.
+        assert!(retraso_en_posicion(&pts, &cum, 0, 0.0, 1000.0).abs() < 1e-9);
     }
 
     #[test]

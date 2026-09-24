@@ -46,6 +46,10 @@ struct GameStation {
     /// para esta estación. Referencia visual para modelar cantones/agujas reales.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     diagrams: Vec<String>,
+    /// Nodo de BIFURCACIÓN fuera de estación (aguja del trazado real), no una estación: el visor no
+    /// lo dibuja como parada ni abre su panel.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    junction: bool,
 }
 
 /// Índice `stop_id -> [rutas de imagen]` de `reference/trenscat/index.json`, si existe.
@@ -111,6 +115,19 @@ struct GameEdge {
     /// frontend colorea el cantón por SUB-TRAMOS (la Vmax varía a lo largo del cantón) en vez de con
     /// un color único, y una LTV se ve en los pocos metros reales que ocupa, no en km enteros.
     zones: Vec<VmaxZone>,
+    /// Semáforos de tramo extra de este cantón (topología): el visor los suma a su regla por
+    /// distancia para dibujar y ocupar los MISMOS sub-bloques que el motor.
+    #[serde(skip_serializing_if = "is_zero")]
+    extra_sig: u32,
+    /// Trazado REAL de vía (polilínea [lat, lon] de A a B, OSM) y su longitud (m). Vacío = el visor
+    /// usa la recta entre estaciones. El trace da la fracción recorrida sobre ESTA longitud.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    geom: Vec<[f64; 2]>,
+    len_m: f64,
+}
+
+fn is_zero(v: &u32) -> bool {
+    *v == 0
 }
 
 /// Una zona de Vmax uniforme dentro de un cantón. `a`/`b` = fracción de la longitud del cantón
@@ -324,10 +341,17 @@ fn edge_vmax_zones(
     const TOL: f64 = 140.0;
     let (Some(&ca), Some(&cb)) = (st_coord.get(from), st_coord.get(to)) else { return Vec::new() };
     let Some(adif) = adif else { return Vec::new() };
+    // Sobre el trazado REAL de vía (OSM) si lo hay: las fracciones a/b de cada zona son entonces
+    // fracciones de la longitud de vía, y el visor las pinta a lo largo de la misma polilínea.
+    // Mismo radio de LTV que el motor: estrecho sobre la vía real, amplio sobre la recta.
+    let (poly, ltv_tol) = match crate::track_geometry::global().and_then(|g| g.get(from, to)) {
+        Some(g) => (g.pts, infrastructure::LTV_TOL_TRACK_M),
+        None => (vec![ca, cb], infrastructure::LTV_TOL_CHORD_M),
+    };
     // Perfil EFECTIVO (con LTV aplicadas) = lo que se dibuja.
-    let Some(eff) = infrastructure::adif_profile(adif, ltv, &[ca, cb], STEP, TOL) else { return Vec::new() };
+    let Some(eff) = infrastructure::adif_profile_ltv_tol(adif, ltv, &poly, STEP, TOL, ltv_tol) else { return Vec::new() };
     // Perfil BASE (Vmax de diseño, sin LTV) para marcar qué zonas están rebajadas por una LTV.
-    let base: Vec<(f64, f64, f64)> = infrastructure::adif_profile(adif, None, &[ca, cb], STEP, TOL)
+    let base: Vec<(f64, f64, f64)> = infrastructure::adif_profile(adif, None, &poly, STEP, TOL)
         .map(|p| p.zones.iter().map(|z| (z.from_m, z.to_m, z.vmax_kmh)).collect())
         .unwrap_or_default();
     let total = eff.zones.last().map(|z| z.to_m).unwrap_or(0.0).max(1.0);
@@ -455,6 +479,7 @@ pub fn network_json(
                 lines: ls,
                 corridors,
                 diagrams,
+                junction: false,
             }
         })
         .collect();
@@ -511,19 +536,77 @@ pub fn network_json(
             }
         }
     }
-    let edges: Vec<GameEdge> = kept
+    // Bifurcaciones fuera de estación: cada cantón A→B que pasa por agujas del trazado real se parte
+    // en A→J…→B; el tramo común A→J lo comparten (y lo pintan) todos los ramales que lo usan.
+    let geom_g = crate::track_geometry::global();
+    let chain = |a: &str, b: &str| -> Vec<String> {
+        let mut nodes = vec![a.to_string()];
+        if let Some(g) = geom_g {
+            nodes.extend(g.via(a, b).iter().map(|(j, _)| j.clone()));
+        }
+        nodes.push(b.to_string());
+        nodes
+    };
+    let mut split: BTreeMap<(String, String), std::collections::BTreeSet<String>> = BTreeMap::new();
+    for ((a, b), lns) in kept {
+        for w in chain(&a, &b).windows(2) {
+            split.entry((w[0].clone(), w[1].clone())).or_default().extend(lns.iter().cloned());
+        }
+    }
+    let mut st_coord = st_coord;
+    let mut junction_lines: BTreeMap<String, std::collections::BTreeSet<String>> = BTreeMap::new();
+    if let Some(g) = geom_g {
+        for ((a, b), lns) in &split {
+            for n in [a, b] {
+                if let Some(j) = g.junction(n) {
+                    st_coord.insert(n.clone(), (j.lat, j.lon));
+                    junction_lines.entry(n.clone()).or_default().extend(lns.iter().cloned());
+                }
+            }
+        }
+        for (id, j) in g.junction_ids() {
+            if let Some(lns) = junction_lines.remove(id) {
+                stations.push(GameStation {
+                    id: id.clone(),
+                    name: j.name.clone(),
+                    lat: j.lat,
+                    lon: j.lon,
+                    tracks: 0,
+                    lines: lns.into_iter().collect(),
+                    corridors: Vec::new(),
+                    diagrams: Vec::new(),
+                    junction: true,
+                });
+            }
+        }
+        stations.sort_by(|a, b| a.id.cmp(&b.id));
+    }
+    let edges: Vec<GameEdge> = split
         .into_iter()
         .map(|((from, to), lines)| {
             let zones = edge_vmax_zones(&st_coord, adif, ltv, &from, &to);
-            GameEdge { from, to, lines: lines.into_iter().collect(), zones }
+            let extra_sig = topology::extra_block_signals(&from, &to);
+            let (geom, len_m) = match crate::track_geometry::global().and_then(|g| g.get(&from, &to)) {
+                Some(g) => (g.pts.iter().map(|p| [p.0, p.1]).collect(), (g.len_m * 10.0).round() / 10.0),
+                None => {
+                    let (a, b) = (st_coord[&from], st_coord[&to]);
+                    (Vec::new(), (haversine_m(a, b) * 10.0).round() / 10.0)
+                }
+            };
+            GameEdge { from, to, lines: lines.into_iter().collect(), zones, extra_sig, geom, len_m }
         })
         .collect();
 
     // Tramos de vía única (de topology), traducidos a pares de stop_id.
+    // (Partidos también en sus bifurcaciones, igual que en el motor.)
     let single_track: Vec<[String; 2]> = topology::single_track_pairs(net)
         .into_iter()
         .map(|(a, b)| [net.graph[a].stop_id.clone(), net.graph[b].stop_id.clone()])
         .filter(|[a, b]| coord(a) && coord(b))
+        .flat_map(|[a, b]| {
+            let nodes = if geom_g.is_some_and(|g| !g.via(&a, &b).is_empty()) { chain(&a, &b) } else { chain(&b, &a) };
+            nodes.windows(2).map(|w| [w[0].clone(), w[1].clone()]).collect::<Vec<_>>()
+        })
         .collect();
 
     // Cizallamientos (de topology), traducidos a pares de cantones por stop_id.
@@ -629,6 +712,30 @@ pub fn schedule_json(net: &Network, optimized: bool, line_filter: Option<&str>) 
 /// cantones reales con puntos de paso sintéticos): la consume tanto la API del juego como el
 /// **motor unificado** (`engine.rs`), de modo que «lo que se ve = lo que se simula en masa» sobre
 /// exactamente el mismo recorrido físico. `optimized = true` aplica los desfases por línea.
+/// Inserta los nodos de BIFURCACIÓN (trazado real de vía) entre cada par de paradas consecutivas:
+/// el tren pasa (sin parar) por la aguja a la hora interpolada por la distancia de vía recorrida.
+/// Así el tramo común estación→bifurcación es el MISMO cantón para todos los ramales que lo usan.
+fn insert_junctions(stops: Vec<GameStop>) -> Vec<GameStop> {
+    let Some(g) = crate::track_geometry::global() else { return stops };
+    let mut out = Vec::with_capacity(stops.len() + 4);
+    for (i, st) in stops.iter().enumerate() {
+        if i > 0 {
+            let prev = &stops[i - 1];
+            let via = g.via(&prev.s, &st.s);
+            if !via.is_empty() {
+                let len = g.len_m(&prev.s, &st.s).unwrap_or(1.0).max(1.0);
+                let span = st.a.saturating_sub(prev.d) as f64;
+                for (j, d) in via {
+                    let t = prev.d + (span * (d / len).clamp(0.0, 1.0)).round() as u32;
+                    out.push(GameStop { s: j.clone(), a: t, d: t, pass: true });
+                }
+            }
+        }
+        out.push(st.clone());
+    }
+    out
+}
+
 pub fn build_schedule(net: &Network, optimized: bool, line_filter: Option<&str>) -> Vec<GameTrain> {
     let service_id = net.dominant_service().unwrap_or_default();
     let offsets = if optimized {
@@ -691,6 +798,7 @@ pub fn build_schedule(net: &Network, optimized: bool, line_filter: Option<&str>)
             }
             stops.push(GameStop { s: st.stop_id.clone(), a: arr, d: dep, pass: false });
         }
+        let stops = insert_junctions(stops);
         trains.push(GameTrain {
             train: svc.train_number.clone(),
             line: display_line(&svc.route_short_name).to_string(),

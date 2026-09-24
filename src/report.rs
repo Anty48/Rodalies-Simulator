@@ -949,12 +949,17 @@ fn document(head: &str, body: &str) -> String {
     format!(
         "<!doctype html>\n<html lang=\"es\">\n<head>\n<meta charset=\"utf-8\">\n\
          <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n\
-         <meta name=\"color-scheme\" content=\"light dark\">\n{THEME_INIT}\n{head}\n</head>\n<body>\n{body}\n</body>\n</html>\n"
+         <meta name=\"color-scheme\" content=\"light dark\">\n{THEME_INIT}\n{I18N_HEAD}\n{head}\n</head>\n<body>\n{body}\n</body>\n</html>\n"
     )
 }
 
 /// Aplica el tema guardado ANTES de pintar el cuerpo (evita el parpadeo de pasar de claro a
 /// oscuro). Lee `rod-theme` (light|dark|auto; por defecto auto = preferencia del sistema).
+/// Capa de idiomas (castellano · català · English): diccionario + motor que traduce el DOM. Va
+/// en TODAS las páginas (y en el juego) para que el idioma elegido en Configuración se respete en
+/// toda la app. En castellano no hace nada.
+const I18N_HEAD: &str = r#"<script src="/game/i18n_dict.js"></script><script src="/game/i18n.js"></script>"#;
+
 const THEME_INIT: &str = r#"<script>
 (function(){try{
   var t=localStorage.getItem('rod-theme')||'auto';
@@ -976,6 +981,14 @@ fn settings_modal() -> String {
           <button data-theme-choice="light">Claro</button>
           <button data-theme-choice="dark">Oscuro</button>
           <button data-theme-choice="auto">Auto</button>
+        </div>
+      </div>
+      <div class="set-row">
+        <label>Idioma</label>
+        <div class="seg" id="langSeg" role="group" aria-label="Idioma" data-no-i18n>
+          <button data-lang-choice="es">Castellano</button>
+          <button data-lang-choice="ca">Català</button>
+          <button data-lang-choice="en">English</button>
         </div>
       </div>
       <p class="muted" style="margin:0">Los horarios (GTFS guardado / nuevo / importado) se eligen en la pantalla previa al lanzar el simulador visual.</p>
@@ -1007,6 +1020,12 @@ const SETTINGS_SCRIPT: &str = r#"<script>
  document.querySelectorAll('#themeSeg button').forEach(b=>b.addEventListener('click',()=>{
    const t=b.dataset.themeChoice; localStorage.setItem('rod-theme',t); applyTheme(t);
  }));
+ // Idioma (castellano · català · English): se guarda en `rod-lang` y vale para toda la app.
+ const curLang=(window.I18N&&I18N.lang)||'es';
+ document.querySelectorAll('#langSeg button').forEach(b=>{
+   b.classList.toggle('active',b.dataset.langChoice===curLang);
+   b.addEventListener('click',()=>{ if(window.I18N&&b.dataset.langChoice!==curLang) I18N.set(b.dataset.langChoice); });
+ });
  // Si el tema es "auto", seguir los cambios del sistema en vivo.
  matchMedia('(prefers-color-scheme:dark)').addEventListener('change',()=>{
    if((localStorage.getItem('rod-theme')||'auto')==='auto') applyTheme('auto');
@@ -1053,6 +1072,7 @@ fn icon(name: &str) -> &'static str {
         "refresh" => r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 11.5a8 8 0 1 0-.8 4.5"/><polyline points="20 4 20 11.5 12.5 11.5"/></svg>"#,
         "back-arrow" => r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="20" y1="12" x2="5" y2="12"/><polyline points="11 6 5 12 11 18"/></svg>"#,
         "download" => r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="3" x2="12" y2="15"/><polyline points="7 10 12 15 17 10"/><path d="M4 20h16"/></svg>"#,
+        "chart" => r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><path d="M6 15c3-9 5-9 7-4s4 4 8-6"/></svg>"#,
         _ => "",
     }
 }
@@ -1327,15 +1347,19 @@ pub fn render_numbers_page() -> String {
 .all-toggle{display:flex;align-items:center;gap:9px;font-size:.84rem;font-weight:600;padding:7px 10px;margin-bottom:6px;border:1px dashed var(--border);border-radius:7px;cursor:pointer}
 .all-toggle input{width:15px;height:15px;accent-color:var(--accent);cursor:pointer}
 .num-tbl{width:100%;border-collapse:collapse;font-size:13px}
-.num-tbl th,.num-tbl td{border-bottom:1px solid var(--border);padding:8px 9px;text-align:right;vertical-align:top;white-space:nowrap}
+.num-tbl th,.num-tbl td{border-bottom:1px solid var(--border);padding:8px 6px;text-align:right;vertical-align:top;white-space:nowrap}
 .num-tbl th{color:var(--muted);font-weight:700;font-size:.7rem;text-transform:uppercase;letter-spacing:.03em;border-bottom:2px solid var(--border);white-space:normal;vertical-align:bottom;line-height:1.25;max-width:92px}
-.num-tbl td:last-child,.num-tbl th:last-child{text-align:left;white-space:normal;min-width:220px;max-width:none}
 .num-tbl td:first-child,.num-tbl th:first-child{text-align:left}
-.inc-cell{line-height:1.4}
-.inc-line{padding:3px 0;border-bottom:1px dashed var(--border)}
-.inc-line:last-child{border-bottom:none}
-.inc-line .eff{color:var(--muted);font-size:11px}
-.inc-line .when{color:var(--muted);font-variant-numeric:tabular-nums}
+.num-tbl td{vertical-align:middle}
+.num-tbl th.act,.num-tbl td.act{text-align:left}
+/* Acciones por run: una fila = una línea (las incidencias y los gráficos se abren en un modal). */
+.row-btn{display:inline-flex;align-items:center;gap:6px;font:600 .78rem var(--sans);padding:6px 10px;border-radius:7px;border:1px solid var(--border);background:var(--panel2);color:var(--text);cursor:pointer;white-space:nowrap;transition:.14s}
+.row-btn:hover:not(:disabled){border-color:var(--accent);color:var(--accent)}
+.row-btn:disabled{opacity:.45;cursor:default}
+.row-btn svg{width:14px;height:14px;flex:0 0 auto}
+.row-acts{display:flex;flex-direction:column;gap:5px;align-items:stretch}
+a.row-btn{text-decoration:none}
+.row-btn .cnt{font-family:var(--mono);background:var(--accent-soft);color:var(--accent);border-radius:5px;padding:0 5px}
 .num-tbl .muted{color:var(--muted)}
 #numLoad{margin:14px auto;max-width:440px}
 </style>
@@ -1388,8 +1412,8 @@ pub fn render_numbers_page() -> String {
         <div id="numLoad" class="rod-load rod-band no-steam" hidden>__SCENE__<div class="rod-load-caption">Simulando la jornada<span class="rod-load-dots" aria-hidden="true"><i></i><i></i><i></i></span></div></div>
         <div class="scroll">
         <table class="num-tbl" id="tbl">
-          <thead><tr><th>Semilla</th><th>Trenes</th><th>Retraso máx (min)</th><th>Pico retenidos</th><th>Final retenidos</th><th>PAX·min</th><th>Incidencias del día</th></tr></thead>
-          <tbody><tr><td class="muted" colspan="7" style="text-align:center;padding:22px">Pulsa «Ejecutar runs» para empezar.</td></tr></tbody>
+          <thead><tr><th>Semilla</th><th>Trenes</th><th>Retraso máx tren (min)</th><th title="Pico del retraso medio por tren en servicio">Pico retraso medio (min)</th><th title="Pico del retraso acumulado de la red (Σ retrasos vivos)">Pico retraso red (min)</th><th>Pico retenidos</th><th>Final retenidos</th><th>PAX·min</th><th class="act">Incidencias del día</th><th class="act">Retrasos</th></tr></thead>
+          <tbody><tr><td class="muted" colspan="10" style="text-align:center;padding:22px">Pulsa «Ejecutar runs» para empezar.</td></tr></tbody>
         </table>
         </div>
       </section>
@@ -1404,7 +1428,7 @@ pub fn render_numbers_page() -> String {
     // plantilla no la desmarca; borrar/añadir desde otro sitio no desplaza la selección).
     let TPLS=[], SEL=null;
     const SELKEY="rod-sel-numeros";
-    const rateTxt=t=>`${Math.round(t.prob*100)} % cada ${(Math.round(t.every_h*100)/100).toLocaleString("es-ES")} h`;
+    const rateTxt=t=>`${Math.round(t.prob*100)} % cada ${(Math.round(t.every_h*100)/100).toLocaleString((window.LOCALE?LOCALE():"es-ES"))} h`;
     function loadSel(){
       try{
         const v=JSON.parse(localStorage.getItem(SELKEY));
@@ -1446,11 +1470,13 @@ pub fn render_numbers_page() -> String {
     loadTpls();
 
     // Selector de horarios (igual que el visual): guardado (con su fecha) / nuevo / importar.
+    let GTFS_DATE="";   // fecha del GTFS cargado (se adjunta a cada tanda para "ver en simulador")
     async function infoGtfs(){
       try{
         const j=await (await fetch("/api/gtfs/info")).json();
+        GTFS_DATE=j.date||"";
         const p=(j.date||"").split("-");
-        $("gtfsSavedInfo").textContent=(j.date?`Del ${p[2]}/${p[1]}/${p[0]}`:"Fecha desconocida")+` · ${j.n_lines} líneas · ${j.n_trips.toLocaleString("es-ES")} viajes (por defecto)`;
+        $("gtfsSavedInfo").textContent=(j.date?`Del ${p[2]}/${p[1]}/${p[0]}`:"Fecha desconocida")+` · ${j.n_lines} líneas · ${j.n_trips.toLocaleString((window.LOCALE?LOCALE():"es-ES"))} viajes (por defecto)`;
       }catch(e){ $("gtfsSavedInfo").textContent="El que está cargado ahora (por defecto)"; }
     }
     infoGtfs();
@@ -1489,22 +1515,26 @@ pub fn render_numbers_page() -> String {
       const chosen=TPLS.filter(t=>SEL.has(t.id));
       const selQ = "&sel="+chosen.map(t=>encodeURIComponent(t.id)).join(",");
       // Resultados de ESTA tanda (para exportar): runs + plantillas en juego + rango de semillas.
-      LAST={runs:[],templates:chosen.map(t=>({motivo:t.motivo,effect:t.effect,dur_min:t.dur_min,prob:t.prob,every_h:t.every_h})),a,b};
+      LAST={runs:[],templates:chosen.map(t=>({motivo:t.motivo,effect:t.effect,dur_min:t.dur_min,prob:t.prob,every_h:t.every_h})),a,b,
+        selIds:chosen.map(t=>t.id),gtfs:GTFS_DATE};
       $("dlBtn").disabled=true;
       for(let s=a;s<=b;s++){
         $("prog").textContent="Ejecutando semilla "+s+"…";
         try{
           const r=await (await fetch("/api/simulate?seed="+s+selQ)).json();
-          LAST.runs.push(r);
-          const esc=x=>String(x).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
-          const inc=(r.incidents||[]).length
-            ? (r.incidents).map(i=>`<div class="inc-line"><b>${esc(i.motivo)}</b> <span class="eff">${EFF[i.effect]||i.effect}</span><br><span class="where">${esc(i.from_name||i.from)} → ${esc(i.to_name||i.to)}</span> · <span class="when">${i.t0_hm||Math.floor(i.t0/3600)+"h"}–${i.t1_hm||""}</span></div>`).join("")
-            : '<span class="muted">— sin incidencias hoy</span>';
+          const k=LAST.runs.push(r)-1;
+          const ni=(r.incidents||[]).length;
+          // Picos en HORAS DE SERVICIO (≥25 % del máximo de trenes circulando, igual que el
+          // análisis): al cierre, con 3 trenes, la media salta con cualquier llegada tarde.
+          const pk=a=>window.DelayTrack&&r.track?DelayTrack.servicePeak(r.track,a).v:null;
+          const f=(v,d)=>v==null?"–":v.toLocaleString((window.LOCALE?LOCALE():"es-ES"),{minimumFractionDigits:d,maximumFractionDigits:d});
           const tr=document.createElement("tr");
-          tr.innerHTML=`<td>${s}</td><td>${r.n_trains}</td><td>${r.max_delay_min.toFixed(0)}</td><td>${r.peak_waiting}</td><td>${r.final_waiting}</td><td>${Math.round(r.pax_min).toLocaleString()}</td><td class="inc-cell">${inc}</td>`;
+          tr.innerHTML=`<td>${s}</td><td>${r.n_trains}</td><td>${r.max_delay_min.toFixed(0)}</td><td>${f(pk(r.track&&r.track.mean),2)}</td><td>${f(pk(r.track&&r.track.total),0)}</td><td>${r.peak_waiting}</td><td>${r.final_waiting}</td><td>${Math.round(r.pax_min).toLocaleString((window.LOCALE?LOCALE():"es-ES"))}</td>
+            <td class="act"><button class="row-btn" data-inc="${k}" ${ni?"":"disabled"}>__ALERT__ Incidencias <span class="cnt">${ni}</span></button></td>
+            <td class="act"><div class="row-acts"><button class="row-btn" data-trk="${k}">__CHART__ Seguimiento</button><a class="row-btn" target="_blank" rel="noopener" title="Abre el simulador visual con esta misma semilla, incidencias y horarios: solo queda pulsar Confirmar" href="/game?seed=${s}&sel=${encodeURIComponent(LAST.selIds.join(","))}&from=numeros${LAST.gtfs?"&gtfs="+LAST.gtfs:""}">__PLAY__ Ver en simulador</a></div></td>`;
           tb.appendChild(tr);
         }catch(e){
-          const tr=document.createElement("tr"); tr.innerHTML=`<td>${s}</td><td colspan="6">error</td>`; tb.appendChild(tr);
+          const tr=document.createElement("tr"); tr.innerHTML=`<td>${s}</td><td colspan="9">error</td>`; tb.appendChild(tr);
         }
       }
       $("prog").textContent="Hecho.";
@@ -1512,6 +1542,15 @@ pub fn render_numbers_page() -> String {
       $("runBtn").disabled=false;
       $("dlBtn").disabled=!LAST.runs.length;
     };
+
+    // Botones por run: incidencias del día (por gravedad) y seguimiento de retrasos (gráficos +
+    // análisis de recuperación). Delegación en la tabla: las filas se crean conforme llegan runs.
+    $("tbl").addEventListener("click",e=>{
+      const b=e.target.closest("button[data-inc],button[data-trk]"); if(!b||!LAST||!window.DelayTrack) return;
+      const r=LAST.runs[+(b.dataset.inc??b.dataset.trk)]; if(!r) return;
+      const title="Semilla "+r.seed;
+      if(b.dataset.inc!=null) DelayTrack.openIncidents(r,{title}); else DelayTrack.open(r,{title});
+    });
 
     // ── Descargar resultados (Excel / PDF, con o sin los horarios usados) ──
     let LAST=null;
@@ -1527,7 +1566,7 @@ pub fn render_numbers_page() -> String {
       $("prog").textContent="Generando "+(fmt==="pdf"?"PDF":"Excel")+(hor?" con horarios":"")+"…";
       $("dlBtn").disabled=true;
       try{
-        const res=await fetch(`/api/runs/export?fmt=${fmt}&horarios=${hor?1:0}`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({runs:LAST.runs,templates:LAST.templates})});
+        const res=await fetch(`/api/runs/export?fmt=${fmt}&horarios=${hor?1:0}`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({runs:LAST.runs.map(({track,analysis,...r})=>r),templates:LAST.templates})});
         if(!res.ok) throw new Error(await res.text());
         const blob=await res.blob(), url=URL.createObjectURL(blob);
         const a=document.createElement("a");
@@ -1539,10 +1578,13 @@ pub fn render_numbers_page() -> String {
       finally{ $("dlBtn").disabled=false; }
     });
   })();
-  </script>"##;
-    // Incrusta la escena del tren pixel y los iconos SVG (play / descarga).
+  </script>
+  <script src="/game/delay_track.js"></script>"##;
+    // Incrusta la escena del tren pixel y los iconos SVG (play / descarga / alerta / gráfico).
     let body = body
         .replace("__SCENE__", TRAIN_SCENE)
+        .replace("__ALERT__", icon("warning"))
+        .replace("__CHART__", icon("chart"))
         .replace("__PLAY__", icon("play"))
         .replace("__DL__", icon("download"));
     document(&head, &body)
@@ -1628,7 +1670,7 @@ pub fn render_incidents_page() -> String {
   const EFF={red_one:"Señal roja (1 sentido)",red_both:"Señal roja (2 sentidos)",single:"Tramo → vía única"};
   const esc=x=>String(x).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");
   let TPLS=[], editId=null, dayH=19;   // duración de la jornada (h): de la 1ª salida a las 24:00
-  const hFmt=h=>(Math.round(h*100)/100).toLocaleString("es-ES");
+  const hFmt=h=>(Math.round(h*100)/100).toLocaleString((window.LOCALE?LOCALE():"es-ES"));
   // Nº de secciones y esperanza de incidencias/día con la MISMA regla que el motor
   // (engine::n_sections): nº entero de secciones iguales más cercano a jornada/X, mínimo 1.
   function rate(prob, every){
@@ -1639,7 +1681,7 @@ pub fn render_incidents_page() -> String {
   function paintRate(){
     const p=Math.min(100,Math.max(0,+$("fProb").value||0))/100, X=Math.max(0.25,+$("fEvery").value||24);
     const r=rate(p,X);
-    $("rateBox").innerHTML=`En una jornada de <b>${hFmt(dayH)} h</b>: <b>${r.n}</b> tirada${r.n===1?"":"s"} de dados (secciones iguales de ${hFmt(dayH/r.n)} h) → de media <b>${r.esperadas.toLocaleString("es-ES",{maximumFractionDigits:2})}</b> incidencia${r.esperadas===1?"":"s"} al día.`;
+    $("rateBox").innerHTML=`En una jornada de <b>${hFmt(dayH)} h</b>: <b>${r.n}</b> tirada${r.n===1?"":"s"} de dados (secciones iguales de ${hFmt(dayH/r.n)} h) → de media <b>${r.esperadas.toLocaleString((window.LOCALE?LOCALE():"es-ES"),{maximumFractionDigits:2})}</b> incidencia${r.esperadas===1?"":"s"} al día.`;
   }
   ["fProb","fEvery"].forEach(id=>$(id).addEventListener("input",paintRate));
 
@@ -1666,13 +1708,13 @@ pub fn render_incidents_page() -> String {
     ul.innerHTML=TPLS.map(t=>{
       const r=rate(t.prob,t.every_h);
       return `<li class="tpl-card${t.id===editId?" sel":""}"><div><b>${esc(t.motivo||"(sin motivo)")}</b>
-        <div class="meta">${EFF[t.effect]||t.effect} · ${t.dur_min} min · <span class="rate">${rateTxt(t)}</span> · ≈ ${r.esperadas.toLocaleString("es-ES",{maximumFractionDigits:2})}/día</div></div>
+        <div class="meta">${EFF[t.effect]||t.effect} · ${t.dur_min} min · <span class="rate">${rateTxt(t)}</span> · ≈ ${r.esperadas.toLocaleString((window.LOCALE?LOCALE():"es-ES"),{maximumFractionDigits:2})}/día</div></div>
         <div class="acts"><button class="icon-act" data-edit="${esc(t.id)}">Editar</button><button class="icon-act del" data-del="${esc(t.id)}">Eliminar</button></div></li>`;
     }).join("");
     ul.querySelectorAll("[data-edit]").forEach(b=>b.onclick=()=>startEdit(b.dataset.edit));
     ul.querySelectorAll("[data-del]").forEach(b=>b.onclick=()=>{
       const t=TPLS.find(x=>x.id===b.dataset.del); if(!t) return;
-      if(!confirm(`¿Eliminar la plantilla «${t.motivo}»? Se quita para los dos modos.`)) return;
+      if(!confirm((window.I18N?I18N.t("¿Eliminar la plantilla?"):"¿Eliminar la plantilla?")+` «${t.motivo}» — `+(window.I18N?I18N.t("Se quita para los dos modos."):"Se quita para los dos modos."))) return;
       TPLS=TPLS.filter(x=>x.id!==t.id); if(editId===t.id) resetForm();
       save("Plantilla eliminada.");
     });

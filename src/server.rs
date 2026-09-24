@@ -184,6 +184,7 @@ async fn handle(mut stream: TcpStream, state: Arc<ServerState>) -> std::io::Resu
         }
         // Exportación de los resultados de /numeros (xlsx|pdf, con o sin horarios usados).
         "/api/runs/export" if is_post => export_runs(&state, query, &body),
+        "/api/recovery/fit" if is_post => ("200 OK", "application/json", recovery_fit_json(&body).into_bytes()),
         "/incidencias" | "/incidents" => ("200 OK", "text/html", report::render_incidents_page().into_bytes()),
         "/api/gtfs/info" => ("200 OK", "application/json", gtfs_info_json(&state).into_bytes()),
         "/api/gtfs/upload" if is_post => {
@@ -488,9 +489,11 @@ fn simulate_json(state: &ServerState, query: &str) -> String {
                 "t1": i.t1,
                 "t0_hm": hm(i.t0),
                 "t1_hm": hm(i.t1),
+                "impact_min": crate::recovery::incident_impact_min(eng.timeline(), i.t0, i.t1),
             })
         })
         .collect();
+    let (track, analysis) = delay_track_json(&eng);
     serde_json::json!({
         "seed": seed,
         "n_trains": m.n_trains,
@@ -501,8 +504,41 @@ fn simulate_json(state: &ServerState, query: &str) -> String {
         "final_waiting": m.final_waiting,
         "pax_min": m.pax_min,
         "incidents": incidents,
+        "track": track,
+        "analysis": analysis,
     })
     .to_string()
+}
+
+/// Análisis de un tramo MANUAL (herramienta de selección del seguimiento de retrasos). Cuerpo
+/// JSON `{total:[min…], active:[trenes…], i0, i1}` = las series de la run que ya tiene el navegador
+/// + el tramo marcado. Misma matemática que la detección automática (`recovery::analyze_manual`).
+fn recovery_fit_json(body: &[u8]) -> String {
+    #[derive(serde::Deserialize)]
+    struct Req {
+        total: Vec<f64>,
+        active: Vec<u32>,
+        i0: usize,
+        i1: usize,
+    }
+    match serde_json::from_slice::<Req>(body) {
+        Ok(r) => match crate::recovery::analyze_manual(&r.total, &r.active, r.i0, r.i1) {
+            Ok(p) => serde_json::json!({ "ok": true, "peak": p }).to_string(),
+            Err(e) => serde_json::json!({ "ok": false, "error": e }).to_string(),
+        },
+        Err(e) => serde_json::json!({ "ok": false, "error": format!("Petición inválida: {e}") }).to_string(),
+    }
+}
+
+/// Seguimiento de retrasos de una jornada ya corrida: series por minuto (retraso medio por tren y
+/// acumulado de la red) + análisis de recuperación de los picos de cada serie (recovery.rs).
+fn delay_track_json(eng: &crate::engine::Engine) -> (serde_json::Value, serde_json::Value) {
+    let tr = crate::recovery::delay_track(eng.timeline(), eng.timeline_active());
+    // Se ajusta el retraso MEDIO; el acumulado (= N·medio) se contrasta por integrales en cada pico.
+    let analysis = serde_json::json!({
+        "mean": crate::recovery::analyze_track(eng.timeline(), eng.timeline_active()),
+    });
+    (serde_json::to_value(&tr).unwrap_or_default(), analysis)
 }
 
 /// Trace de la jornada (posición/velocidad por tren, muestreado) para el reproductor visual.
@@ -551,12 +587,16 @@ fn trace_json(state: &ServerState, query: &str) -> String {
                 "to_name": net_guard.stop_name(&i.to),
                 "t0": i.t0,
                 "t1": i.t1,
+                "impact_min": crate::recovery::incident_impact_min(eng.timeline(), i.t0, i.t1),
             })
         })
         .collect();
+    let (track, analysis) = delay_track_json(&eng);
     let mut v = serde_json::to_value(&trace).unwrap_or_else(|_| serde_json::json!({}));
     if let Some(obj) = v.as_object_mut() {
         obj.insert("incidents".into(), serde_json::json!(incidents));
+        obj.insert("track".into(), track);
+        obj.insert("analysis".into(), analysis);
     }
     v.to_string()
 }

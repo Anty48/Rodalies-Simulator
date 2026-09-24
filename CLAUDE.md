@@ -41,6 +41,16 @@ To (re)generate `./data/gtfs`, place the national GTFS feed in `./raw/fomento_tr
 run `bash scripts/prep_gtfs.sh` — it filters the feed to Rodalies de Catalunya
 (`route_short_name` starting with `R`).
 
+Optional but recommended: `python scripts/fetch_osm_track.py` (re)builds
+`processed/adif/track_geometry.json` — the REAL track polyline + length of every canton, routed on
+the OSM rail graph with a turn-angle constraint (`src/track_geometry.rs`). Without it the engine
+measures cantons in a straight line (e.g. França→Passeig de Gràcia 1,9 km instead of 4,9 km).
+Re-run it after a GTFS update that adds new station pairs.
+
+UI languages (es/ca/en): `game/web/i18n.js` translates the rendered DOM using
+`game/web/i18n_dict.js` (Spanish source text → [ca, en], numbers as `{n}`). New UI text = add an
+entry; find missing ones with `I18N.missing` in the browser console with English selected.
+
 ## Architecture
 
 Discrete-event railway simulator whose entire network is built **dynamically from GTFS** at

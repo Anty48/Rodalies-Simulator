@@ -5,6 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="dark">
 <title>Rodalies · CTC — Simulador de red</title>
+<script src="/game/i18n_dict.js"></script>
+<script src="/game/i18n.js"></script>
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -396,6 +398,7 @@
         <div class="preday-kicker"><span class="ic" aria-hidden="true"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="2.5" width="14" height="15.5" rx="3.5"/><path d="M5 11h14"/><path d="M8.5 6.5h7"/><circle cx="9" cy="14.5" r="1"/><circle cx="15" cy="14.5" r="1"/><line x1="8" y1="18" x2="6" y2="21.5"/><line x1="16" y1="18" x2="18" y2="21.5"/></svg></span> Planificación de la jornada</div>
         <h2>Antes de empezar la jornada</h2>
         <p class="hint">Elige incidencias, semilla, horarios y desde qué hora quieres verla. Para ir rápido, pulsa <b>Confirmar</b> sin tocar nada.</p>
+        <div class="pre-from" id="preFrom" hidden></div>
       </div>
       <img class="preday-renfe" src="/game/lines/renfe_logo.png" alt="Renfe">
     </header>
@@ -462,6 +465,7 @@
     <div class="preday-kicker"><span class="ic" aria-hidden="true"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="2.5" width="14" height="15.5" rx="3.5"/><path d="M5 11h14"/><path d="M8.5 6.5h7"/><circle cx="9" cy="14.5" r="1"/><circle cx="15" cy="14.5" r="1"/><line x1="8" y1="18" x2="6" y2="21.5"/><line x1="16" y1="18" x2="18" y2="21.5"/></svg></span> Balance del servicio</div>
     <h2>Fin de la jornada</h2>
     <div id="finStats"></div>
+    <button id="finSeguimiento" class="btn ghost block fin-track"><span class="ic"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><path d="M6 15c3-9 5-9 7-4s4 4 8-6"/></svg></span> Seguimiento de retrasos</button>
     <div class="btn-row">
       <button id="finRepetir" class="btn"><span class="ic"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 11.5a8 8 0 1 0-.8 4.5"/><polyline points="20 4 20 11.5 12.5 11.5"/></svg></span> Repetir el día</button>
       <a class="btn ghost" href="/">Menú principal</a>
@@ -469,6 +473,7 @@
   </div>
 </div>
 
+<script src="/game/delay_track.js"></script>
 <script src="/game/app.js"></script>
 </body>
 </html>

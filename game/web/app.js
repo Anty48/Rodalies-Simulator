@@ -59,9 +59,9 @@ function distKm(a, b) {
 // SIGNAL_SPACING_KM, ACOTADO a [0..maxSig] (maxSig = 3, o 5 si el tramo es muy largo). m sub-bloques
 // ⇒ m-1 señales de tramo. Se reduce m si algún bloque quedaría más corto que MARGIN (señal pegada
 // al andén). Independiente del nº de líneas: la densidad la fija la longitud, no el tráfico.
-function calcSubBlocks(a, b, unica) {
+function calcSubBlocks(a, b, unica, lenM) {
   if (unica || !a || !b) return 1;
-  const d = distKm(a, b);
+  const d = lenM ? lenM / 1000 : distKm(a, b);   // longitud de VÍA real (mismo dato que el motor)
   const maxSig = d > 7 ? 5 : 3;
   let signals = Math.max(0, Math.min(maxSig, Math.round(d / SIGNAL_SPACING_KM)));
   let m = signals + 1;
@@ -89,6 +89,7 @@ function lineImg(line, cls) {
 const S = {
   net: null, trains: [], stationById: new Map(), edgeLines: new Map(),
   edgeZones: new Map(),    // key(a,b) -> [{a,b,v,ltv}…] perfil de Vmax por zonas del cantón
+  edgeGeom: new Map(),     // key(a,b) -> {pts:[[lat,lon]…], cum:[…]} trazado REAL de vía (OSM), ambos sentidos
   vmaxView: false,         // ¿mapa coloreado por Vmax en vez de por línea?
   dayIncidents: [],        // incidencias del día (roll del motor + lanzadas), para el registro/cajón
   simT: DIA_INICIO, speedKey: "PAUSA", speed: 0,
@@ -114,15 +115,24 @@ const S = {
 // INDEPENDIENTES de líneas, cada uno con SU vía principal por lado (dos líneas que no se
 // estorban → dos vías principales por dirección). Config del lado juego (el GTFS no lo trae);
 // Montcada-Bifurcació ya viene con corredores del backend.
+// Cada corredor: lista de líneas, u objeto {lines, tracks?, terminal?}: `tracks` fija cuántas vías
+// tiene (si no, reparto equitativo); `terminal` = cabecera SIN vía principal propia: sus trenes dan
+// la vuelta / aparcan en las vías NO principales (que comparten con la flota que pernocta).
 const CORREDORES = {
-  "71801": [["R2", "R2N", "R2S"], ["R1", "R4"], ["R11", "R13", "R14", "R15", "R16", "R17"]], // Barcelona-Sants
+  // Barcelona-Sants: R2 y regionales comparten las MISMAS vías principales (usuario 2026-09-24).
+  "71801": [["R2", "R2N", "R2S", "R11", "R13", "R14", "R15", "R16", "R17"], ["R1", "R4"]],
   "79009": [["R1", "R11"], ["R2", "R2N"]],   // Barcelona El Clot
   "72210": [["R4"], ["R8"]],                 // Castellbisbal
   "72503": [["R7"], ["R8"]],                 // Cerdanyola Universitat
+  // Sant Vicenç de Calders (14 vías): regionales (menos R13) por un par de principales, la R13 por
+  // otro par, y R2S/R4 —su cabecera— dan la vuelta y aparcan en las no principales.
+  "71600": [{ lines: ["R14", "R15", "R16", "R17"], tracks: 2 }, { lines: ["R13"], tracks: 2 }, { lines: ["R2S", "R4"], terminal: true }],
+  // La Plana-Picamoixons: 4 vías, todas principales: 2 de la R13 (Valls) y 2 de la R14.
+  "73100": [{ lines: ["R13"], tracks: 2 }, { lines: ["R14", "RT1"], tracks: 2 }],
 };
 // Grupos de corredor de una estación (config JS, o los del backend, o uno solo por defecto).
 function corredoresDe(stId, st) {
-  if (CORREDORES[stId]) return CORREDORES[stId].map((lines) => ({ lines }));
+  if (CORREDORES[stId]) return CORREDORES[stId].map((c) => (Array.isArray(c) ? { lines: c } : c));
   if (st && st.corridors && st.corridors.length) return st.corridors.map((c) => ({ lines: c.lines }));
   return [{ lines: st ? st.lines : [] }];
 }
@@ -173,6 +183,14 @@ async function cargarRed() {
     // Perfil de Vmax por zonas del cantón (para la vista "mapa por velocidad máxima").
     if (e.zones) S.edgeZones.set(key(e.from, e.to), e.zones);
   }
+  // Trazado REAL de vía (polilínea OSM del motor): se precalcula UNA vez la distancia acumulada de
+  // cada cantón en los dos sentidos; por fotograma solo se hace una búsqueda binaria por tren.
+  S.edgeGeom.clear();
+  for (const e of S.net.edges) {
+    if (!e.geom || e.geom.length < 2) continue;
+    S.edgeGeom.set(key(e.from, e.to), geomIndex(e.geom));
+    if (!S.edgeGeom.has(key(e.to, e.from))) S.edgeGeom.set(key(e.to, e.from), geomIndex(e.geom.slice().reverse()));
+  }
 
   // Vía única real: bastón/testigo — ambos sentidos comparten la MISMA vía física, así que
   // se indexan por clave canónica no dirigida (ver `resKey`).
@@ -192,7 +210,9 @@ async function cargarRed() {
   S.subBlocks.clear();
   for (const e of S.net.edges) {
     const a = S.stationById.get(e.from), b = S.stationById.get(e.to);
-    S.subBlocks.set(key(e.from, e.to), calcSubBlocks(a, b, S.singleTrack.has(canon(e.from, e.to))));
+    // + semáforos extra de topología (`extra_sig`, mismo dato que usa el motor Rust).
+    const unica = S.singleTrack.has(canon(e.from, e.to));
+    S.subBlocks.set(key(e.from, e.to), calcSubBlocks(a, b, unica, e.len_m) + (unica ? 0 : e.extra_sig || 0));
   }
 
   // Trazado por CANTONES (ver `dibujarLineas`): franja gris de fondo + color; vía doble = dos
@@ -203,6 +223,7 @@ async function cargarRed() {
   // Estaciones.
   stationLayer.clearLayers();
   for (const s of S.stationById.values()) {
+    if (s.junction) continue;   // bifurcación fuera de estación (aguja): no es una parada
     const kv = s.tracks >= 4;
     const m = L.circleMarker([s.lat, s.lon], { radius: kv ? 5 : 3, color: "#fff", weight: 1, fillColor: kv ? "#830065" : "#26272d", fillOpacity: .95 });
     m.bindTooltip(`${s.name} · ${s.tracks} vías · ${s.lines.join(",")}`);
@@ -225,24 +246,80 @@ function perpOffset(a, b) {
   const dLat = b.lat - a.lat, dLon = b.lon - a.lon, len = Math.hypot(dLat, dLon) || 1;
   return [(dLon / len) * TRACK_OFFSET, -(dLat / len) * TRACK_OFFSET];
 }
+// ---- Trazado REAL de la vía (curvas) -------------------------------------------------------
+// El motor mide cada cantón sobre la polilínea OSM de la vía y el trace da la FRACCIÓN recorrida
+// sobre esa longitud: aquí se convierte en punto + rumbo sobre la misma polilínea, así el tren va
+// por la curva real (no por la recta entre estaciones). Distancias en plano local (cos lat): basta
+// para fracciones proporcionales dentro de un cantón.
+function geomIndex(pts) {
+  const cum = [0], k = Math.cos(pts[0][0] * Math.PI / 180);
+  for (let i = 1; i < pts.length; i++) cum.push(cum[i - 1] + Math.hypot(pts[i][0] - pts[i - 1][0], (pts[i][1] - pts[i - 1][1]) * k));
+  return { pts, cum };
+}
+// Polilínea del cantón a→b: la real si existe; si no, la recta entre estaciones.
+function viaPts(aId, bId) {
+  const g = S.edgeGeom.get(key(aId, bId));
+  if (g) return g.pts;
+  const A = S.stationById.get(aId), B = S.stationById.get(bId);
+  return A && B ? [[A.lat, A.lon], [B.lat, B.lon]] : [];
+}
+// Punto a la fracción f∈[0,1] de la vía a→b + rumbo local (grados desde el norte) + desplazamiento
+// perpendicular a la derecha del sentido a→b (para la vía de ese sentido en tramo doble).
+function puntoEnVia(aId, bId, f) {
+  const g = S.edgeGeom.get(key(aId, bId));
+  let p0, p1, t;
+  if (g) {
+    const cum = g.cum, L = cum[cum.length - 1], d = Math.max(0, Math.min(1, f)) * L;
+    let lo = 0, hi = cum.length - 1;
+    while (hi - lo > 1) { const m = (lo + hi) >> 1; if (cum[m] <= d) lo = m; else hi = m; }
+    p0 = g.pts[lo]; p1 = g.pts[hi];
+    t = cum[hi] > cum[lo] ? (d - cum[lo]) / (cum[hi] - cum[lo]) : 0;
+  } else {
+    const A = S.stationById.get(aId), B = S.stationById.get(bId);
+    if (!A || !B) return null;
+    p0 = [A.lat, A.lon]; p1 = [B.lat, B.lon]; t = Math.max(0, Math.min(1, f));
+  }
+  const pos = [p0[0] + (p1[0] - p0[0]) * t, p0[1] + (p1[1] - p0[1]) * t];
+  const a = { lat: p0[0], lon: p0[1] }, b = { lat: p1[0], lon: p1[1] };
+  return { pos, brg: bearing(a, b), off: perpOffset(a, b) };
+}
+// Polilínea desplazada `lado`·TRACK_OFFSET a la derecha (vía de un sentido en tramo doble): cada
+// vértice se mueve según la normal media de sus dos segmentos, para que las curvas no se quiebren.
+function desplazarVia(pts, lado) {
+  if (pts.length < 2) return pts;
+  const nrm = (p, q) => { const dLat = q[0] - p[0], dLon = q[1] - p[1], l = Math.hypot(dLat, dLon) || 1; return [dLon / l, -dLat / l]; };
+  return pts.map((p, i) => {
+    const n0 = nrm(pts[Math.max(0, i - 1)], pts[Math.max(1, i)]), n1 = nrm(pts[Math.min(i, pts.length - 2)], pts[Math.min(i + 1, pts.length - 1)]);
+    let nx = n0[0] + n1[0], ny = n0[1] + n1[1]; const l = Math.hypot(nx, ny) || 1; nx /= l; ny /= l;
+    return [p[0] + nx * TRACK_OFFSET * lado, p[1] + ny * TRACK_OFFSET * lado];
+  });
+}
+// Trozo de la vía a→b entre las fracciones fa y fb (para colorear zonas de Vmax sobre la curva).
+function tramoVia(aId, bId, fa, fb) {
+  const g = S.edgeGeom.get(key(aId, bId));
+  if (!g) { const p = puntoEnVia(aId, bId, fa), q = puntoEnVia(aId, bId, fb); return p && q ? [p.pos, q.pos] : []; }
+  const L = g.cum[g.cum.length - 1], da = fa * L, db = fb * L, out = [puntoEnVia(aId, bId, fa).pos];
+  for (let i = 0; i < g.pts.length; i++) if (g.cum[i] > da && g.cum[i] < db) out.push(g.pts[i]);
+  out.push(puntoEnVia(aId, bId, fb).pos);
+  return out;
+}
 // Dibuja una vía: una FRANJA gris oscura de fondo (para que el color resalte sobre el satélite al
 // hacer zoom) y encima el trazo de color de la línea. Vía única = trazo discontinuo (bastón).
-function trazarVia(p0, p1, color, unica, entry) {
-  const casing = L.polyline([p0, p1], { pane: "trackCasing", color: "#050507", weight: unica ? 8 : 9, opacity: 0.72, lineCap: "round" }).addTo(lineLayer);
-  const linea = L.polyline([p0, p1], { pane: "trackLine", color, weight: unica ? 2.5 : 3, opacity: 0.95, dashArray: unica ? "6,5" : null, lineCap: "round" }).addTo(lineLayer);
+function trazarVia(pts, color, unica, entry) {
+  const casing = L.polyline(pts, { pane: "trackCasing", color: "#050507", weight: unica ? 8 : 9, opacity: 0.72, lineCap: "round", lineJoin: "round" }).addTo(lineLayer);
+  const linea = L.polyline(pts, { pane: "trackLine", color, weight: unica ? 2.5 : 3, opacity: 0.95, dashArray: unica ? "6,5" : null, lineCap: "round", lineJoin: "round" }).addTo(lineLayer);
   entry.casing.push(casing); entry.color.push(linea);
 }
 // Dibuja un cantón en la vista Vmax: casing gris + un segmento de color por cada ZONA de Vmax del
 // perfil ADIF (los sub-tramos varían de color a lo largo del cantón; una LTV ocupa solo sus metros
 // reales, resaltada con color brillante y trazo más grueso). Sin datos → gris.
-function trazarViaVmax(a, b, zones, entry) {
-  const casing = L.polyline([[a.lat, a.lon], [b.lat, b.lon]], { pane: "trackCasing", color: "#050507", weight: 9, opacity: 0.72, lineCap: "round" }).addTo(lineLayer);
+function trazarViaVmax(aId, bId, zones, entry) {
+  const casing = L.polyline(viaPts(aId, bId), { pane: "trackCasing", color: "#050507", weight: 9, opacity: 0.72, lineCap: "round", lineJoin: "round" }).addTo(lineLayer);
   entry.casing.push(casing);
   const zs = (zones && zones.length) ? zones : [{ a: 0, b: 1, v: 0, ltv: false }];
   for (const z of zs) {
-    const p0 = [a.lat + (b.lat - a.lat) * z.a, a.lon + (b.lon - a.lon) * z.a];
-    const p1 = [a.lat + (b.lat - a.lat) * z.b, a.lon + (b.lon - a.lon) * z.b];
-    const line = L.polyline([p0, p1], { pane: "trackLine", color: vmaxColor(z), weight: z.ltv ? 5.5 : 3.2, opacity: 0.98, lineCap: "butt" }).addTo(lineLayer);
+    // Las fracciones a/b de la zona son de la longitud de VÍA → se pintan sobre la curva real.
+    const line = L.polyline(tramoVia(aId, bId, z.a, z.b), { pane: "trackLine", color: vmaxColor(z), weight: z.ltv ? 5.5 : 3.2, opacity: 0.98, lineCap: "butt" }).addTo(lineLayer);
     entry.color.push(line);
   }
 }
@@ -276,15 +353,16 @@ function dibujarLineas() {
     const entry = { lines, unica, canon: c, casing: [], color: [] };   // para el aislado visual (chrome UI)
     if (S.vmaxView) {
       // Vista Vmax: una sola línea centrada, coloreada por SUB-TRAMOS según el perfil ADIF del cantón.
-      trazarViaVmax(a, b, S.edgeZones.get(key(e.from, e.to)), entry);
+      trazarViaVmax(e.from, e.to, S.edgeZones.get(key(e.from, e.to)), entry);
     } else {
       const color = colorLinea(lineaDominante(lines));
+      const pts = viaPts(e.from, e.to);    // trazado real de vía (curvas); sin él, la recta
       if (unica || !split) {
-        trazarVia([a.lat, a.lon], [b.lat, b.lon], color, unica, entry);
+        trazarVia(pts, color, unica, entry);
       } else {
-        const off = perpOffset(a, b);        // vía del sentido a→b (derecha) y la del sentido opuesto
-        trazarVia([a.lat + off[0], a.lon + off[1]], [b.lat + off[0], b.lon + off[1]], color, false, entry);
-        trazarVia([a.lat - off[0], a.lon - off[1]], [b.lat - off[0], b.lon - off[1]], color, false, entry);
+        // Vía del sentido a→b (a la derecha) y la del sentido opuesto, paralelas a la curva.
+        trazarVia(desplazarVia(pts, 1), color, false, entry);
+        trazarVia(desplazarVia(pts, -1), color, false, entry);
       }
     }
     linePolys.push(entry);
@@ -428,13 +506,21 @@ function interlock(id) {
     const grupos = corredoresDe(id, st), nc = grupos.length;
     // Reparto de vías en bloques consecutivos entre corredores; cada corredor tiene su vía
     // principal por lado (las dos primeras del grupo) → varias vías principales por dirección.
+    // Los corredores con `tracks` fijo se sirven primero; el resto se reparte a partes iguales entre
+    // los demás. Un corredor `terminal` no tiene principal: todas sus vías son no principales.
+    const fijas = grupos.reduce((s, g) => s + (g.tracks || 0), 0);
+    const libres = grupos.filter((g) => !g.tracks).length;
+    const resto = Math.max(0, n - fijas);
     const corrDeVia = new Array(n).fill(0), corr = [];
-    let cursor = 0;
+    let cursor = 0, k0 = 0;
     for (let c = 0; c < nc; c++) {
-      const cuantas = Math.max(1, Math.floor(n / nc) + (c < n % nc ? 1 : 0));
+      const g = grupos[c];
+      const cuantas = g.tracks || Math.max(1, Math.floor(resto / Math.max(1, libres)) + (k0++ < resto % Math.max(1, libres) ? 1 : 0));
       const vias = [];
       for (let k = 0; k < cuantas && cursor < n; k++) { vias.push(cursor); corrDeVia[cursor] = c; cursor++; }
-      corr.push({ lines: grupos[c].lines || [], vias, mainA: vias[0] || 0, mainB: vias[1] != null ? vias[1] : (vias[0] || 0) });
+      const term = !!g.terminal;
+      corr.push({ lines: g.lines || [], vias, terminal: term,
+        mainA: term ? null : (vias[0] || 0), mainB: term ? null : (vias[1] != null ? vias[1] : (vias[0] || 0)) });
     }
     while (cursor < n) { corrDeVia[cursor] = nc - 1; corr[nc - 1].vias.push(cursor); cursor++; }
     const corrDeLinea = {};
@@ -446,16 +532,17 @@ function interlock(id) {
   return il;
 }
 function corrIdx(il, line) { return il.corrDeLinea[line] != null ? il.corrDeLinea[line] : 0; }
-// Vía principal hacia `side` para `line` (la de su corredor: cada corredor tiene la suya).
+// Vía principal hacia `side` para `line` (la de su corredor: cada corredor tiene la suya). null en
+// un corredor de cabecera (sin principal: el tren para en una vía no principal).
 function viaPrincipal(il, side, line) { const g = il.corr[corrIdx(il, line)] || il.corr[0]; return side === "A" ? g.mainA : g.mainB; }
 // Semáforo interno de salida: rojo si el manual de la vía principal (del corredor de la línea)
 // hacia ese lado está en rojo (verde por defecto → automático via bloque/destino en el gating).
-function internoRojo(stId, side, line) { const il = interlock(stId); const via = viaPrincipal(il, side, line); return !il.green[via][side]; }
+function internoRojo(stId, side, line) { const il = interlock(stId); const via = viaPrincipal(il, side, line); return via != null && !il.green[via][side]; }
 // Vías NO principales (apartaderos/plazas de depósito) de una estación: las que no son la
 // principal de ningún corredor y lado. Su número = capacidad de trenes durmiendo (parking).
 function sidingTracksDe(stId) {
   const il = interlock(stId); const mains = new Set();
-  for (const g of il.corr) { mains.add(g.mainA); mains.add(g.mainB); }
+  for (const g of il.corr) { if (g.mainA != null) mains.add(g.mainA); if (g.mainB != null) mains.add(g.mainB); }
   const out = []; for (let v = 0; v < il.tracks; v++) if (!mains.has(v)) out.push(v);
   return out;
 }
@@ -887,13 +974,11 @@ function render() {
     let pos, bearingDeg, late, hold, tip;
     const r = t.repro;
     if (!r || !t.reproActive) continue;   // parado en estación (dentro): no se dibuja
-    const A = S.stationById.get(r.a), B = S.stationById.get(r.b);
-    if (!A || !B) continue;
-    pos = [A.lat + (B.lat - A.lat) * r.frac, A.lon + (B.lon - A.lon) * r.frac];
-    if (lineasDesdobladas && !S.singleTrack.has(canon(r.a, r.b))) {
-      const off = perpOffset(A, B); pos[0] += off[0]; pos[1] += off[1];
-    }
-    bearingDeg = bearing(A, B);
+    const pv = puntoEnVia(r.a, r.b, r.frac);   // sobre la curva real de la vía
+    if (!pv) continue;
+    pos = pv.pos;
+    if (lineasDesdobladas && !S.singleTrack.has(canon(r.a, r.b))) { pos[0] += pv.off[0]; pos[1] += pv.off[1]; }
+    bearingDeg = pv.brg;
     hold = t.reproHeld;
     const dlyMin = Math.round((t.reproDelay || 0) / 60);
     late = dlyMin >= 2 && !hold;   // en marcha pero ≥2 min por detrás de su horario
@@ -948,11 +1033,11 @@ function durmientesEn(stId) {
 // cada lado de la vía), usando el MISMO desplazamiento perpendicular (`TRACK_OFFSET`) que el
 // trazado de las dos vías, de modo que cada semáforo cae exactamente sobre su vía.
 // Punto a fracción `f` del cantón a→b, con desplazamiento perpendicular `lado` (0 = sin él).
-function posEnArista(a, b, f, lado) {
-  const lat = a.lat + (b.lat - a.lat) * f, lon = a.lon + (b.lon - a.lon) * f;
-  if (!lado) return [lat, lon];
-  const dLat = b.lat - a.lat, dLon = b.lon - a.lon, len = Math.hypot(dLat, dLon) || 1;
-  return [lat + (dLon / len) * TRACK_OFFSET * lado, lon - (dLat / len) * TRACK_OFFSET * lado];
+// Punto de la vía a→b (ids) a la fracción f, desplazado `lado` vías (0 = eje) → [lat, lon]. Sigue
+// la curva real, así el semáforo cae sobre SU vía también en los tramos revirados.
+function posEnArista(aId, bId, f, lado) {
+  const p = puntoEnVia(aId, bId, f); if (!p) return null;
+  return lado ? [p.pos[0] + p.off[0] * lado, p.pos[1] + p.off[1] * lado] : p.pos;
 }
 // Trenes actualmente retenidos (t.esperando) en el cantón A→B — para el indicador visual y
 // el tooltip del semáforo ("interfaz de trenes esperando en semáforo").
@@ -1006,9 +1091,10 @@ function construirSemaforos() {
     if (S.singleTrack.has(c)) {
       // Señales de salida de estación (bloque-testigo único: sb=0, m=1), una cerca de cada extremo.
       for (const [from, to, gf] of [[e.from, e.to, 0.14], [e.to, e.from, 0.86]]) {
-        const pos = posEnArista(a, b, gf, 0);
-        if (!vb.contains(pos)) continue;
-        crearSemaforo(from, to, 0, 1, pos, bearing(S.stationById.get(from), S.stationById.get(to)));
+        const pos = posEnArista(e.from, e.to, gf, 0);
+        if (!pos || !vb.contains(pos)) continue;
+        const pv = puntoEnVia(from, to, from === e.from ? gf : 1 - gf);
+        crearSemaforo(from, to, 0, 1, pos, pv ? pv.brg : bearing(S.stationById.get(from), S.stationById.get(to)));
       }
       continue;
     }
@@ -1016,12 +1102,13 @@ function construirSemaforos() {
     if (S.edgeLines.has(key(e.from, e.to))) dirs.push([e.from, e.to, 1]);
     if (S.edgeLines.has(key(e.to, e.from))) dirs.push([e.to, e.from, -1]);
     for (const [from, to, lado] of dirs) {
-      const m = subM(from, to), brg = bearing(S.stationById.get(from), S.stationById.get(to));
+      const m = subM(from, to);
       for (let sb = 1; sb < m; sb++) {
         const gf = lado > 0 ? sb / m : 1 - sb / m;            // fracción medida desde a=e.from
-        const pos = posEnArista(a, b, gf, lado);
-        if (!vb.contains(pos)) continue;
-        crearSemaforo(from, to, sb, m, pos, brg);
+        const pos = posEnArista(e.from, e.to, gf, lado);
+        if (!pos || !vb.contains(pos)) continue;
+        const pv = puntoEnVia(from, to, sb / m);              // rumbo LOCAL en el sentido de marcha
+        crearSemaforo(from, to, sb, m, pos, pv ? pv.brg : 0);
       }
     }
   }
@@ -1111,7 +1198,7 @@ function buildStationPanel() {
     const g = il.corr[c];
     if (il.corr.length > 1) {
       const et = g.lines.length ? g.lines.map((l) => lineImg(l, "line-logo sm")).join("") : "Corredor " + (c + 1);
-      html += `<div class="corr-head">${et}<span class="corr-tag">vía ppal. propia</span></div>`;
+      html += `<div class="corr-head">${et}<span class="corr-tag">${g.terminal ? "cabecera · vías no principales" : "vía ppal. propia"}</span></div>`;
     }
     for (const v of g.vias) {
       const esMain = g.mainA === v || g.mainB === v;
@@ -1133,6 +1220,7 @@ function buildStationPanel() {
   // Clic en la vía: reasigna la principal de su corredor (1er clic → lado A, 2º → lado B).
   box.querySelectorAll(".viac").forEach((cell) => cell.onclick = () => {
     const v = +cell.dataset.v, g = il.corr[+cell.dataset.corr];
+    if (g.terminal) return;   // cabecera: no tiene vía principal que reasignar
     if (g.mainA !== v) g.mainA = v; else if (g.mainB !== v) g.mainB = v;
     buildStationPanel();
   });
@@ -1162,7 +1250,9 @@ function actualizarEstacionDinamico() {
     if (!r || r.frac < 0.995 || r.b !== s.id) continue;
     const c = corrIdx(il, t.line);
     let via = viaPrincipal(il, t.side, t.line);
-    if (il.occ[via] != null) { const libre = il.corr[c].vias.find((v) => il.occ[v] == null); if (libre != null) via = libre; }
+    // Principal ocupada (o corredor de cabecera sin principal) → otra vía libre de su corredor.
+    if (via == null || il.occ[via] != null) { const libre = il.corr[c].vias.find((v) => il.occ[v] == null); if (libre != null) via = libre; }
+    if (via == null) continue;
     il.occ[via] = t.id; etiqueta.set(via, t.line + " → " + nombre(t.pts[t.pts.length - 1].id));
     // Un tren que solo PARA (recoge pasajeros) NO pone su señal de salida en rojo; solo la pone
     // roja si está realmente RETENIDO por el bloque de delante (t.esperando). El tiempo de parada
@@ -1291,7 +1381,7 @@ async function pintarInfoGtfs() {
   try {
     const j = await (await fetch("/api/gtfs/info")).json();
     const [y, m, d] = (j.date || "").split("-");
-    el.textContent = (j.date ? `Del ${d}/${m}/${y}` : "Fecha desconocida") + ` · ${j.n_lines} líneas · ${j.n_trips.toLocaleString("es-ES")} viajes (por defecto)`;
+    el.textContent = (j.date ? `Del ${d}/${m}/${y}` : "Fecha desconocida") + ` · ${j.n_lines} líneas · ${j.n_trips.toLocaleString((window.LOCALE?LOCALE():"es-ES"))} viajes (por defecto)`;
   } catch (e) { el.textContent = "El que está cargado ahora (por defecto)"; }
 }
 
@@ -1311,7 +1401,7 @@ function poblarSelectores() {
 function rellenarDonde() {
   const scope = $("incScope").value, sel = $("incWhere");
   if (scope === "station") {
-    sel.innerHTML = [...S.stationById.values()].sort((a, b) => a.name.localeCompare(b.name)).map((s) => `<option value="${s.id}">${s.name}</option>`).join("");
+    sel.innerHTML = [...S.stationById.values()].filter((s) => !s.junction).sort((a, b) => a.name.localeCompare(b.name)).map((s) => `<option value="${s.id}">${s.name}</option>`).join("");
   } else {
     sel.innerHTML = S.net.edges.map((e) => `<option value="${key(e.from, e.to)}">${nombre(e.from)} → ${nombre(e.to)} (${e.lines.join(",")})</option>`).join("");
   }
@@ -1370,7 +1460,7 @@ function finDelDia() {
   // Trenes que llegaron tarde (≥1 min) a alguna estación, según el registro del motor.
   const retrasados = new Set(S.arrivals.map((a) => a.train)).size;
   $("finStats").innerHTML = `
-    <div class="stat"><span>Minutos de retraso acumulados</span><b>${Math.round(S.kpi).toLocaleString("es-ES")} min</b></div>
+    <div class="stat"><span>Minutos de retraso acumulados</span><b>${Math.round(S.kpi).toLocaleString((window.LOCALE?LOCALE():"es-ES"))} min</b></div>
     <div class="stat"><span>Trenes con retraso</span><b>${retrasados}</b></div>
     <div class="stat"><span>Pico de retraso vivo</span><b>${S.delayTL ? Math.round(S.delayTL.max) : 0} min</b></div>
     <div class="stat"><span>Incidencias del día</span><b>${(S.dayIncidents || []).length}</b></div>`;
@@ -1379,10 +1469,10 @@ function finDelDia() {
 
 // ---- KPI, leyenda -------------------------------------------------------------------------
 function actualizarKpi() {
-  $("kDelay").textContent = Math.round(S.kpi).toLocaleString("es-ES");
+  $("kDelay").textContent = Math.round(S.kpi).toLocaleString((window.LOCALE?LOCALE():"es-ES"));
   // Retraso VIVO de la red: minutos de retraso sumados de todos los trenes en marcha AHORA (sube y
   // baja, a diferencia del acumulado monótono de al lado). `S.delayNow` se recalcula cada fotograma.
-  $("kLive").textContent = Math.round(S.delayNow || 0).toLocaleString("es-ES");
+  $("kLive").textContent = Math.round(S.delayNow || 0).toLocaleString((window.LOCALE?LOCALE():"es-ES"));
 }
 // Orden de la leyenda: por REGIÓN (R rodalies/regionals, luego RG, RL, RT como bloques separados)
 // y, dentro de cada bloque, por número (con el sufijo N/S detrás). Solo estético.
@@ -1448,6 +1538,13 @@ $("btnTrenes").addEventListener("click", () => { const p = $("trenesPanel"); p.h
 $("trenesClose").addEventListener("click", () => $("trenesPanel").hidden = true);
 ["tFiltLine", "tOnlyLate", "tSort"].forEach((id) => $(id).addEventListener("change", refrescarTrenes));
 $("finRepetir").addEventListener("click", () => location.reload());
+// Seguimiento de retrasos de la jornada que se acaba de ver (series + análisis del motor, que
+// vienen en el trace; si se lanzó una incidencia "ahora", es el trace re-simulado con ella).
+$("finSeguimiento").addEventListener("click", () => {
+  const tr = S.trace; if (!tr || !window.DelayTrack) return;
+  DelayTrack.open({ track: tr.track, analysis: tr.analysis, incidents: S.dayIncidents || [] },
+    { title: "Simulación visual · semilla " + (S.traceSeed || 0) });
+});
 
 // Cajón de incidencias del día.
 $("btnIncidDia").addEventListener("click", () => { const p = $("incidDiaPanel"); p.hidden = !p.hidden; pintarIncidenciasDia(); });
@@ -1682,7 +1779,7 @@ iniciar();
     // `actualizarKpi` no ha refrescado aún: la alerta es del retraso de red, su hogar natural).
     if (chipL) { chipL.classList.toggle("warn", warn); chipL.classList.toggle("crit", crit); }
     if (trendL) trendL.textContent = arrow;
-    if (el("kLive")) el("kLive").textContent = Math.round(live).toLocaleString("es-ES");
+    if (el("kLive")) el("kLive").textContent = Math.round(live).toLocaleString((window.LOCALE?LOCALE():"es-ES"));
   }
 
   // ── Contador del asa del cajón (trenes retenidos ahora) ──────────────────
@@ -1720,7 +1817,7 @@ iniciar();
   // una plantilla no la desmarca y borrar/añadir desde otro sitio no desplaza la selección.
   const SELKEY = "rod-sel-visual";
   let sel = null;   // Set de ids seleccionados
-  const rateTxt = (t) => `${Math.round(t.prob * 100)} % cada ${(Math.round(t.every_h * 100) / 100).toLocaleString("es-ES")} h`;
+  const rateTxt = (t) => `${Math.round(t.prob * 100)} % cada ${(Math.round(t.every_h * 100) / 100).toLocaleString((window.LOCALE?LOCALE():"es-ES"))} h`;
   function loadSel() {
     try {
       const v = JSON.parse(localStorage.getItem(SELKEY));
@@ -1741,7 +1838,28 @@ iniciar();
   async function load() {
     try { tpls = await (await fetch("/api/incidents/templates")).json(); } catch (e) { tpls = []; }
     loadSel();
+    aplicarParamsDeRuns();
     render();
+  }
+  // "Ver en simulador" desde /numeros: `?seed=…&sel=id1,id2&from=numeros&gtfs=AAAA-MM-DD`. La
+  // selección de la URL manda SOLO en esta visita (no se guarda salvo que el usuario la toque), así
+  // la selección propia del modo visual no se pisa. Misma semilla + mismas plantillas + mismo GTFS
+  // ⇒ el motor reproduce exactamente la misma jornada (el roll de incidencias es determinista).
+  function aplicarParamsDeRuns() {
+    const q = new URLSearchParams(location.search);
+    if (q.get("from") !== "numeros" || !q.has("sel")) return;
+    const want = (q.get("sel") || "").split(",").filter(Boolean);
+    const known = new Set(tpls.map((t) => t.id));
+    sel = new Set(want.filter((id) => known.has(id)));
+    const lost = want.length - sel.size;
+    const box = $("preFrom"); if (!box) return;
+    box.innerHTML = `Parámetros de <b>Varias runs</b>: semilla <b>${+q.get("seed") || 0}</b> · <b>${sel.size}</b> plantilla${sel.size === 1 ? "" : "s"} de incidencia. Pulsa <b>Confirmar y generar el día</b> para ver exactamente esa jornada.` +
+      (lost ? `<span class="warn">${lost} plantilla${lost === 1 ? " ya no existe" : "s ya no existen"} (se borraron después de la run): el día puede diferir.</span>` : "");
+    box.hidden = false;
+    const gt = q.get("gtfs");
+    if (gt && /^\d{4}-\d\d-\d\d$/.test(gt)) fetch("/api/gtfs/info").then((r) => r.json()).then((j) => {
+      if (j.date && j.date !== gt) box.insertAdjacentHTML("beforeend", `<span class="warn">Los horarios cargados ahora (${j.date}) no son los de la run (${gt}): el día puede diferir.</span>`);
+    }).catch(() => {});
   }
   function render() {
     const ul = $("tplList"); if (!ul) return;

@@ -15,11 +15,13 @@ mod gtfs_loader;
 mod gtfs_update;
 mod map;
 mod optimizer;
+mod recovery;
 mod report;
 mod runs_export;
 mod scenario;
 mod server;
 mod topology;
+mod track_geometry;
 
 use std::path::Path;
 use std::sync::Arc;
@@ -65,7 +67,8 @@ async fn main() {
         }
     };
     let load_ms = t0.elapsed().as_secs_f64() * 1000.0;
-    println!("✓ Càrrega completada en {:.1} ms\n", load_ms);
+    println!("✓ Càrrega completada en {:.1} ms", load_ms);
+    println!("✓ Correccions del feed: {} viatges reetiquetats (R2S→R15, R2N→R11) · color R13\n", net.feed_fixes);
 
     // Modo motor unificado (Fase 1, headless): `cargo run --release -- simulate`
     if std::env::args().any(|a| a == "simulate") {
@@ -101,6 +104,10 @@ async fn main() {
     match &adif {
         Some(a) => println!("✓ CVM ADIF carregada: {} segments de via (processed/adif)", a.n_segments()),
         None => println!("· CVM ADIF no trobada (processed/adif/rfig_speed.json). Executa scripts/fetch_adif_cvm.py"),
+    }
+    match track_geometry::global() {
+        Some(g) => println!("✓ Traçat real de via (OSM) carregat: {} cantons", g.len()),
+        None => println!("· Traçat de via OSM no trobat: cantons en línia recta. Executa scripts/fetch_osm_track.py"),
     }
     let ltv = calculator::ltv::load_default();
     match &ltv {

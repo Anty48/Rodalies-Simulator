@@ -427,6 +427,27 @@ pub fn adif_profile(
     step_m: f64,
     tol_m: f64,
 ) -> Option<AdifProfile> {
+    adif_profile_ltv_tol(adif, ltv, pts, step_m, tol_m, LTV_TOL_CHORD_M)
+}
+
+/// Radio (m) para activar una LTV cuando `pts` es una APROXIMACIÓN de la ruta (estaciones unidas
+/// por rectas): la recta se separa de la vía decenas o cientos de metros en las curvas.
+pub const LTV_TOL_CHORD_M: f64 = 250.0;
+/// Radio (m) cuando `pts` es el TRAZADO REAL de la vía (OSM): las LTV de la propia vía caen a
+/// 0–10 m; con 250 m se colaban las de líneas PARALELAS (p. ej. la línea 220 a 53 m de la R2N entre
+/// Sant Andreu y Montcada) y puntos de otra vía a 200 m. 30 m absorbe el desfase OSM↔ADIF y el
+/// paso de muestreo sin alcanzar la vía de al lado.
+pub const LTV_TOL_TRACK_M: f64 = 30.0;
+
+/// Como [`adif_profile`], con el radio de activación de LTV explícito (`ltv_tol_m`).
+pub fn adif_profile_ltv_tol(
+    adif: &AdifNet,
+    ltv: Option<&crate::calculator::ltv::LtvSet>,
+    pts: &[(f64, f64)],
+    step_m: f64,
+    tol_m: f64,
+    ltv_tol_m: f64,
+) -> Option<AdifProfile> {
     if pts.len() < 2 {
         return None;
     }
@@ -474,7 +495,7 @@ pub fn adif_profile(
 
         // Activar LTV cuyo inicio está cerca de esta muestra.
         if let Some(lset) = ltv {
-            for (idx, sp, span) in lset.nearby(lat, lon, 250.0) {
+            for (idx, sp, span) in lset.nearby(lat, lon, ltv_tol_m) {
                 let cover = span.max(step_m);
                 let e = active.entry(idx).or_insert((0.0, sp));
                 e.0 = e.0.max(cover);

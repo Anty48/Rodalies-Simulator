@@ -30,6 +30,9 @@ const PLATFORM_TRACKS: &[(&str, u32)] = &[
     ("Arenys de Mar", 5),
     ("Badalona", 3),
     ("Balenyà-Els Hostalets", 2),
+    // Frontera: Cerbère y Portbou son estaciones de intercambio de ancho con grandes playas.
+    ("Cerbère", 10),
+    ("Cervera", 3),
     ("Balenyà-Tona-Seva", 3),
     ("Barberà del Vallès", 2),
     ("Barcelona Arc de Triomf", 2),
@@ -55,7 +58,8 @@ const PLATFORM_TRACKS: &[(&str, u32)] = &[
     ("Centelles", 2),
     ("Cerdanyola Universitat", 5),
     ("Cerdanyola del Vallès", 3),
-    ("Cornellà", 2),
+    // Cornellà: 2 principales + 8 no principales de COCHERA (pernocta de la flota; usuario 2026-09-24).
+    ("Cornellà", 10),
     ("Cubelles", 2),
     ("Cunit", 2),
     ("El Masnou", 3),
@@ -69,6 +73,7 @@ const PLATFORM_TRACKS: &[(&str, u32)] = &[
     ("Gelida", 2),
     ("Granollers Centre", 9),
     ("Granollers-Canovelles", 3),
+    ("Girona", 4),
     ("Gualba", 2),
     ("Hostalric", 2),
     ("L'Arboç", 3),
@@ -78,8 +83,11 @@ const PLATFORM_TRACKS: &[(&str, u32)] = &[
     ("La Granada", 2),
     ("La Llagosta", 2),
     ("La Molina", 3),
+    // La Plana-Picamoixons: 4 vías, TODAS principales: 2 de la R13 (hacia Valls) y 2 de la R14.
+    ("La Plana-Picamoixons", 4),
     ("La Tor de Querol-Enveig", 3),
     ("Lavern-Subirats", 2),
+    ("Lleida-Pirineus", 6),
     ("Les Franqueses del Vallès", 2),
     ("Les Franqueses-Granollers Nord", 2),
     ("Llinars del Vallès", 2),
@@ -104,6 +112,7 @@ const PLATFORM_TRACKS: &[(&str, u32)] = &[
     ("Palautordera", 2),
     ("Parets del Vallès", 2),
     ("Pineda de Mar", 2),
+    ("Portbou", 10),
     ("Planoles", 1),
     ("Platja de Castelldefels", 2),
     ("Premià de Mar", 2),
@@ -125,13 +134,17 @@ const PLATFORM_TRACKS: &[(&str, u32)] = &[
     ("Sant Miquel de Gonteres", 2),
     ("Sant Pol de Mar", 2),
     ("Sant Sadurní d'Anoia", 3),
-    ("Sant Vicenç de Calders", 9),
+    // SVC (usuario 2026-09-24): 14 vías — 2 principales regionales, 2 principales R13, el resto no
+    // principales (cabecera de R2S y R4, que dan la vuelta/aparcan ahí). Reparto en app.js CORREDORES.
+    ("Sant Vicenç de Calders", 14),
     ("Sant Vicenç de Castellet", 3),
     ("Santa Susanna", 2),
     ("Segur de Calafell", 2),
+    // Tarragona: principales + 8 vías no principales de estacionamiento (usuario 2026-09-24).
+    ("Tarragona", 10),
     ("Sitges", 3),
     ("Terrassa Est", 2),
-    ("Terrassa Estació del Nord", 5),
+    ("Terrassa Estació del Nord", 6),
     ("Tordera", 3),
     ("Torelló", 3),
     ("Toses", 1),
@@ -146,6 +159,58 @@ const PLATFORM_TRACKS: &[(&str, u32)] = &[
     ("Vilassar de Mar", 2),
 ];
 
+/// Corrección de ETIQUETA DE LÍNEA de viajes mal etiquetados en el feed de Renfe (el mismo error
+/// sale en Google Maps). Una línea solo tiene sus cabeceras reales: un viaje de `line` que EMPIEZA o
+/// ACABA fuera de `terminals` no es de esa línea y pasa a `relabel`.
+struct LineFix {
+    line: &'static str,
+    terminals: &'static [&'static str],
+    relabel: &'static str,
+}
+
+const LINE_FIXES: &[LineFix] = &[
+    // R2 Sud muere en Sant Vicenç de Calders: más allá es territorio REGIONAL. Los «R2S» a Flix y a
+    // Quinto (vía Caspe) son R15 (usuario 2026-09-24): pintaban el verde de la R2S hasta el Ebro.
+    LineFix {
+        line: "R2S",
+        terminals: &["Barcelona Estació de França", "Castelldefels", "Vilanova i la Geltrú", "Sant Vicenç de Calders"],
+        relabel: "R15",
+    },
+    // R2 Nord: Aeroport/França ↔ Granollers/Sant Celoni/Maçanet. Los «R2N» Portbou↔Maçanet son R11
+    // (la R2N no llega a Girona).
+    LineFix {
+        line: "R2N",
+        terminals: &["El Prat Aeroport", "Barcelona Estació de França", "Granollers Centre", "Sant Celoni", "Maçanet-Massanes"],
+        relabel: "R11",
+    },
+];
+
+/// Colores de línea que el feed trae MAL: `(línea, color oficial)`. La R13 viene con #146520, el
+/// mismo verde que la R2S; el oficial (logo de Rodalies, `game/web/lines/R13_…png`) es rosa.
+const LINE_COLOR_FIXES: &[(&str, &str)] = &[("R13", "#E52E87")];
+
+/// Aplica las correcciones del feed (etiquetas de línea y colores) a la red recién cargada.
+/// Devuelve cuántos viajes se reetiquetaron.
+pub fn fix_feed(net: &mut Network) -> usize {
+    let name = |net: &Network, id: &str| net.stop_name(id).to_string();
+    let mut changed = Vec::new();
+    for (i, svc) in net.services.iter().enumerate() {
+        let Some(fix) = LINE_FIXES.iter().find(|f| f.line == svc.route_short_name) else { continue };
+        let (Some(first), Some(last)) = (svc.schedule.first(), svc.schedule.last()) else { continue };
+        let ok = |id: &str| fix.terminals.contains(&name(net, id).as_str());
+        if !ok(&first.stop_id) || !ok(&last.stop_id) {
+            changed.push((i, fix.relabel));
+        }
+    }
+    for &(i, to) in &changed {
+        net.services[i].route_short_name = to.to_string();
+    }
+    for (line, color) in LINE_COLOR_FIXES {
+        net.line_colors.insert(line.to_string(), color.to_string());
+    }
+    changed.len()
+}
+
 /// Configuración de vía única por ANCLA+TERMINAL: `(línea, "estación donde empieza
 /// (subcadena)", "terminal del extremo de vía única (subcadena)")`. Se recorre un trayecto
 /// SOLO si termina en ese extremo — así no se marca por error el tramo de vuelta hacia el
@@ -153,6 +218,25 @@ const PLATFORM_TRACKS: &[(&str, u32)] = &[
 /// trayecto en sentido contrario. Válido para líneas con patrones de inicio/fin estables (sin
 /// patrones truncados que no lleguen a tocar ninguno de los dos extremos).
 const SINGLE_TRACK: &[(&str, &str, &str)] = &[];
+
+/// Semáforos de tramo EXTRA por cantón de vía doble (los dos sentidos), por `stop_id`: `(a, b, n)`.
+/// La regla general (`engine::calc_sub_blocks`) pone las señales por distancia (1 cada ~1,6 km); aquí
+/// se declaran los cantones donde la explotación necesita más densidad de bloqueo que esa regla.
+/// Cada señal extra = un sub-bloque más = un tren más que cabe en el cantón.
+const EXTRA_BLOCK_SIGNALS: &[(&str, &str, u32)] = &[
+    // (Vacía.) Hubo una señal extra França (79400) ↔ Passeig de Gràcia (71802) para el atasco a la
+    // salida de França; la causa real era medir el tramo en línea recta (1,9 km en vez de 4,6). Con
+    // el trazado real el tramo se parte en la bifurcación de Aragó y la regla por distancia ya le da
+    // más señales que las que tenía. Añade aquí `(a, b, n)` si un cantón necesita más densidad.
+];
+
+/// Nº de semáforos de tramo extra del cantón `a`↔`b` (independiente del sentido); 0 si no hay.
+pub fn extra_block_signals(a: &str, b: &str) -> u32 {
+    EXTRA_BLOCK_SIGNALS
+        .iter()
+        .find(|(x, y, _)| (*x == a && *y == b) || (*x == b && *y == a))
+        .map_or(0, |e| e.2)
+}
 
 /// Vía única por ZONA de `stop_id`: `(línea, [stop_ids de la zona de vía única])`. Un cantón
 /// (par de paradas consecutivas de un trayecto de esa línea) se marca vía única si AMBOS

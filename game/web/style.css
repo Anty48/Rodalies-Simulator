@@ -244,6 +244,11 @@ body.ctc {
 .net-info { font-size: 12.5px; color: var(--muted); line-height: 1.5; }
 .hint { font-size: 11.5px; color: var(--muted); line-height: 1.55; margin: 0; }
 .hint.mini { font-size: 11px; color: var(--faint); }
+/* Aviso "parámetros traídos de Varias runs" en la pantalla previa (botón "Ver en simulador"). */
+.pre-from { margin-top: 10px; padding: 10px 13px; border-radius: 10px; font-size: 12.5px; line-height: 1.5; color: var(--text);
+  background: rgba(236,110,21,0.12); border: 1px solid rgba(236,110,21,0.45); }
+.pre-from b { color: var(--naranja-lift); }
+.pre-from .warn { display: block; margin-top: 4px; color: var(--amber); }
 .hint a, .net-info a { color: var(--naranja-lift); }
 
 /* Leyenda de líneas interactiva */
@@ -588,6 +593,8 @@ body.ctc {
 .findia .stat b { font-family: var(--mono); color: #fff; }
 .findia .btn-row { margin-top: 20px; }
 .findia .btn.ghost { text-decoration: none; display: flex; align-items: center; justify-content: center; }
+.findia .fin-track { margin-top: 16px; gap: 8px; font-size: 14px; padding: 11px 14px; }
+.findia .fin-track .ic svg { width: 16px; height: 16px; display: block; }
 .findia-renfe { height: 20px; object-fit: contain; margin-bottom: 10px; opacity: .9; }
 
 /* ════════════════════════ PANEL DE SEMÁFORO DE TRAMO ════════════════════════ */

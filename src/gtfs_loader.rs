@@ -138,14 +138,29 @@ pub struct Network {
     /// tren depende solo de si `services` tiene itinerarios reales para ella.
     pub rail_lines: std::collections::HashSet<String>,
     pub services: Vec<TrainService>,
+    /// Viajes reetiquetados por `topology::fix_feed` (errores de línea del feed de Renfe).
+    pub feed_fixes: usize,
 }
 
 impl Network {
     pub fn stop_name(&self, stop_id: &str) -> &str {
-        self.node_of_stop
-            .get(stop_id)
-            .map(|&n| self.graph[n].stop_name.as_str())
+        if let Some(&n) = self.node_of_stop.get(stop_id) {
+            return self.graph[n].stop_name.as_str();
+        }
+        // Nodo de bifurcación fuera de estación (trazado real de vía): "Bif. <estación>".
+        crate::track_geometry::global()
+            .and_then(|g| g.junction(stop_id))
+            .map(|j| j.name.as_str())
             .unwrap_or("<desconocida>")
+    }
+
+    /// Coordenadas (lat, lon) de una parada o de un nodo de BIFURCACIÓN del trazado real de vía.
+    pub fn coord(&self, stop_id: &str) -> Option<(f64, f64)> {
+        if let Some(&n) = self.node_of_stop.get(stop_id) {
+            let s = &self.graph[n];
+            return Some((s.lat?, s.lon?));
+        }
+        crate::track_geometry::global().and_then(|g| g.junction(stop_id)).map(|j| (j.lat, j.lon))
     }
 
     /// Devuelve el índice de nodo de una parada.
@@ -453,12 +468,17 @@ pub fn load(dir: &Path) -> Result<Network, Box<dyn Error>> {
             .then_with(|| a.trip_id.cmp(&b.trip_id))
     });
 
-    Ok(Network {
+    let mut net = Network {
         graph,
         node_of_stop,
         routes,
         line_colors,
         rail_lines,
         services,
-    })
+        feed_fixes: 0,
+    };
+    // Errores conocidos del feed (líneas mal etiquetadas, colores): se corrigen al cargar, como el
+    // resto de rarezas del feed, para que TODO lo de aguas abajo vea la red ya correcta.
+    net.feed_fixes = crate::topology::fix_feed(&mut net);
+    Ok(net)
 }
