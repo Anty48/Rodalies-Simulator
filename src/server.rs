@@ -291,6 +291,8 @@ fn serve_game_file(name: &str) -> Option<(&'static str, Vec<u8>)> {
         "application/json"
     } else if name.ends_with(".svg") {
         "image/svg+xml"
+    } else if name.ends_with(".gif") {
+        "image/gif"
     } else {
         "application/octet-stream"
     };

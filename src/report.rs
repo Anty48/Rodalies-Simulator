@@ -422,31 +422,22 @@ h1, h2, h3, .logo, .hero-card h2, .tile h3, .hero-badge, .kpi-val, .menu-brand h
 .rod-band .rod-load-dots i { background:var(--accent); }
 
 /* ════════════════════════════════════════════════════════════════════════
-   ANDANA · Tren pixel-art de càrrega (Rodalies) — 100% autocontingut, sense
-   imatges externes. Sprite = SVG inline blocky (crispEdges), taronja temable
-   amb var(--rod-orange). Rodes = <g> independents que giren. Pista de traves
-   amb gradients "hard-stop" que es desplacen (moviment relatiu cap a la dreta).
-   Rendiment: només transforms/opacity + background-position (GPU-friendly).
+   ANDANA · Loader del tren de Rodalies (447 en pixel art propio, GIF animado).
+   Cada GIF tiene significado, no es decoración intercambiable:
+     · tren_pantografo.gif → «Conectando…»: el tren sube el pantógrafo y toma
+       tensión de la catenaria (aún no se mueve).
+     · tren_circulando.gif → «Cargando…»: el tren ya rueda.
+   El GIF es transparente y las ruedas son grises: va sobre una tarjeta CLARA en
+   cualquier tema para que se vea el giro. Escala entera (×4 overlay, ×3 banda)
+   con image-rendering:pixelated para que el pixel art no se emborrone.
    ════════════════════════════════════════════════════════════════════════ */
 
 /* ── Contenidor / escena ─────────────────────────────────────────────── */
 .rod-load{
-  /* Tokens de marca (temables des de fora; fallback = taronja Rodalies) */
-  --rod-orange:      #EC6E15;
-  --rod-orange-lift: #FF8A3D;
-  --rod-orange-deep: #C8590E;
-  --rod-purple:      #830065;   /* accent secundari, ús mínim */
-  --rod-white:       #F9F5F1;   /* blanc càlid */
-  --rod-carbon:      #0B0D12;
-  --rod-window:      #0B0D12;
-  --rod-steel:       #6b7078;
-  /* Pista (sobreescrit per cada skin) */
-  --rod-rail:        #4a4d55;
-  --rod-tie:         #2a2d34;
-  --rod-track-speed: .62s;      /* sincronitzat amb el gir de roda */
-
+  --rod-orange:#EC6E15;       /* taronja Rodalies (punts de càrrega) */
+  --rod-white:#F9F5F1;        /* blanc càlid */
   display:flex; flex-direction:column; align-items:center; justify-content:center;
-  gap:22px; padding:32px 24px;
+  gap:20px; padding:32px 16px;
   font-family:'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif;
   -webkit-user-select:none; user-select:none;
   transition:opacity .45s ease;
@@ -457,88 +448,31 @@ h1, h2, h3, .logo, .hero-card h2, .tile h3, .hero-badge, .kpi-val, .menu-brand h
 /* Fade-out en acabar (JS afegeix .is-done abans d'amagar) */
 .rod-load.is-done{ opacity:0; pointer-events:none; }
 
-/* ── Escena del tren (bob + xup-xup horitzontal) ─────────────────────── */
-.rod-load-scene{ display:flex; flex-direction:column; align-items:center; }
-.rod-train-scene{
-  position:relative; width:264px; height:96px;
-  display:flex; align-items:flex-end; justify-content:center;
-  animation:rod-train-bob .55s ease-in-out infinite;
-  will-change:transform;
-}
-/* Ombra tova que "respira" a contratemps del bot */
-.rod-train-scene::after{
-  content:""; position:absolute; left:50%; bottom:2px; translate:-50% 0;
-  width:210px; height:12px; border-radius:50%;
-  background:radial-gradient(ellipse at center, rgba(0,0,0,.42), rgba(0,0,0,0) 70%);
-  animation:rod-shadow-breathe .55s ease-in-out infinite;
-  z-index:0;
-}
+.rod-load-scene{ display:flex; flex-direction:column; align-items:center; max-width:100%; }
 
-/* ── Sprite SVG: crisp/pixel ─────────────────────────────────────────── */
-.rod-train{
-  position:relative; z-index:1;
-  width:264px; height:auto;
-  shape-rendering:crispEdges;      /* vores dures = look pixel */
+/* Tarjeta clara: contraste para las ruedas grises del GIF transparente. */
+.rod-gif-card{
+  box-sizing:border-box; max-width:100%;
+  padding:12px 16px; border-radius:14px;
+  background:linear-gradient(180deg, #FFFFFF 0%, #F3EEE8 100%);
+  border:1px solid rgba(23,24,28,.08);
+  box-shadow:0 12px 32px rgba(0,0,0,.30), inset 0 -3px 0 rgba(236,110,21,.55);
+}
+.rod-gif{
+  display:block; width:512px; max-width:100%; height:auto;   /* 128×48 ×4 */
   image-rendering:pixelated;
-  image-rendering:-moz-crisp-edges;
-  filter:drop-shadow(0 2px 0 rgba(0,0,0,.18));
-}
-/* Farciments (temables via CSS custom props) */
-.rod-train-hull   rect{ fill:var(--rod-orange, #EC6E15); }
-.rod-train-lift   rect{ fill:var(--rod-orange-lift, #FF8A3D); }  /* reflex de sostre */
-.rod-train-shade  rect{ fill:var(--rod-orange-deep, #C8590E); }  /* ombra inferior */
-.rod-train-stripe      { fill:var(--rod-white, #F9F5F1); }       /* franja blanca */
-.rod-train-glass  rect{ fill:var(--rod-window, #0B0D12); }       /* finestres/portes */
-.rod-train-lamp        { fill:#FFD9A0; }                          /* far càlid */
-.rod-train-frame  rect{ fill:#0f1013; }                           /* baix + bogies */
-
-/* Rodes: cada <g> gira sobre el seu propi centre (fill-box) */
-.rod-train-wheel{
-  transform-box:fill-box; transform-origin:center;
-  animation:rod-wheel-spin var(--rod-track-speed) linear infinite;
-  will-change:transform;
-}
-.rod-train-wheel .tyre { fill:#17181C; }
-.rod-train-wheel .hub  { fill:var(--rod-steel, #6b7078); }
-.rod-train-wheel .spoke{ stroke:var(--rod-steel, #6b7078); stroke-width:1; }
-.rod-train-wheel-set{ shape-rendering:geometricPrecision; } /* rodes rodones netes */
-
-/* ── Bafarades opcionals (toc lúdic; s'amaguen amb .no-steam) ─────────── */
-.rod-load-puff{
-  position:absolute; left:26px; bottom:56px;
-  width:6px; height:6px; border-radius:1px;
-  background:var(--rod-white, #F9F5F1);
-  image-rendering:pixelated; opacity:0; z-index:2;
-  animation:rod-puff-rise 2.2s ease-out infinite;
-}
-.rod-load-puff:nth-child(2){ animation-delay:.73s; }
-.rod-load-puff:nth-child(3){ animation-delay:1.46s; }
-.rod-load.no-steam .rod-load-puff{ display:none; }
-
-/* ── Via/pista de traves (desplaçament = sensació d'avanç) ────────────── */
-.rod-load-track{
-  width:280px; height:14px; margin-top:-7px;   /* s'encaixa sota les rodes */
-  border-radius:1px;
-  image-rendering:pixelated;
-  background-image:
-    repeating-linear-gradient(90deg, var(--rod-tie) 0 6px, transparent 6px 18px), /* traves */
-    linear-gradient(var(--rod-rail) 0 0);                                          /* carril */
-  background-size:18px 14px, 100% 3px;
-  background-position:0 9px, 0 1px;
-  background-repeat:repeat-x, repeat-x;
-  animation:rod-track-scroll var(--rod-track-speed) linear infinite;
 }
 
 /* ── Peu: llegenda + tres punts de càrrega ───────────────────────────── */
 .rod-load-caption{
   font-family:'Montserrat', 'Inter', system-ui, sans-serif;
   font-weight:800; font-size:15px; letter-spacing:.16em; text-transform:uppercase;
-  display:inline-flex; align-items:baseline;
+  display:inline-flex; align-items:baseline; text-align:center;
 }
 .rod-load-dots{ display:inline-flex; margin-left:8px; }
 .rod-load-dots i{
   width:6px; height:6px; margin-left:5px; display:inline-block;
-  background:var(--rod-orange, #EC6E15); border-radius:1px; image-rendering:pixelated;
+  background:var(--rod-orange, #EC6E15); border-radius:1px;
   animation:rod-dot 1.05s ease-in-out infinite;
 }
 .rod-load-dots i:nth-child(2){ animation-delay:.18s; }
@@ -550,38 +484,15 @@ h1, h2, h3, .logo, .hero-card h2, .tile h3, .hero-badge, .kpi-val, .menu-brand h
   background:
     radial-gradient(120% 90% at 50% 40%, rgba(24,27,35,.94), rgba(11,13,18,.985));
   color:var(--rod-white, #F9F5F1);
-  --rod-rail:#565a63; --rod-tie:#23262e;
 }
 .rod-load.on-dark .rod-load-caption{ color:var(--rod-white, #F9F5F1); }
 /* Informes: paper blanc càlid */
-.rod-load.on-light{
-  background:var(--rod-white, #F9F5F1);
-  color:#17181C;
-  --rod-window:#14161c;
-  --rod-rail:#b7afa5; --rod-tie:#d9cfc3;
-}
+.rod-load.on-light{ background:var(--rod-white, #F9F5F1); color:#17181C; }
 .rod-load.on-light .rod-load-caption{ color:#17181C; }
-.rod-load.on-light .rod-train{ filter:drop-shadow(0 2px 0 rgba(120,90,60,.22)); }
+/* Banda en flux (menú, /numeros): tren a ×3 i ombra suau. */
+.rod-band .rod-gif{ width:384px; }
+.rod-band .rod-gif-card{ padding:8px 12px; box-shadow:0 4px 14px rgba(0,0,0,.12), inset 0 -3px 0 rgba(236,110,21,.55); }
 
-/* ── Keyframes (tot transform/opacity/background-position) ────────────── */
-@keyframes rod-train-bob{
-  0%   { transform:translate3d(-1px, 0, 0); }
-  25%  { transform:translate3d( 0, -3px, 0); }
-  50%  { transform:translate3d( 1px, 0, 0); }
-  75%  { transform:translate3d( 0, -2px, 0); }
-  100% { transform:translate3d(-1px, 0, 0); }
-}
-@keyframes rod-shadow-breathe{
-  0%,50%,100%{ transform:scaleX(1);   opacity:.85; }
-  25%,75%    { transform:scaleX(.9);  opacity:.55; }
-}
-@keyframes rod-wheel-spin{ to{ transform:rotate(360deg); } }
-@keyframes rod-track-scroll{ to{ background-position:-18px 9px, 0 1px; } }
-@keyframes rod-puff-rise{
-  0%  { transform:translate(0,0) scale(.7);      opacity:0;   }
-  18% { opacity:.6; }
-  100%{ transform:translate(-16px,-26px) scale(2.1); opacity:0; }
-}
 @keyframes rod-dot{
   0%,70%,100%{ opacity:.25; transform:translateY(0); }
   35%        { opacity:1;   transform:translateY(-4px); }
@@ -589,8 +500,7 @@ h1, h2, h3, .logo, .hero-card h2, .tile h3, .hero-badge, .kpi-val, .menu-brand h
 
 /* Accessibilitat: respecta qui demana menys moviment */
 @media (prefers-reduced-motion:reduce){
-  .rod-train-scene, .rod-train-scene::after, .rod-train-wheel,
-  .rod-load-track, .rod-load-puff, .rod-load-dots i{ animation:none !important; }
+  .rod-load-dots i{ animation:none !important; }
 }
 </style>"#;
 
@@ -1077,76 +987,11 @@ fn icon(name: &str) -> &'static str {
     }
 }
 
-/// Escena reutilizable del tren pixel (ANDANA): sprite SVG crisp + vía de traves. La usan la banda
-/// decorativa del menú y el loader de "varias runs". El contenedor (`.rod-load …`) y el caption los
-/// pone quien la incruste. Sin recursos externos (el color naranja lo dan las custom props del CSS).
+/// Escena reutilizable del tren 447 (ANDANA): GIF «circulando» (el tren rueda = cargando) sobre
+/// tarjeta clara. La usan la banda decorativa del menú y el loader de "varias runs". El contenedor
+/// (`.rod-load …`) y el caption los pone quien la incruste. El GIF lo sirve `/game/` (game/web).
 const TRAIN_SCENE: &str = r#"<div class="rod-load-scene">
-        <div class="rod-train-scene">
-          <svg class="rod-train" viewBox="0 0 128 44" width="264" height="91" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Tren de Rodalies">
-            <g class="rod-train-lift"><rect x="14" y="7" width="86" height="3"/></g>
-            <g class="rod-train-hull">
-              <rect x="8"  y="14" width="98" height="14"/>
-              <rect x="12" y="10" width="92" height="4"/>
-              <rect x="6"  y="17" width="2"  height="9"/>
-              <rect x="106" y="12" width="4" height="16"/>
-              <rect x="110" y="14" width="4" height="14"/>
-              <rect x="114" y="17" width="4" height="11"/>
-              <rect x="118" y="21" width="3" height="7"/>
-            </g>
-            <g class="rod-train-shade">
-              <rect x="8"   y="26" width="98" height="2"/>
-              <rect x="106" y="26" width="4"  height="2"/>
-              <rect x="110" y="26" width="4"  height="2"/>
-            </g>
-            <rect class="rod-train-stripe" x="8" y="22" width="98" height="3"/>
-            <g class="rod-train-glass">
-              <rect x="14" y="15" width="7" height="6"/>
-              <rect x="24" y="15" width="7" height="6"/>
-              <rect x="34" y="15" width="7" height="6"/>
-              <rect x="44" y="15" width="7" height="10"/>
-              <rect x="54" y="15" width="7" height="6"/>
-              <rect x="64" y="15" width="7" height="6"/>
-              <rect x="74" y="15" width="7" height="6"/>
-              <rect x="84" y="15" width="7" height="10"/>
-              <rect x="94" y="15" width="7" height="6"/>
-              <rect x="103" y="14" width="7" height="6"/>
-              <rect x="110" y="16" width="4" height="4"/>
-            </g>
-            <rect class="rod-train-lamp" x="116" y="24" width="3" height="3"/>
-            <g class="rod-train-frame">
-              <rect x="10" y="28" width="98" height="2"/>
-              <rect x="16" y="29" width="30" height="4"/>
-              <rect x="72" y="29" width="34" height="4"/>
-            </g>
-            <g class="rod-train-wheel-set">
-              <g class="rod-train-wheel">
-                <circle class="tyre" cx="22" cy="33" r="5"/>
-                <circle class="hub"  cx="22" cy="33" r="1.6"/>
-                <line class="spoke" x1="22" y1="28.5" x2="22" y2="37.5"/>
-                <line class="spoke" x1="17.5" y1="33" x2="26.5" y2="33"/>
-              </g>
-              <g class="rod-train-wheel">
-                <circle class="tyre" cx="40" cy="33" r="5"/>
-                <circle class="hub"  cx="40" cy="33" r="1.6"/>
-                <line class="spoke" x1="40" y1="28.5" x2="40" y2="37.5"/>
-                <line class="spoke" x1="35.5" y1="33" x2="44.5" y2="33"/>
-              </g>
-              <g class="rod-train-wheel">
-                <circle class="tyre" cx="82" cy="33" r="5"/>
-                <circle class="hub"  cx="82" cy="33" r="1.6"/>
-                <line class="spoke" x1="82" y1="28.5" x2="82" y2="37.5"/>
-                <line class="spoke" x1="77.5" y1="33" x2="86.5" y2="33"/>
-              </g>
-              <g class="rod-train-wheel">
-                <circle class="tyre" cx="100" cy="33" r="5"/>
-                <circle class="hub"  cx="100" cy="33" r="1.6"/>
-                <line class="spoke" x1="100" y1="28.5" x2="100" y2="37.5"/>
-                <line class="spoke" x1="95.5" y1="33" x2="104.5" y2="33"/>
-              </g>
-            </g>
-          </svg>
-        </div>
-        <div class="rod-load-track" aria-hidden="true"></div>
+        <div class="rod-gif-card"><img class="rod-gif" src="/game/tren_circulando.gif" width="384" height="144" alt="" aria-hidden="true"></div>
       </div>"#;
 
 /// Menú principal (`/`): el juego es la pieza central (hero), con lanzadores del calculador y
@@ -1171,7 +1016,7 @@ pub fn render_menu_page() -> String {
     </div>
 
     <!-- ANDANA · banda decorativa: tren pixel corriendo, ENCIMA del simulador visual. -->
-    <div class="rod-load rod-band no-steam" role="img" aria-label="Rodalies en marcha">
+    <div class="rod-load rod-band" role="img" aria-label="Rodalies en marcha">
       {TRAIN_SCENE}
       <div class="rod-load-caption">La red en marcha<span class="rod-load-dots" aria-hidden="true"><i></i><i></i><i></i></span></div>
     </div>
@@ -1409,7 +1254,7 @@ a.row-btn{text-decoration:none}
             </div>
           </div>
         </div>
-        <div id="numLoad" class="rod-load rod-band no-steam" hidden>__SCENE__<div class="rod-load-caption">Simulando la jornada<span class="rod-load-dots" aria-hidden="true"><i></i><i></i><i></i></span></div></div>
+        <div id="numLoad" class="rod-load rod-band" hidden>__SCENE__<div class="rod-load-caption">Cargando las simulaciones<span class="rod-load-dots" aria-hidden="true"><i></i><i></i><i></i></span></div></div>
         <div class="scroll">
         <table class="num-tbl" id="tbl">
           <thead><tr><th>Semilla</th><th>Trenes</th><th>Retraso máx tren (min)</th><th title="Pico del retraso medio por tren en servicio">Pico retraso medio (min)</th><th title="Pico del retraso acumulado de la red (Σ retrasos vivos)">Pico retraso red (min)</th><th>Pico retenidos</th><th>Final retenidos</th><th>PAX·min</th><th class="act">Incidencias del día</th><th class="act">Retrasos</th></tr></thead>

@@ -24,10 +24,15 @@ const ICON_PARK = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" w
 // Icono de pausa (ANDANA) para trenes detenidos ante señal. Inline, hereda color del texto.
 const ICON_PAUSE = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="11" height="11" fill="currentColor" style="vertical-align:-1px" aria-hidden="true"><rect x="6" y="5" width="4" height="14" rx="1"/><rect x="14" y="5" width="4" height="14" rx="1"/></svg>';
 
-// Overlay de carga (tren pixel ANDANA). Solo presentación: muestra/oculta #rodLoad.
-function rodLoad(show, txt) {
+// Overlay de carga (tren 447 ANDANA). Solo presentación: muestra/oculta #rodLoad.
+// `anim` elige el GIF según lo que pasa: "pantografo" = «Conectando…» (sube el pantógrafo y toma
+// tensión, aún parado) · "circulando" = «Cargando…» (el tren ya rueda).
+const ROD_GIF = { pantografo: "/game/tren_pantografo.gif", circulando: "/game/tren_circulando.gif" };
+function rodLoad(show, txt, anim) {
   const el = document.getElementById("rodLoad"); if (!el) return;
   const t = document.getElementById("rodLoadTxt"); if (txt && t) t.textContent = txt;
+  const g = document.getElementById("rodLoadGif");
+  if (g && ROD_GIF[anim] && !g.src.endsWith(ROD_GIF[anim])) g.src = ROD_GIF[anim];
   if (show) { el.classList.remove("is-done"); el.hidden = false; }
   else { el.classList.add("is-done"); setTimeout(function () { el.hidden = true; }, 480); }
 }
@@ -1647,7 +1652,7 @@ async function iniciar() {
 // `selQ` = selección de plantillas del modo visual (`&sel=…`); `startSec` = hora desde la que se
 // empieza a VER (la grabación cubre toda la jornada). Devuelve true si el trace cargó.
 async function generarDia(seed, selQ, startSec) {
-  rodLoad(true, "Calculando la jornada");
+  rodLoad(true, "Conectando con el motor", "pantografo");
   $("netInfo").textContent = $("netInfo").textContent.replace(/ · .*$/, "") + " · Calculando la simulación física (motor Rust)…";
   try {
     await cargarTrace(seed, selQ);

@@ -16,107 +16,14 @@
 </head>
 <body class="ctc">
 
-<!-- ═══════════════ Overlay de carga · tren pixel ANDANA (només presentació) ═══════════════ -->
-<!-- data-hook: ANDANA pixel-train loader · toggle amb #rodLoad[hidden] o .is-done ·
-     skins: .on-dark (joc, overlay) / .on-light (informes). Sense assets externs. -->
-<div id="rodLoad" class="rod-load on-dark" role="status" aria-live="polite" aria-label="Carregant">
+<!-- ═══════════════ Overlay de carga · tren 447 ANDANA (només presentació) ═══════════════ -->
+<!-- data-hook: rodLoad(show, txt, anim) a app.js · anim = "pantografo" (Conectando…) |
+     "circulando" (Cargando…). GIF transparent sobre targeta clara (rodes grises visibles). -->
+<div id="rodLoad" class="rod-load on-dark" role="status" aria-live="polite" aria-label="Cargando">
   <div class="rod-load-scene">
-
-    <div class="rod-train-scene">
-      <!-- Bafarades lúdiques (opcionals: afegeix .no-steam a .rod-load per amagar-les) -->
-      <span class="rod-load-puff"></span>
-      <span class="rod-load-puff"></span>
-      <span class="rod-load-puff"></span>
-
-      <!-- Sprite pixel: unitat tipus Civia/450, cabina esglaonada a la dreta (sentit de marxa) -->
-      <svg class="rod-train" viewBox="0 0 128 44" width="264" height="91"
-           xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Tren de Rodalies">
-
-        <!-- Reflex de sostre -->
-        <g class="rod-train-lift"><rect x="14" y="7" width="86" height="3"/></g>
-
-        <!-- Buc taronja (cos + nas esglaonat = corba pixel) -->
-        <g class="rod-train-hull">
-          <rect x="8"  y="14" width="98" height="14"/>
-          <rect x="12" y="10" width="92" height="4"/>
-          <rect x="6"  y="17" width="2"  height="9"/>
-          <rect x="106" y="12" width="4" height="16"/>
-          <rect x="110" y="14" width="4" height="14"/>
-          <rect x="114" y="17" width="4" height="11"/>
-          <rect x="118" y="21" width="3" height="7"/>
-        </g>
-
-        <!-- Ombra inferior (volum) -->
-        <g class="rod-train-shade">
-          <rect x="8"   y="26" width="98" height="2"/>
-          <rect x="106" y="26" width="4"  height="2"/>
-          <rect x="110" y="26" width="4"  height="2"/>
-        </g>
-
-        <!-- Franja blanca -->
-        <rect class="rod-train-stripe" x="8" y="22" width="98" height="3"/>
-
-        <!-- Finestres, portes i parabrisa (fosc) -->
-        <g class="rod-train-glass">
-          <rect x="14" y="15" width="7" height="6"/>
-          <rect x="24" y="15" width="7" height="6"/>
-          <rect x="34" y="15" width="7" height="6"/>
-          <rect x="44" y="15" width="7" height="10"/><!-- porta -->
-          <rect x="54" y="15" width="7" height="6"/>
-          <rect x="64" y="15" width="7" height="6"/>
-          <rect x="74" y="15" width="7" height="6"/>
-          <rect x="84" y="15" width="7" height="10"/><!-- porta -->
-          <rect x="94" y="15" width="7" height="6"/>
-          <rect x="103" y="14" width="7" height="6"/><!-- parabrisa -->
-          <rect x="110" y="16" width="4" height="4"/>
-        </g>
-
-        <!-- Far davanter -->
-        <rect class="rod-train-lamp" x="116" y="24" width="3" height="3"/>
-
-        <!-- Baix de caixa + bogies -->
-        <g class="rod-train-frame">
-          <rect x="10" y="28" width="98" height="2"/>
-          <rect x="16" y="29" width="30" height="4"/>
-          <rect x="72" y="29" width="34" height="4"/>
-        </g>
-
-        <!-- Rodes (cada <g> gira sol) -->
-        <g class="rod-train-wheel-set">
-          <g class="rod-train-wheel">
-            <circle class="tyre" cx="22" cy="33" r="5"/>
-            <circle class="hub"  cx="22" cy="33" r="1.6"/>
-            <line class="spoke" x1="22" y1="28.5" x2="22" y2="37.5"/>
-            <line class="spoke" x1="17.5" y1="33" x2="26.5" y2="33"/>
-          </g>
-          <g class="rod-train-wheel">
-            <circle class="tyre" cx="40" cy="33" r="5"/>
-            <circle class="hub"  cx="40" cy="33" r="1.6"/>
-            <line class="spoke" x1="40" y1="28.5" x2="40" y2="37.5"/>
-            <line class="spoke" x1="35.5" y1="33" x2="44.5" y2="33"/>
-          </g>
-          <g class="rod-train-wheel">
-            <circle class="tyre" cx="82" cy="33" r="5"/>
-            <circle class="hub"  cx="82" cy="33" r="1.6"/>
-            <line class="spoke" x1="82" y1="28.5" x2="82" y2="37.5"/>
-            <line class="spoke" x1="77.5" y1="33" x2="86.5" y2="33"/>
-          </g>
-          <g class="rod-train-wheel">
-            <circle class="tyre" cx="100" cy="33" r="5"/>
-            <circle class="hub"  cx="100" cy="33" r="1.6"/>
-            <line class="spoke" x1="100" y1="28.5" x2="100" y2="37.5"/>
-            <line class="spoke" x1="95.5" y1="33" x2="104.5" y2="33"/>
-          </g>
-        </g>
-      </svg>
-    </div>
-
-    <!-- Via de traves (es desplaça cap a l'esquerra → tren "avança" a la dreta) -->
-    <div class="rod-load-track" aria-hidden="true"></div>
+    <div class="rod-gif-card"><img id="rodLoadGif" class="rod-gif" src="/game/tren_pantografo.gif" width="512" height="192" alt="" aria-hidden="true"></div>
   </div>
-
-  <!-- Peu: llegenda (castellà) + tres punts -->
-  <div class="rod-load-caption"><span id="rodLoadTxt">Preparando la red</span> <span class="rod-load-dots" aria-hidden="true"><i></i><i></i><i></i></span></div>
+  <div class="rod-load-caption"><span id="rodLoadTxt">Conectando con la red</span> <span class="rod-load-dots" aria-hidden="true"><i></i><i></i><i></i></span></div>
 </div>
 
 <!-- Mapa satélite a pantalla completa (fondo) -->
