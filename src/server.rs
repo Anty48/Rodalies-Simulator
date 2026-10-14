@@ -62,6 +62,12 @@ pub struct ServerState {
     pub adif: Option<crate::calculator::infrastructure::AdifNet>,
     /// LTV (temporales) — recargable en caliente vía /api/ltv/reload.
     pub ltv: std::sync::RwLock<Option<Arc<crate::calculator::ltv::LtvSet>>>,
+    /// Catálogo del creador de horarios cadenciados, cacheado por red (puntero del `Arc<Network>`:
+    /// una recarga del GTFS lo invalida sola).
+    pub cadence_cat: Mutex<Option<(usize, Arc<crate::cadence::CadenceCatalog>)>>,
+    /// Mallas cadenciadas activas (id = hash de la especificación → trenes). El navegador las vuelve
+    /// a enviar antes de cada run (`/api/cadence/load`), así que se pueden perder sin problema.
+    pub cadences: Mutex<HashMap<String, Arc<Vec<crate::game::GameTrain>>>>,
 }
 
 /// Estado del trabajo de actualización del GTFS (compartido con la UI, mismo patrón que
@@ -160,12 +166,26 @@ async fn handle(mut stream: TcpStream, state: Arc<ServerState>) -> std::io::Resu
             let optimized = q.get("source").map(|s| s == "optimized").unwrap_or(false);
             let line = q.get("line").map(|s| s.as_str()).filter(|s| !s.is_empty());
             let net = state.net.read().unwrap();
-            (
-                "200 OK",
-                "application/json",
-                crate::game::schedule_json(&net, optimized, line).into_bytes(),
-            )
+            let body = match cadence_param(&state, &q) {
+                Some(Ok(trains)) => serde_json::json!({
+                    "source": "cadence",
+                    "service_id": "cadenciado",
+                    "n_trains": trains.len(),
+                    "trains": &*trains,
+                })
+                .to_string(),
+                Some(Err(e)) => serde_json::json!({ "error": e }).to_string(),
+                None => crate::game::schedule_json(&net, optimized, line),
+            };
+            ("200 OK", "application/json", body.into_bytes())
         }
+        // Creador de horarios cadenciados: página, catálogo de recorridos y carga de una malla.
+        "/horarios" | "/cadencia" => ("200 OK", "text/html", report::render_cadence_page().into_bytes()),
+        "/api/cadence/catalog" => {
+            let cat = cadence_catalog(&state);
+            ("200 OK", "application/json", serde_json::to_vec(&cat.out).unwrap_or_default())
+        }
+        "/api/cadence/load" if is_post => ("200 OK", "application/json", cadence_load(&state, &body).into_bytes()),
         // Incidencias (creador compartido por el modo visual y el headless).
         "/api/incidents/templates" if is_post => {
             ("200 OK", "application/json", save_incident_templates(&body).into_bytes())
@@ -436,6 +456,99 @@ fn active_templates(q: &HashMap<String, String>) -> Vec<crate::engine::IncidentT
         .collect()
 }
 
+/// Variabilidad de velocidad de la run: `vvar=<p en %>` (p. ej. `vvar=3`). Ausente o ≤ 0 = apagada
+/// (todos a Vmax). Se acota a `SPEED_VAR_MAX` en el motor. Lo comparten el modo visual y /numeros.
+fn speed_var_param(q: &HashMap<String, String>) -> Option<f64> {
+    q.get("vvar").and_then(|s| s.parse::<f64>().ok()).filter(|p| p.is_finite() && *p > 0.0).map(|p| p / 100.0)
+}
+
+/// Modo SIN HORARIOS (`free=1`, solo el visual): los trenes conservan solo la salida de cabecera.
+fn free_run_param(q: &HashMap<String, String>) -> bool {
+    q.get("free").map(|v| v == "1").unwrap_or(false)
+}
+
+/// Catálogo de recorridos del creador de horarios (cacheado mientras no cambie la red).
+fn cadence_catalog(state: &ServerState) -> Arc<crate::cadence::CadenceCatalog> {
+    let net = state.net.read().unwrap().clone();
+    let key = Arc::as_ptr(&net) as usize;
+    let mut guard = state.cadence_cat.lock().unwrap();
+    if let Some((k, c)) = guard.as_ref() {
+        if *k == key {
+            return c.clone();
+        }
+    }
+    let c = Arc::new(crate::cadence::build_catalog(&net));
+    *guard = Some((key, c.clone()));
+    c
+}
+
+/// Carga (genera) una malla cadenciada a partir de la especificación del creador y la deja activa
+/// con un id estable (hash del cuerpo). Devuelve el id, el nº de trenes, el recuento por línea y
+/// los avisos (recorridos que ya no existen en el GTFS cargado).
+fn cadence_load(state: &ServerState, body: &[u8]) -> String {
+    use std::hash::{Hash, Hasher};
+    let spec: crate::cadence::Spec = match serde_json::from_slice(body) {
+        Ok(s) => s,
+        Err(e) => return serde_json::json!({ "ok": false, "error": format!("Horario inválido: {e}") }).to_string(),
+    };
+    let cat = cadence_catalog(state);
+    let (trains, warnings) = crate::cadence::generate(&cat, &spec);
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    body.hash(&mut h);
+    let id = format!("{:016x}", h.finish());
+    let mut per_line: std::collections::BTreeMap<&str, usize> = std::collections::BTreeMap::new();
+    for t in &trains {
+        *per_line.entry(t.line.as_str()).or_default() += 1;
+    }
+    let empty = trains.is_empty();
+    let out = serde_json::json!({
+        "ok": !empty,
+        "id": id,
+        "name": spec.name,
+        "n_trains": trains.len(),
+        "per_line": per_line,
+        "first_dep": trains.iter().map(|t| t.stops[0].d).min(),
+        "warnings": warnings,
+        "error": if empty { Some("El horario no genera ningún tren: coloca al menos una línea en un reloj.") } else { None },
+    })
+    .to_string();
+    let mut map = state.cadences.lock().unwrap();
+    if map.len() > 32 {
+        map.clear(); // uso local: basta con no crecer sin límite
+    }
+    map.insert(id, Arc::new(trains));
+    out
+}
+
+/// Malla cadenciada pedida por `cad=<id>` (None = horario GTFS). Error si el id ya no está cargado.
+fn cadence_param(
+    state: &ServerState,
+    q: &HashMap<String, String>,
+) -> Option<Result<Arc<Vec<crate::game::GameTrain>>, String>> {
+    let id = q.get("cad").filter(|s| !s.is_empty())?;
+    Some(state.cadences.lock().unwrap().get(id).cloned().ok_or_else(|| {
+        "El horario cadenciado no está cargado en el servidor: vuelve a elegirlo y confirma.".to_string()
+    }))
+}
+
+/// Construye el motor de una run: horario GTFS o malla cadenciada (`cad=`), según la query.
+fn engine_for(
+    state: &ServerState,
+    net: &Network,
+    q: &HashMap<String, String>,
+    cfg: crate::engine::EngineCfg,
+    ltv: Option<&crate::calculator::ltv::LtvSet>,
+    templates: &[crate::engine::IncidentTemplate],
+) -> Result<crate::engine::Engine, String> {
+    match cadence_param(state, q) {
+        Some(Ok(trains)) => {
+            Ok(crate::engine::Engine::with_schedule(net, cfg, state.adif.as_ref(), ltv, templates, None, &trains))
+        }
+        Some(Err(e)) => Err(e),
+        None => Ok(crate::engine::Engine::new(net, cfg, state.adif.as_ref(), ltv, templates, None, None)),
+    }
+}
+
 /// Guarda la lista COMPLETA de plantillas (el frontend envía todo el conjunto al añadir/borrar/toggle).
 fn save_incident_templates(body: &[u8]) -> String {
     match serde_json::from_slice::<Vec<TemplateDto>>(body) {
@@ -461,15 +574,11 @@ fn simulate_json(state: &ServerState, query: &str) -> String {
     let ltv_guard = state.ltv.read().unwrap();
     let mut cfg = crate::engine::EngineCfg::day();
     cfg.seed = seed;
-    let mut eng = crate::engine::Engine::new(
-        &net_guard,
-        cfg,
-        state.adif.as_ref(),
-        ltv_guard.as_deref(),
-        &templates,
-        None,
-        None,
-    );
+    cfg.speed_var = speed_var_param(&q);
+    let mut eng = match engine_for(state, &net_guard, &q, cfg, ltv_guard.as_deref(), &templates) {
+        Ok(e) => e,
+        Err(e) => return serde_json::json!({ "error": e }).to_string(),
+    };
     let m = eng.run();
     let hm = |s: f64| {
         let t = s.max(0.0) as u32;
@@ -498,6 +607,7 @@ fn simulate_json(state: &ServerState, query: &str) -> String {
     let (track, analysis) = delay_track_json(&eng);
     serde_json::json!({
         "seed": seed,
+        "speed_var_pct": cfg.speed_var.map(|p| p * 100.0),
         "n_trains": m.n_trains,
         "sim_hours": m.sim_seconds as f64 / 3600.0,
         "train_min_delay": m.train_min_delay,
@@ -543,6 +653,9 @@ fn delay_track_json(eng: &crate::engine::Engine) -> (serde_json::Value, serde_js
     (serde_json::to_value(&tr).unwrap_or_default(), analysis)
 }
 
+/// Cuántos tramos guarda el ranking de los más problemáticos de una run visual.
+const HOTSPOTS_TOP: usize = 15;
+
 /// Trace de la jornada (posición/velocidad por tren, muestreado) para el reproductor visual.
 /// Es el MISMO motor que el modo headless: lo que se ve = lo que se simula en masa.
 fn trace_json(state: &ServerState, query: &str) -> String {
@@ -553,15 +666,12 @@ fn trace_json(state: &ServerState, query: &str) -> String {
     let ltv_guard = state.ltv.read().unwrap();
     let mut cfg = crate::engine::EngineCfg::day();
     cfg.seed = seed;
-    let mut eng = crate::engine::Engine::new(
-        &net_guard,
-        cfg,
-        state.adif.as_ref(),
-        ltv_guard.as_deref(),
-        &templates,
-        None,
-        None,
-    );
+    cfg.speed_var = speed_var_param(&q);
+    cfg.free_run = free_run_param(&q);
+    let mut eng = match engine_for(state, &net_guard, &q, cfg, ltv_guard.as_deref(), &templates) {
+        Ok(e) => e,
+        Err(e) => return serde_json::json!({ "error": e }).to_string(),
+    };
     // Incidencia MANUAL "lanzar ahora": params opcionales from/to (+ eff/t0/dur/motivo).
     if let (Some(from), Some(to)) = (q.get("from"), q.get("to")) {
         let effect = match q.get("eff").map(|s| s.as_str()) {
@@ -594,8 +704,30 @@ fn trace_json(state: &ServerState, query: &str) -> String {
         })
         .collect();
     let (track, analysis) = delay_track_json(&eng);
+    // Ranking de los tramos que más tiempo han retenido trenes (solo el visual lo mide).
+    let hotspots: Vec<_> = eng
+        .hold_ranking(HOTSPOTS_TOP)
+        .into_iter()
+        .map(|h| {
+            serde_json::json!({
+                "from": h.from,
+                "to": h.to,
+                "from_name": net_guard.stop_name(&h.from),
+                "to_name": net_guard.stop_name(&h.to),
+                "held_s": h.held_s.round(),
+                "events": h.events,
+                "max_s": h.max_s.round(),
+                "lines": h.lines.iter().map(|(l, s)| serde_json::json!([l, s.round()])).collect::<Vec<_>>(),
+            })
+        })
+        .collect();
     let mut v = serde_json::to_value(&trace).unwrap_or_else(|_| serde_json::json!({}));
     if let Some(obj) = v.as_object_mut() {
+        obj.insert("hotspots".into(), serde_json::json!(hotspots));
+        let (held_s, held_n) = eng.hold_total();
+        obj.insert("held_total_s".into(), serde_json::json!(held_s.round()));
+        obj.insert("held_total_events".into(), serde_json::json!(held_n));
+        obj.insert("free_run".into(), serde_json::json!(cfg.free_run));
         obj.insert("incidents".into(), serde_json::json!(incidents));
         obj.insert("track".into(), track);
         obj.insert("analysis".into(), analysis);
@@ -868,14 +1000,27 @@ fn export_runs(state: &ServerState, query: &str, body: &[u8]) -> (&'static str, 
         Err(e) => return ("400 Bad Request", "text/plain", format!("JSON inválido: {e}").into_bytes()),
     };
     let info: serde_json::Value = serde_json::from_str(&gtfs_info_json(state)).unwrap_or_default();
+    // Malla cadenciada de la tanda (`cad=`): sus horarios son los que se exportan y se rotulan.
+    let cad = match cadence_param(state, &q) {
+        Some(Ok(t)) => Some(t),
+        Some(Err(e)) => return ("400 Bad Request", "text/plain", e.into_bytes()),
+        None => None,
+    };
     let meta = crate::runs_export::Meta {
         generated: now_utc_string(),
         gtfs_date: info["date"].as_str().unwrap_or("desconocida").to_string(),
-        service_id: info["service_id"].as_str().unwrap_or("").to_string(),
+        service_id: if cad.is_some() {
+            format!("horario cadenciado «{}»", q.get("cadname").map(|s| s.as_str()).unwrap_or("sin nombre"))
+        } else {
+            info["service_id"].as_str().unwrap_or("").to_string()
+        },
     };
     let net = state.net.read().unwrap();
     let sched = if q.get("horarios").map(|v| v == "1").unwrap_or(false) {
-        Some(crate::game::build_schedule(&net, false, None))
+        Some(match &cad {
+            Some(t) => (**t).clone(),
+            None => crate::game::build_schedule(&net, false, None),
+        })
     } else {
         None
     };

@@ -474,6 +474,9 @@ body.ctc {
 .preday .card { padding: 16px; }
 .preday .field label { font-size: 10.5px; }
 .preday .tpl-list { margin: 12px 0 4px; }
+/* Variabilidad de velocidad: el factor solo aparece con el interruptor encendido. */
+.preday .vvar-field { margin: 12px 0 0; }
+.preday #preVvarHint { margin: 8px 0 0; }
 .preday .tpl-list li { padding: 9px 11px; }
 /* Casilla maestra "Todas / ninguna" sobre las listas de plantillas. */
 .all-toggle { display: flex; align-items: center; gap: 10px; margin-top: 12px; padding: 8px 11px; border-radius: 8px; border: 1px dashed var(--stroke-2); font-size: 12.5px; font-weight: 600; cursor: pointer; }
@@ -739,3 +742,55 @@ body.ctc {
 .preday-kicker { display:inline-flex; align-items:center; justify-content:center; gap:8px; color:var(--naranja-lift);
   font-family:var(--display); font-size:10.5px; font-weight:700; letter-spacing:.14em; text-transform:uppercase; margin-bottom:8px; }
 .preday-kicker svg { width:16px; height:16px; flex:0 0 auto; }
+
+/* ── Selector de horarios: horarios cadenciados + modo sin horarios (caos) ── */
+.sched-cads { display: flex; flex-direction: column; gap: 7px; }
+.sched-cads:empty { display: none; }
+.sched-opt .cad-tag, .chaos-tag { display: inline-block; font-size: 9.5px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; border-radius: 10px; padding: 1px 7px; margin-left: 4px; vertical-align: 1px; }
+.sched-opt .cad-tag { background: rgba(131,0,101,0.35); color: #f1c6e6; }
+.chaos-tag { background: rgba(255,95,95,0.22); color: #ff9a9a; }
+.sched-free:has(input:checked) { border-color: #ff5f5f; box-shadow: inset 0 0 0 1px #ff5f5f, 0 0 14px rgba(255,95,95,0.18); background: rgba(255,95,95,0.07); }
+.sched-make { display: inline-block; margin-top: 9px; font-size: 12px; color: var(--naranja-lift); text-decoration: none; font-weight: 600; }
+.sched-make:hover { text-decoration: underline; }
+
+/* ── Diálogos ligeros (confirmación del modo caos, ranking de tramos) ── */
+.rod-dialog { position: fixed; inset: 0; z-index: 1300; background: rgba(5,7,11,0.66); -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px); display: flex; align-items: center; justify-content: center; padding: 16px; }
+.rod-dialog[hidden] { display: none !important; }
+.rod-dialog-inner { position: relative; border-radius: 16px; padding: 22px 24px; width: 100%; max-width: 460px; max-height: 88vh; overflow: auto; border-top: 3px solid var(--naranja); animation: andanaPop .22s cubic-bezier(.2,.8,.2,1); }
+.rod-dialog-inner.wide { max-width: 640px; }
+.rod-dialog-inner h3 { margin: 6px 0 12px; font-family: var(--display); font-size: 18px; }
+.rod-dialog .dlg-x { position: absolute; top: 12px; right: 14px; background: none; border: none; color: var(--muted); font-size: 22px; cursor: pointer; line-height: 1; }
+.chaos-list { margin: 0; padding-left: 18px; font-size: 13px; line-height: 1.5; display: flex; flex-direction: column; gap: 6px; }
+.hot-list { list-style: none; margin: 10px 0 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.hot-list li { display: grid; grid-template-columns: 26px 1fr auto; gap: 4px 10px; align-items: center; padding: 8px 10px; border: 1px solid var(--stroke); border-radius: 10px; background: rgba(0,0,0,0.2); cursor: pointer; }
+.hot-list li:hover { border-color: var(--naranja); }
+.hot-list .rk { font-family: var(--mono); font-weight: 700; color: var(--naranja-lift); text-align: center; }
+.hot-list .nm { font-size: 13px; font-weight: 600; min-width: 0; }
+.hot-list .tot { font-family: var(--mono); font-weight: 700; font-size: 13px; text-align: right; white-space: nowrap; }
+.hot-list .bar { grid-column: 2 / 4; height: 4px; border-radius: 2px; background: rgba(255,255,255,0.08); overflow: hidden; }
+.hot-list .bar i { display: block; height: 100%; background: var(--rod-grad-cta); }
+.hot-list .meta { grid-column: 2 / 4; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; font-size: 11px; color: var(--muted); }
+.hot-list .meta .ln { display: inline-flex; align-items: center; gap: 3px; font-family: var(--mono); }
+.hot-list .meta img { height: 14px; }
+.hot-empty { font-size: 13px; color: var(--muted); padding: 10px 0; }
+.fin-reopen { position: fixed; right: 18px; bottom: 18px; z-index: 850; }
+
+/* ── Botón "Terminar día" (junto a la velocidad) ── */
+.tb-endday { display: inline-flex; align-items: center; gap: 6px; margin-left: 6px; background: rgba(0,0,0,0.28); border: 1px solid var(--stroke); border-radius: 10px; color: var(--muted); font: 600 12px var(--sans); padding: 6px 10px; cursor: pointer; white-space: nowrap; }
+.tb-endday:hover:not(:disabled) { color: var(--text); border-color: var(--naranja); }
+.tb-endday:disabled { opacity: .4; cursor: default; }
+@media (max-width: 900px) { .tb-endday span { display: none; } }
+
+/* ── Historial de runs visuales ── */
+.rod-dialog-inner.xwide { max-width: 980px; }
+.hist-wrap { overflow-x: auto; margin-top: 8px; }
+.hist-tbl { width: 100%; border-collapse: collapse; font-size: 12px; }
+.hist-tbl th { text-align: left; font-weight: 600; color: var(--muted); padding: 6px 8px; border-bottom: 1px solid var(--stroke); white-space: nowrap; }
+.hist-tbl td { padding: 7px 8px; border-bottom: 1px solid var(--stroke); vertical-align: top; }
+.hist-tbl td.num { font-family: var(--mono); text-align: right; white-space: nowrap; }
+.hist-tbl .top { color: var(--muted); font-size: 11px; line-height: 1.4; }
+.hist-tbl .tag { display: inline-block; font-size: 10px; padding: 1px 6px; border-radius: 8px; background: rgba(255,255,255,0.08); margin-left: 4px; }
+.hist-empty { color: var(--muted); padding: 10px 0; }
+.pre-hist { margin-top: 8px; background: none; border: 1px solid var(--stroke); color: var(--naranja-lift); border-radius: 8px; padding: 5px 10px; font: 600 12px var(--sans); cursor: pointer; }
+.pre-hist:hover { border-color: var(--naranja); }
+.findia .stat.warn b { color: #ff9a9a; }

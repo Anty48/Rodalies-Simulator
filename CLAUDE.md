@@ -104,6 +104,15 @@ runtime — there is no hardcoded map. Data flows in one direction: GTFS → `Ne
   distinct red stops (a `waiting` flag on `TrainRt`), not every 10s retry. Engine canton capacity
   is always the block model now; hard exclusion comes from the single-track token + platforms.
 
+- **`cadence.rs`** — clock-face timetables from the `/horarios` creator (`game/web/cadencia.js`,
+  saved in the browser as `rod-cadences`). `build_catalog` derives origin→destination patterns from
+  GTFS (template trip + offset to a reference station: Sants, Cerdanyola U., La Garriga, Tarragona,
+  Lleida); `generate` shifts those templates to the marked minutes (single markers + line GROUPS
+  that rotate a sequence over the slots). `POST /api/cadence/load` → `cad=<id>` on
+  schedule/trace/simulate/export; `Engine::with_schedule` runs it. `free=1` (visual only) =
+  "sin horarios": only the terminus departure is kept (`EngineCfg.free_run`), with single-track
+  chain reservation to avoid deadlocks (`cadena_unica`).
+
 - **`exporter.rs`** — writes `report/optimized/<LINE>_optimized.csv`, a per-line **PDF**
   timetable (`<LINE>_horari.pdf`, printpdf; stations×trains grid, paginated), and the console
   comparison. Strict rail sim in the optimizer sets `strict_signaling` + `exclude_buses` +

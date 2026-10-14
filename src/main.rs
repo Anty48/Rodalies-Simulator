@@ -7,6 +7,7 @@
 //!   * `--static`: solo escribe y abre el dashboard HTML (offline, sin servidor).
 //!   * `--no-open`: no abre el navegador automáticamente.
 
+mod cadence;
 mod calculator;
 mod engine;
 mod exporter;
@@ -154,6 +155,8 @@ async fn main() {
         ltv: std::sync::RwLock::new(ltv.map(std::sync::Arc::new)),
         opt: Arc::new(std::sync::Mutex::new(server::OptJob::default())),
         gtfs_job: Arc::new(std::sync::Mutex::new(server::GtfsJob::default())),
+        cadence_cat: std::sync::Mutex::new(None),
+        cadences: std::sync::Mutex::new(std::collections::HashMap::new()),
     });
     let url = format!("http://127.0.0.1:{}", PORT);
     if !no_open {

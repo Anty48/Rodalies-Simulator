@@ -17,6 +17,18 @@ use crate::gtfs_loader::Network;
 /// (principales+no principales), a diferencia de trenscat.com, cuyas fichas de texto libre no
 /// dan un recuento total estructurado fiable de extraer en bloque (solo menciones sueltas de
 /// números de vía dentro de la narrativa histórica de cada estación).
+/// Vías PRINCIPALES de andén por cada ACCESO (sentido de llegada) de una estación, para las
+/// estaciones donde un tren parado no debe cerrar la señal anterior: con 2, la señal de entrada solo
+/// se pone en rojo cuando las dos vías del acceso están ocupadas (o hay un tren entrando en el tramo).
+/// La salida sigue siendo una única vía por sentido: un tren que acaba de salir cierra las dos.
+/// Fuente: usuario (2026-10-15) — Barcelona-Sants tiene 14 vías: 6 de alta velocidad (no utilizables
+/// por Rodalies) + 2 por cada uno de los 4 accesos (L'Hospitalet, Bellvitge, Pl. Catalunya,
+/// Pg. de Gràcia). Por defecto 1 (el andén es la prolongación del tramo de aproximación).
+pub fn approach_main_tracks(stop_id: &str) -> u32 {
+    APPROACH_MAIN_TRACKS.iter().find(|(id, _)| *id == stop_id).map_or(1, |(_, n)| *n)
+}
+const APPROACH_MAIN_TRACKS: &[(&str, u32)] = &[("71801", 2)]; // Barcelona-Sants
+
 pub fn platform_tracks(stop_name: &str) -> u32 {
     for (name, tracks) in PLATFORM_TRACKS {
         if *name == stop_name {

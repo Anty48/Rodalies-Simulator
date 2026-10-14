@@ -36,6 +36,9 @@ struct GameStation {
     lon: f64,
     /// Número de vías/andenes reales (de `topology`, con valor por defecto 2).
     tracks: u32,
+    /// Vías principales de andén por acceso (`topology::approach_main_tracks`; 1 = el andén es la
+    /// prolongación del tramo de aproximación). El visor lo usa para el aspecto de la señal de entrada.
+    approach_tracks: u32,
     /// Líneas (route_short_name) que dan servicio a esta estación.
     lines: Vec<String>,
     /// Reparto de las `tracks` en corredores por subconjunto de líneas (solo donde el reparto
@@ -470,12 +473,14 @@ pub fn network_json(
             let mut ls = st_lines.remove(&id).unwrap_or_default();
             ls.sort();
             let diagrams = diagrams_by_id.get(&id).cloned().unwrap_or_default();
+            let approach_tracks = crate::topology::approach_main_tracks(&id);
             GameStation {
                 id,
                 name,
                 lat,
                 lon,
                 tracks,
+                approach_tracks,
                 lines: ls,
                 corridors,
                 diagrams,
@@ -572,6 +577,7 @@ pub fn network_json(
                     lat: j.lat,
                     lon: j.lon,
                     tracks: 0,
+                    approach_tracks: 1,
                     lines: lns.into_iter().collect(),
                     corridors: Vec::new(),
                     diagrams: Vec::new(),

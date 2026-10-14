@@ -54,6 +54,10 @@
       <button data-speed="X5" title="×5">5×</button>
       <button data-speed="X25" title="×25">25×</button>
     </div>
+    <button class="tb-endday" id="btnFinDia" type="button" title="Terminar el día: salta al final de la jornada" disabled>
+      <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 5v14l9-7z" fill="currentColor"/><line x1="18" y1="5" x2="18" y2="19"/></svg>
+      <span>Terminar día</span>
+    </button>
   </div>
 
   <!-- Centro: reloj de jornada -->
@@ -306,6 +310,7 @@
         <h2>Antes de empezar la jornada</h2>
         <p class="hint">Elige incidencias, semilla, horarios y desde qué hora quieres verla. Para ir rápido, pulsa <b>Confirmar</b> sin tocar nada.</p>
         <div class="pre-from" id="preFrom" hidden></div>
+        <button class="pre-hist" id="preHist" type="button" hidden>Historial de runs visuales</button>
       </div>
       <img class="preday-renfe" src="/game/lines/renfe_logo.png" alt="Renfe">
     </header>
@@ -332,6 +337,20 @@
         </section>
 
         <section class="card">
+          <div class="card-title"><span class="dot verde"></span> Conducción</div>
+          <label class="switch big">
+            <input type="checkbox" id="preVvarOn">
+            <span class="track"></span>
+            <span class="switch-txt"><b>Variabilidad de velocidad</b><small>Los trenes no van siempre clavados a Vmax</small></span>
+          </label>
+          <div class="field vvar-field" id="preVvarRow" hidden>
+            <label for="preVvar">Factor de aleatoriedad a 120 km/h (%)</label>
+            <input id="preVvar" type="number" min="0.5" max="25" step="0.5" value="3">
+          </div>
+          <p class="hint mini" id="preVvarHint" hidden></p>
+        </section>
+
+        <section class="card">
           <div class="card-title"><span class="dot morado"></span> Horarios</div>
           <div class="sched-opts" id="schedOpts" role="radiogroup" aria-label="Origen de los horarios">
             <label class="sched-opt"><input type="radio" name="sched" value="saved" checked>
@@ -347,7 +366,13 @@
                     Se conservan las líneas cuyo <code>route_short_name</code> empieza por <b>R</b>.</span>
                 </span></b>
                 <small>Sube un .zip propio al confirmar</small></span></label>
+            <!-- Horarios cadenciados guardados en este navegador (creador /horarios): los pinta app.js. -->
+            <div class="sched-cads" id="schedCads"></div>
+            <label class="sched-opt sched-free"><input type="radio" name="sched" value="free">
+              <span><b>Sin horarios <span class="chaos-tag">modo caos</span></b>
+                <small>Solo la salida de cabecera; después, parada mínima y señales</small></span></label>
           </div>
+          <a class="sched-make" href="/horarios">Crear horarios cadenciados →</a>
           <label class="file-label" id="gtfsFileWrap" hidden>
             <input type="file" id="gtfsFile" accept=".zip">
             <span id="gtfsFileName">Elegir fichero .zip…</span>
@@ -373,12 +398,49 @@
     <h2>Fin de la jornada</h2>
     <div id="finStats"></div>
     <button id="finSeguimiento" class="btn ghost block fin-track"><span class="ic"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><path d="M6 15c3-9 5-9 7-4s4 4 8-6"/></svg></span> Seguimiento de retrasos</button>
+    <button id="finTramos" class="btn ghost block fin-track"><span class="ic"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="17" y2="12"/><line x1="8" y1="18" x2="13" y2="18"/><circle cx="4" cy="6" r="1"/><circle cx="4" cy="12" r="1"/><circle cx="4" cy="18" r="1"/></svg></span> Tramos más problemáticos</button>
+    <button id="finHist" class="btn ghost block fin-track"><span class="ic"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 3-6.7"/><polyline points="3 4 3 9 8 9"/><polyline points="12 7 12 12 15 14"/></svg></span> Historial de runs</button>
     <div class="btn-row">
       <button id="finRepetir" class="btn"><span class="ic"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 11.5a8 8 0 1 0-.8 4.5"/><polyline points="20 4 20 11.5 12.5 11.5"/></svg></span> Repetir el día</button>
       <a class="btn ghost" href="/">Menú principal</a>
     </div>
   </div>
 </div>
+
+<!-- ═══════════════ Confirmación genérica (modo caos, terminar el día…) — la rellena app.js ═══════════════ -->
+<div class="rod-dialog" id="confirmDlg" hidden role="dialog" aria-modal="true" aria-labelledby="confirmTitle">
+  <div class="rod-dialog-inner glass">
+    <div class="preday-kicker" id="confirmKicker"></div>
+    <h3 id="confirmTitle"></h3>
+    <div id="confirmBody"></div>
+    <div class="btn-row">
+      <button class="btn ghost" id="confirmNo" type="button">Cancelar</button>
+      <button class="btn" id="confirmYes" type="button">Confirmar</button>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════ Historial de runs visuales (últimas 10, en este navegador) ═══════════════ -->
+<div class="rod-dialog" id="histDlg" hidden role="dialog" aria-modal="true" aria-labelledby="histTitle">
+  <div class="rod-dialog-inner glass xwide">
+    <button class="dlg-x" id="histClose" type="button" aria-label="Cerrar">×</button>
+    <h3 id="histTitle">Historial de runs visuales</h3>
+    <p class="hint mini">Resultados finales de las últimas 10 jornadas vistas en el simulador visual (las más antiguas se borran solas). Se guardan en este navegador.</p>
+    <div class="hist-wrap"><table class="hist-tbl" id="histTbl"></table></div>
+    <div class="btn-row"><button class="btn ghost" id="histClear" type="button">Borrar historial</button></div>
+  </div>
+</div>
+
+<!-- ═══════════════ Ranking de tramos que más trenes han retenido ═══════════════ -->
+<div class="rod-dialog" id="hotDlg" hidden role="dialog" aria-modal="true" aria-labelledby="hotTitle">
+  <div class="rod-dialog-inner glass wide">
+    <button class="dlg-x" id="hotClose" type="button" aria-label="Cerrar">×</button>
+    <h3 id="hotTitle">Tramos más problemáticos</h3>
+    <p class="hint mini" id="hotSub">Tiempo total que los trenes han esperado ante la señal de entrada de cada tramo durante la jornada. Pulsa un tramo para verlo en el mapa.</p>
+    <ol class="hot-list" id="hotList"></ol>
+  </div>
+</div>
+<button class="btn fin-reopen" id="finReopen" type="button" hidden>Balance del día</button>
 
 <script src="/game/delay_track.js"></script>
 <script src="/game/app.js"></script>

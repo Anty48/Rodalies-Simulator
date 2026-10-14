@@ -56,6 +56,8 @@ pub struct ExportReq {
     pub runs: Vec<RunRow>,
     /// Plantillas de incidencia SELECCIONADAS en esa tanda (escenario reproducible).
     pub templates: Vec<TplInfo>,
+    /// Variabilidad de velocidad de la tanda (% de Vmax); `None` = apagada (todos a Vmax).
+    pub speed_var_pct: Option<f64>,
 }
 
 /// Metadatos del escenario que añade el servidor (de qué GTFS salen los horarios).
@@ -71,6 +73,14 @@ fn effect_label(e: &str) -> &'static str {
         "red_both" => "Señal roja (2 sentidos)",
         "single" => "Vía única",
         _ => "Otro",
+    }
+}
+
+/// Texto del parámetro de variabilidad de velocidad para el escenario exportado.
+fn speed_var_label(p: Option<f64>) -> String {
+    match p {
+        Some(p) if p > 0.0 => format!("Activada · factor {p:.1} % a 120 km/h (media Vmax-{p:.1} %, entre Vmax-{:.1} % y Vmax; escala con la Vmax, sorteo por tramo entre señales)", 2.0 * p),
+        _ => "Desactivada (todos a Vmax)".into(),
     }
 }
 
@@ -238,6 +248,7 @@ pub fn xlsx(req: &ExportReq, meta: &Meta, sched: Option<(&Network, &[GameTrain])
         vec![s("GTFS (fecha del conjunto)"), s(&meta.gtfs_date)],
         vec![s("Servicio (service_id)"), s(&meta.service_id)],
         vec![s("Runs"), Cell::N(req.runs.len() as f64)],
+        vec![s("Variabilidad de velocidad"), s(&speed_var_label(req.speed_var_pct))],
         vec![],
         vec![h("Plantilla"), h("Efecto"), h("Duración (min)"), h("Probabilidad"), h("Cada (h)")],
     ];
@@ -390,6 +401,7 @@ pub fn pdf(req: &ExportReq, meta: &Meta, sched: Option<(&Network, &[GameTrain])>
     p.gap(2.0);
     p.line(&format!("Generado: {}   ·   GTFS del {}   ·   service_id {}", meta.generated, meta.gtfs_date, meta.service_id), 8.5, false);
     p.line(&format!("Runs: {}", req.runs.len()), 8.5, false);
+    p.line(&format!("Variabilidad de velocidad: {}", speed_var_label(req.speed_var_pct)), 8.5, false);
 
     // Resumen estadístico.
     p.gap(3.0);
@@ -571,6 +583,7 @@ mod tests {
         let req = ExportReq {
             runs: vec![RunRow { seed: 1.0, n_trains: 961.0, incidents: vec![RunInc { motivo: "A & <B>".into(), ..Default::default() }], ..Default::default() }],
             templates: vec![],
+            speed_var_pct: Some(3.0),
         };
         let meta = Meta { generated: "x".into(), gtfs_date: "y".into(), service_id: "z".into() };
         let bytes = xlsx(&req, &meta, None).unwrap();

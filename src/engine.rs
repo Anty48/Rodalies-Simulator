@@ -45,6 +45,21 @@ const VENTANA_PRIORIDAD_SEC: f64 = 8.0 * 60.0;
 const ACCEL_FRACTION: f64 = 0.75;
 /// Reducción de velocidad ante señal en ámbar (para poder frenar si el siguiente está en rojo).
 const AMBER_FACTOR: f64 = 0.8;
+/// Variabilidad de velocidad (conducción real): truncado de la gaussiana en desviaciones típicas.
+/// Con σ = p/2 el truncado simétrico a ±p alrededor de la media cae en ±2σ (se conserva ~95 % de
+/// la campana). El usuario solo fija `p`; este σ es una elección de modelado declarada, no un dato.
+const SPEED_VAR_TRUNC_Z: f64 = 2.0;
+/// Velocidad de REFERENCIA (km/h) a la que se define el factor `p` del usuario (Vmax de la mayoría
+/// del material de Rodalies: 447 / 465). A otra Vmax el factor escala LINEALMENTE: p(V) = p·V/120.
+/// Motivo: a baja velocidad (agujas, curvas, LTV, entrada a estación) el maquinista clava el límite
+/// —es fácil y el ASFA vigila—; a alta velocidad es más probable que lleve un margen por debajo.
+const SPEED_VAR_REF_KMH: f64 = 120.0;
+/// Tope de seguridad del factor efectivo `p(V)` (un 25 % implicaría circular hasta a la mitad de Vmax).
+pub const SPEED_VAR_MAX: f64 = 0.25;
+/// Sal del flujo aleatorio de velocidades: independiente del de incidencias, así activar/desactivar
+/// la variabilidad NO cambia qué incidencias rueda una semilla.
+const SPEED_VAR_SALT: u64 = 0x5EED_0F_5EED;
+
 /// Vmax de vía por defecto donde ADIF no da cobertura (km/h → m/s), para no dejar el cantón libre.
 const DEFAULT_TRACK_VMAX_MS: f64 = 100.0 / 3.6;
 /// Paso de integración física acotado (s) dentro de cada `step` del driver.
@@ -176,6 +191,7 @@ struct Block {
     res_single: u32,    // recurso canónico del cantón (vía única estática o por incidencia)
     stat_single: bool,  // el cantón es vía única ESTÁTICA (topología)
     cap_double: u32,    // capacidad cuando NO es vía única (platCap en el último sub-bloque; si no, 1)
+    plat_tracks: u32,   // último sub-bloque: vías principales de andén de este acceso (1 = sin andén aparte)
 }
 
 /// Fase del tren en su recorrido.
@@ -195,6 +211,8 @@ struct Train {
     pts: Vec<Pt>,
     cum_l: Vec<f64>,             // distancia de ruta acumulada en cada parada (m); len = pts.len()
     canton_zones: Vec<Vec<SpeedZone>>, // perfil de velocidad por cantón i (m/s)
+    speed_p0: f64,               // factor de variabilidad a 120 km/h (0 = apagada, todos a Vmax)
+    speed_z: Vec<f64>,           // sorteo N(0,1) truncado a ±2 por BLOQUE de `seq` (tramo entre señales)
     dwell_min: Vec<f64>,         // parada mínima por estación (s); 0 en puntos de paso
     seq: Vec<Block>,
     // física:
@@ -501,12 +519,21 @@ pub struct EngineCfg {
     pub dt_sec: f64,
     /// Semilla del Monte-Carlo (tirada de incidencias reproducible).
     pub seed: u64,
+    /// Variabilidad de velocidad: `Some(p)` (p. ej. 0.03 = 3 %, definido A 120 km/h) hace que cada
+    /// tren, en cada tramo entre señales, circule a `Vmax × f` con `f ~ N(1−p(V), (p(V)/2)²)` truncada
+    /// a `[1−2p(V), 1]` y `p(V) = p·Vmax/120` (ver `speed_factor`). `None` = siempre a Vmax.
+    pub speed_var: Option<f64>,
+    /// MODO SIN HORARIOS («caos», experimentos de capacidad): cada tren conserva SOLO su hora de
+    /// salida de cabecera; en el resto de paradas sale en cuanto cumple la parada mínima
+    /// reglamentaria, y la vía única deja de reservar el paso a regionales según su horario (las
+    /// señales solo miran si hay un tren delante). El retraso se sigue midiendo contra el horario.
+    pub free_run: bool,
 }
 impl EngineCfg {
     /// Jornada completa. `start_sec` (05:00) es solo un FALLBACK: `Engine::new` lo sobrescribe con la
     /// salida del primer tren por horario (evita el artefacto de "nacer tarde"). `end_sec` = 24:00.
     pub fn day() -> Self {
-        EngineCfg { start_sec: 5 * 3600, end_sec: 24 * 3600, dt_sec: 2.0, seed: 1 }
+        EngineCfg { start_sec: 5 * 3600, end_sec: 24 * 3600, dt_sec: 2.0, seed: 1, speed_var: None, free_run: false }
     }
 }
 
@@ -587,8 +614,32 @@ pub struct Trace {
     pub arrivals: Vec<LateArrival>,
 }
 
+/// Tiempo de RETENCIÓN acumulado ante la señal de entrada de un tramo (cantón dirigido): cuánto
+/// tráfico ha frenado ese tramo en la jornada. Solo se calcula en el modo VISUAL (`run_trace`): en
+/// las runs headless sería trabajo extra que nadie lee.
+#[derive(Default, Clone)]
+struct HoldAcc {
+    secs: f64,                     // tren·segundos retenidos esperando entrar al tramo
+    events: u32,                   // retenciones DISTINTAS (flanco de subida de `waiting`)
+    max_s: f64,                    // retención continua más larga de un solo tren (s)
+    by_line: HashMap<String, f64>, // tren·segundos por línea (qué servicios sufren el tramo)
+}
+
+/// Un tramo del ranking de los más problemáticos (ver [`Engine::hold_ranking`]).
+pub struct HoldSpot {
+    pub from: String, // stop_id de la señal de entrada (inicio del cantón)
+    pub to: String,   // stop_id del final del cantón
+    pub held_s: f64,
+    pub events: u32,
+    pub max_s: f64,
+    /// (línea, tren·segundos retenidos) de mayor a menor.
+    pub lines: Vec<(String, f64)>,
+}
+
 pub struct Engine {
     cfg: EngineCfg,
+    /// Retención acumulada por tramo `(from_nid, to_nid)`; `None` = no se mide (runs headless).
+    holds: Option<HashMap<(u32, u32), HoldAcc>>,
     clock: f64,
     trains: Vec<Train>,
     infra: Infra,
@@ -640,7 +691,7 @@ impl Engine {
     /// (main/server); si faltan, cae a un Vmax de vía por defecto documentado.
     pub fn new(
         net: &Network,
-        mut cfg: EngineCfg,
+        cfg: EngineCfg,
         adif: Option<&infrastructure::AdifNet>,
         ltv: Option<&ltv::LtvSet>,
         templates: &[IncidentTemplate],
@@ -648,7 +699,20 @@ impl Engine {
         line_filter: Option<&str>,
     ) -> Self {
         let game_trains = game::build_schedule(net, false, line_filter);
+        Self::with_schedule(net, cfg, adif, ltv, templates, offsets, &game_trains)
+    }
 
+    /// Como [`Engine::new`] pero sobre un horario YA construido (p. ej. una malla CADENCIADA del
+    /// creador de horarios, `cadence::generate`), con la misma descomposición en cantones atómicos.
+    pub fn with_schedule(
+        net: &Network,
+        mut cfg: EngineCfg,
+        adif: Option<&infrastructure::AdifNet>,
+        ltv: Option<&ltv::LtvSet>,
+        templates: &[IncidentTemplate],
+        offsets: Option<&HashMap<String, i64>>,
+        game_trains: &[game::GameTrain],
+    ) -> Self {
         let coord = |id: &str| net.coord(id); // estaciones y bifurcaciones
 
         // Vía única (canónica por stop_id) — necesaria para sub-bloques y para el testigo.
@@ -703,7 +767,7 @@ impl Engine {
 
         // Construir trenes (paradas con coordenadas, como el juego).
         let mut trains: Vec<Train> = Vec::with_capacity(game_trains.len());
-        for gt in &game_trains {
+        for gt in game_trains {
             // Desfase de fase de la línea (optimizador): desplaza TODA la marcha del tren un mismo
             // Δt → cambia solo la fase relativa entre líneas, no la estructura del recorrido.
             let off = offsets.and_then(|m| m.get(&gt.line)).copied().unwrap_or(0);
@@ -734,6 +798,8 @@ impl Engine {
                 veh: vehicle_for_line(&gt.line),
                 pts,
                 cum_l,
+                speed_p0: 0.0,
+                speed_z: Vec::new(),
                 canton_zones,
                 dwell_min: Vec::new(),
                 seq: Vec::new(),
@@ -785,6 +851,18 @@ impl Engine {
             t.cb = 0;
         }
 
+        // Variabilidad de velocidad: un sorteo por tren y por BLOQUE (tramo entre dos señales), tirado
+        // UNA vez antes del día con un flujo propio de la semilla (determinista: "lanzar incidencia
+        // ahora" re-simula idéntico). Se guarda la z normalizada y no el factor: así la media y la σ
+        // se re-escalan con la Vmax del punto (zonas de velocidad / LTV dentro del mismo bloque).
+        if let Some(p0) = cfg.speed_var.filter(|p| p.is_finite() && *p > 0.0) {
+            let mut rng = StdRng::seed_from_u64(cfg.seed ^ SPEED_VAR_SALT);
+            for t in &mut trains {
+                t.speed_p0 = p0;
+                t.speed_z = (0..t.seq.len()).map(|_| trunc_std_normal(&mut rng, SPEED_VAR_TRUNC_Z)).collect();
+            }
+        }
+
         // Incidencias: pesos espaciales del sistema + tirada de dados ANTES del día (reproducible).
         let spatial = spatial_weights(net, &trains, &infra);
         let incidents =
@@ -793,6 +871,7 @@ impl Engine {
         let n_res = infra.n_res;
         Engine {
             cfg,
+            holds: None,
             clock: cfg.start_sec as f64,
             trains,
             infra,
@@ -823,7 +902,8 @@ impl Engine {
         // Efectos de incidencias vigentes AHORA (señales en rojo por cantón, cantones en vía única).
         let (dyn_red, dyn_single) = dyn_effects(&self.infra, &self.incidents, now);
 
-        let Engine { trains, infra, occ, late_arrivals, .. } = self;
+        let free_run = self.cfg.free_run;
+        let Engine { trains, infra, occ, late_arrivals, holds, .. } = self;
         let dynp = Dyn { red: &dyn_red, single: &dyn_single };
         for v in occ.iter_mut() {
             v.clear(); // reutiliza la capacidad; nada de realojar por step
@@ -831,6 +911,7 @@ impl Engine {
 
         // Pass 1: ocupación de bloques según el bloque comprometido (cb) de cada tren activo.
         let mut active: Vec<bool> = Vec::with_capacity(trains.len());
+        let mut chain: Vec<u32> = Vec::new(); // reutilizado: reservas de vía única (modo sin horarios)
         for (idx, t) in trains.iter().enumerate() {
             if t.phase == Phase::Done {
                 active.push(false);
@@ -855,6 +936,16 @@ impl Engine {
             // mientras el tren está en la estación (no se vacía al llegar). Los trenes de detrás esperan
             // en el tramo previo (colapso realista), no se cuelan en vías extra.
             occ[dynp.block_res(b) as usize].push(idx);
+            // Sin horarios: el tramo de vía única que se recorre reserva también la cadena de vía
+            // única que cruzará sin parar (evita interbloqueos en apartaderos donde no para).
+            if free_run && t.phase == Phase::Running {
+                cadena_unica(t, &dynp, t.cb, &mut chain);
+                for &r in &chain {
+                    if !occ[r as usize].contains(&idx) {
+                        occ[r as usize].push(idx);
+                    }
+                }
+            }
         }
 
         // Pass 2: por tren (orden determinista), física + gating de bloques con ocupación viva.
@@ -863,7 +954,7 @@ impl Engine {
             if !active[idx] {
                 continue;
             }
-            let held = avanzar_tren(idx, trains, infra, &dynp, occ, now, dt, late_arrivals);
+            let held = avanzar_tren(idx, trains, infra, &dynp, occ, now, dt, late_arrivals, free_run);
             if held {
                 waiting += 1;
             }
@@ -900,6 +991,11 @@ impl Engine {
             if t.waiting && !t.was_waiting {
                 new_conflicts += 1;
             }
+            if t.waiting {
+                if let Some(h) = holds.as_mut() {
+                    acumular_retencion(h, t, now, dt);
+                }
+            }
             t.was_waiting = t.waiting;
         }
 
@@ -928,6 +1024,8 @@ impl Engine {
     /// Corre la jornada COMPLETA grabando un trace (muestreado cada `sample_dt` s) para que el
     /// frontend lo reproduzca: es el mecanismo "lo que ves = lo que se simula". Consume el motor.
     pub fn run_trace(&mut self, sample_dt: f64) -> Trace {
+        // El ranking de tramos que más retienen solo lo lee el visor: se mide aquí y no en `run`.
+        self.holds = Some(HashMap::new());
         let n = self.trains.len();
         let mut ids: Vec<String> = Vec::new();
         let mut id_idx: HashMap<String, u32> = HashMap::new();
@@ -974,6 +1072,43 @@ impl Engine {
         let mut arrivals = std::mem::take(&mut self.late_arrivals);
         arrivals.sort_by_key(|a| a.t); // orden temporal para el contador incremental y el log
         Trace { start: self.cfg.start_sec as f64, end, dt: sample_dt, ids, trains: tt, arrivals }
+    }
+
+    /// Los `n` tramos (cantones dirigidos) que más tiempo han retenido trenes en total, de mayor a
+    /// menor. Solo tiene datos tras [`Engine::run_trace`] (modo visual); en las runs headless está vacío.
+    pub fn hold_ranking(&self, n: usize) -> Vec<HoldSpot> {
+        let Some(h) = &self.holds else { return Vec::new() };
+        let mut names: Vec<&str> = vec![""; self.infra.stop_index.len()];
+        for (id, &i) in &self.infra.stop_index {
+            names[i as usize] = id;
+        }
+        let mut v: Vec<(&(u32, u32), &HoldAcc)> = h.iter().collect();
+        // Desempate determinista por ids (el HashMap itera en orden aleatorio por proceso).
+        v.sort_by(|a, b| b.1.secs.total_cmp(&a.1.secs).then(a.0.cmp(b.0)));
+        v.into_iter()
+            .take(n)
+            .map(|(&(a, b), acc)| {
+                let mut lines: Vec<(String, f64)> = acc.by_line.iter().map(|(l, &s)| (l.clone(), s)).collect();
+                lines.sort_by(|x, y| y.1.total_cmp(&x.1).then(x.0.cmp(&y.0)));
+                HoldSpot {
+                    from: names[a as usize].to_string(),
+                    to: names[b as usize].to_string(),
+                    held_s: acc.secs,
+                    events: acc.events,
+                    max_s: acc.max_s,
+                    lines,
+                }
+            })
+            .collect()
+    }
+
+    /// Total de la jornada: (tren·segundos retenidos ante señales, nº de retenciones) sumando TODOS
+    /// los tramos (no solo el ranking). Métrica comparable entre modos de horario: al contrario que el
+    /// retraso, no depende de ir adelantado o atrasado respecto al horario. Solo tras `run_trace`.
+    pub fn hold_total(&self) -> (f64, u64) {
+        self.holds.as_ref().map_or((0.0, 0), |h| {
+            h.values().fold((0.0, 0), |(s, e), a| (s + a.secs, e + a.events as u64))
+        })
     }
 
     /// Estado observable de los trenes EN MARCHA ahora (para el trace/reproductor).
@@ -1154,13 +1289,14 @@ fn avanzar_tren(
     now: f64,
     dt: f64,
     late: &mut Vec<LateArrival>,
+    free_run: bool,
 ) -> bool {
     // --- Parado en estación: gestión de dwell / hora de salida / señal de salida ---
     if trains[idx].phase == Phase::Dwell {
         trains[idx].waiting = false;
         let k = trains[idx].station_idx;
         let dwell_ok = now - trains[idx].arrived_at >= trains[idx].dwell_min[k];
-        let sched_ok = now >= trains[idx].pts[k].d; // NUNCA sale antes de su hora programada
+        let sched_ok = !debe_esperar_horario(free_run, k, now, trains[idx].pts[k].d);
         if !(dwell_ok && sched_ok) {
             trains[idx].held_since = f64::NAN; // parado por su dwell/hora, no retenido
             return false;
@@ -1172,7 +1308,7 @@ fn avanzar_tren(
             return false;
         }
         let nb = trains[idx].seq[cb + 1].clone();
-        if !bloque_entrada(infra, occ, dynp, trains, idx, &nb, now) {
+        if !bloque_entrada(infra, occ, dynp, trains, idx, &nb, now, free_run) {
             trains[idx].waiting = true; // salida bloqueada por ocupación
             // Retenido en el andén con la salida en rojo: pasado el umbral, el retraso vivo es lo que
             // lleva de más sobre su hora de salida.
@@ -1209,7 +1345,12 @@ fn avanzar_tren(
         let ci = trains[idx].canton_idx;
         let local_x = trains[idx].s - trains[idx].cum_l[ci];
         let infra_v = physics::infra_limit(&trains[idx].canton_zones[ci], local_x);
-        let mut v_cap = trains[idx].veh.vmax.min(infra_v);
+        // Velocidad de crucero = Vmax permitida × factor del maquinista en este tramo entre señales.
+        let v_lim = trains[idx].veh.vmax.min(infra_v);
+        let mut v_cap = match trains[idx].speed_z.get(trains[idx].cb) {
+            Some(&z) => v_lim * speed_factor(trains[idx].speed_p0, v_lim * 3.6, z),
+            None => v_lim,
+        };
 
         // Objetivos de frenada: próxima parada REAL (v=0) y señal en ROJO más cercana (v=0).
         let stop_x = trains[idx].cum_l[trains[idx].target_stop];
@@ -1219,7 +1360,7 @@ fn avanzar_tren(
             let nb = trains[idx].seq[cb + 1].clone();
             // Solo importa el bloque siguiente si está ANTES de la próxima parada real.
             if nb.x_enter < stop_x - 1e-6 {
-                let enterable = bloque_entrada(infra, occ, dynp, trains, idx, &nb, now);
+                let enterable = bloque_entrada(infra, occ, dynp, trains, idx, &nb, now, free_run);
                 if !enterable {
                     restrictions.push(Restriction { x: nb.x_enter, v: 0.0 }); // rojo → frenar antes
                 } else {
@@ -1227,7 +1368,7 @@ fn avanzar_tren(
                     if let Some(nn) = trains[idx].seq.get(cb + 2) {
                         if !nn.origin
                             && nn.x_enter < stop_x - 1e-6
-                            && bloque_ocupado(dynp, occ, nn, Some(idx))
+                            && bloque_ocupado(dynp, occ, trains, nn, Some(idx))
                         {
                             v_cap = v_cap.min(trains[idx].veh.vmax.min(infra_v) * AMBER_FACTOR);
                         }
@@ -1289,7 +1430,7 @@ fn avanzar_tren(
             if nb.x_enter >= stop_x - 1e-6 || nb.x_enter > new_s {
                 break; // el siguiente bloque es la parada, o aún no lo alcanza
             }
-            if bloque_entrada(infra, occ, dynp, trains, idx, &nb, now) {
+            if bloque_entrada(infra, occ, dynp, trains, idx, &nb, now, free_run) {
                 ocupar(occ, dynp, idx, &trains[idx].seq[cb], false);
                 trains[idx].cb = cb + 1;
                 ocupar(occ, dynp, idx, &trains[idx].seq[trains[idx].cb], true);
@@ -1322,6 +1463,58 @@ fn avanzar_tren(
         t.held_since = f64::NAN;
     }
     held
+}
+
+/// Factor de velocidad de crucero de un maquinista (nadie circula clavado a Vmax): `f = 1 − p(V) +
+/// σ(V)·z`, con `p(V) = p0·V/120` (acotado a `SPEED_VAR_MAX`), `σ(V) = p(V)/2` y `z` ∈ [−2, 2] el
+/// sorteo del tramo. Es decir `f ~ N(1−p(V), σ(V)²)` truncada SIMÉTRICAMENTE a `[1−2p(V), 1]`:
+/// nunca supera Vmax, y cuanto MENOR es la Vmax más se acerca la media a Vmax y más estrecha es la
+/// campana (a 120 km/h se cumplen exactamente los valores del usuario). Invariante: p0 = 0 → f = 1.
+fn speed_factor(p0: f64, vmax_kmh: f64, z: f64) -> f64 {
+    let p = (p0 * vmax_kmh.max(0.0) / SPEED_VAR_REF_KMH).clamp(0.0, SPEED_VAR_MAX);
+    1.0 - p + (p / SPEED_VAR_TRUNC_Z) * z.clamp(-SPEED_VAR_TRUNC_Z, SPEED_VAR_TRUNC_Z)
+}
+
+/// Normal estándar truncada a `[−k, k]` (rechazo sobre Box-Muller; con k = 2 acepta ~95 %).
+/// Aleatoriedad de conducción, en un flujo independiente del de las incidencias.
+fn trunc_std_normal(rng: &mut StdRng, k: f64) -> f64 {
+    loop {
+        let u1 = rng.gen::<f64>().max(f64::MIN_POSITIVE);
+        let u2 = rng.gen::<f64>();
+        let z = (-2.0 * u1.ln()).sqrt() * (std::f64::consts::TAU * u2).cos();
+        if z.abs() <= k {
+            return z;
+        }
+    }
+}
+
+/// ¿Debe el tren seguir parado en la parada `k` esperando su hora programada `dep`? Con horario,
+/// NUNCA sale antes de su hora. En modo sin horarios solo la cabecera (`k == 0`) conserva su hora
+/// de salida; en el resto sale en cuanto cumple la parada mínima (la comprueba quien llama).
+fn debe_esperar_horario(free_run: bool, k: usize, now: f64, dep: f64) -> bool {
+    (!free_run || k == 0) && now < dep
+}
+
+/// Suma un paso `dt` de retención del tren `t` (que está `waiting`) al tramo cuya señal de entrada
+/// le tiene parado: el bloque siguiente a su bloque comprometido (`seq[cb+1]`). Vale tanto si espera
+/// en plena vía como en el andén con la salida en rojo (en ambos casos `cb+1` es el bloque vetado).
+/// Se agrega por CANTÓN (`from→to`), no por sub-bloque: es la unidad que entiende el usuario.
+fn acumular_retencion(h: &mut HashMap<(u32, u32), HoldAcc>, t: &Train, now: f64, dt: f64) {
+    let Some(nb) = t.seq.get(t.cb + 1) else { return };
+    let acc = h.entry((nb.from, nb.to)).or_default();
+    acc.secs += dt;
+    if !t.was_waiting {
+        acc.events += 1;
+    }
+    if !t.held_since.is_nan() {
+        acc.max_s = acc.max_s.max(now - t.held_since);
+    }
+    match acc.by_line.get_mut(&t.line) {
+        Some(v) => *v += dt,
+        None => {
+            acc.by_line.insert(t.line.clone(), dt);
+        }
+    }
 }
 
 /// Anota el inicio de la retención y dice si ya supera `HOLD_LIVE_DELAY_S` (→ recalcular el retraso
@@ -1361,15 +1554,60 @@ fn next_real_stop(pts: &[Pt], from: usize) -> usize {
 /// ¿Está OCUPADO el recurso del bloque `b`? (gating del bucle CALIENTE). `except` = el propio tren.
 /// Todo se lee de índices `u32` ya precalculados en el bloque — cero claves `String`.
 #[inline]
-fn bloque_ocupado(dynp: &Dyn, occ: &[Vec<usize>], b: &Block, except: Option<usize>) -> bool {
+fn bloque_ocupado(dynp: &Dyn, occ: &[Vec<usize>], trains: &[Train], b: &Block, except: Option<usize>) -> bool {
     // Señal de entrada en rojo por incidencia (solo el sub-bloque 0 = la señal de entrada al cantón).
     if b.sb == 0 && dynp.red.contains(&(b.from, b.to)) {
         return true;
     }
     let unica = dynp.block_single(b);
-    let cap = if unica { 1 } else { b.cap_double as usize };
     let arr = &occ[dynp.block_res(b) as usize];
+    if !unica && b.plat_tracks > 1 {
+        return anden_lleno(arr, trains, except, b.plat_tracks);
+    }
+    let cap = if unica { 1 } else { b.cap_double as usize };
     arr.iter().filter(|&&x| Some(x) != except).count() >= cap
+}
+
+/// Último tramo hacia una estación con VARIAS vías principales por acceso (Sants: 2). La señal de
+/// entrada se cierra si hay un tren CIRCULANDO por el tramo (la aproximación sigue siendo una sola
+/// vía), o si los trenes PARADOS en el andén ya ocupan todas las vías principales de ese acceso. Un
+/// tren estacionado no basta para cerrarla: el siguiente entra por la otra vía.
+fn anden_lleno(occupants: &[usize], trains: &[Train], except: Option<usize>, tracks: u32) -> bool {
+    let mut parados = 0;
+    for &x in occupants {
+        if Some(x) == except {
+            continue;
+        }
+        if trains[x].phase != Phase::Dwell {
+            return true;
+        }
+        parados += 1;
+    }
+    parados >= tracks
+}
+
+/// MODO SIN HORARIOS: recursos de vía única que un tren debe reservar AL ENTRAR en el bloque
+/// `seq[k]`, además del propio: si su siguiente estación es un PUNTO DE PASO (no para) y el cantón
+/// que sigue también es vía única, cruzará sin detenerse, así que necesita toda la cadena de vía
+/// única hasta su próxima parada real. Sin esto, dos exprés en sentidos opuestos se encuentran en un
+/// apartadero donde ninguno para y cada uno retiene el tramo que pide el otro (interbloqueo real del
+/// R15 en Riudecanyes-Botarell). Con horario no hace falta: los cruces los ordena el horario.
+fn cadena_unica(t: &Train, dynp: &Dyn, k: usize, out: &mut Vec<u32>) {
+    out.clear();
+    let Some(b) = t.seq.get(k) else { return };
+    if b.origin || !dynp.block_single(b) {
+        return;
+    }
+    for nb in &t.seq[k + 1..] {
+        if nb.sb != 0 {
+            continue; // sub-bloques interiores del mismo cantón (vía única = un solo recurso)
+        }
+        // `nb` empieza en la estación `pts[arr_idx-1]`: si el tren para allí, ahí acaba la cadena.
+        if !t.pts[nb.arr_idx - 1].pass || !dynp.block_single(nb) {
+            break;
+        }
+        out.push(nb.res_single);
+    }
 }
 
 fn regional_entrando_pronto(
@@ -1400,11 +1638,23 @@ fn bloque_entrada(
     idx: usize,
     nb: &Block,
     now: f64,
+    free_run: bool,
 ) -> bool {
-    if bloque_ocupado(dynp, occ, nb, Some(idx)) {
+    if bloque_ocupado(dynp, occ, trains, nb, Some(idx)) {
         return false;
     }
-    if !trains[idx].regional
+    if free_run && nb.sb == 0 {
+        // Toda la cadena de vía única que cruzará sin parar ha de estar libre (ver `cadena_unica`).
+        let k = trains[idx].cb + 1;
+        let mut chain = Vec::new();
+        cadena_unica(&trains[idx], dynp, k, &mut chain);
+        if chain.iter().any(|&r| occ[r as usize].iter().any(|&x| x != idx)) {
+            return false;
+        }
+    }
+    // Prioridad de regionales en vía única: se anticipa con su HORARIO; sin horarios no hay reserva.
+    if !free_run
+        && !trains[idx].regional
         && dynp.block_single(nb)
         && regional_entrando_pronto(infra, trains, nb.res_single, now, idx)
     {
@@ -1532,6 +1782,7 @@ fn construir_secuencia(pts: &[Pt], cum_l: &[f64], infra: &Infra) -> Vec<Block> {
         res_single: 0,
         stat_single: false,
         cap_double: 1,
+        plat_tracks: 1,
     });
     for i in 0..pts.len() - 1 {
         let a = nid(&pts[i].id);
@@ -1562,6 +1813,9 @@ fn construir_secuencia(pts: &[Pt], cum_l: &[f64], infra: &Infra) -> Vec<Block> {
                 // de entrada al último tramo se pone ROJA cuando un tren lo ocupa (como en la
                 // realidad). Los terminales liberan el bloque al finalizar (no lo retienen).
                 cap_double: 1,
+                // Salvo en estaciones con varias vías principales por acceso (Sants): ahí un tren
+                // PARADO solo cierra la señal cuando están todas ocupadas (ver `anden_lleno`).
+                plat_tracks: if sb == m - 1 && !stat_single { topology::approach_main_tracks(&pts[i + 1].id) } else { 1 },
             });
         }
     }
@@ -1834,6 +2088,117 @@ mod tests {
         assert!(single.contains(&0)); // recurso canónico de C|D
         let (red2, single2) = dyn_effects(&infra, &incs, 50.0); // fuera de ventana
         assert!(red2.is_empty() && single2.is_empty());
+    }
+
+    #[test]
+    fn factor_de_velocidad_gaussiana_truncada() {
+        let mut rng = StdRng::seed_from_u64(7);
+        let p0 = 0.03;
+        let n = 20_000;
+        let zs: Vec<f64> = (0..n).map(|_| trunc_std_normal(&mut rng, SPEED_VAR_TRUNC_Z)).collect();
+        let stats = |v_kmh: f64| {
+            let xs: Vec<f64> = zs.iter().map(|&z| speed_factor(p0, v_kmh, z)).collect();
+            let mean = xs.iter().sum::<f64>() / n as f64;
+            let sd = (xs.iter().map(|f| (f - mean).powi(2)).sum::<f64>() / n as f64).sqrt();
+            let lo = xs.iter().cloned().fold(f64::INFINITY, f64::min);
+            let hi = xs.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+            (mean, sd, lo, hi)
+        };
+        // A 120 km/h (referencia): media 1−p, truncado simétrico a [1−2p, 1], dispersión real.
+        let (mean, sd, lo, hi) = stats(120.0);
+        assert!((mean - (1.0 - p0)).abs() < 0.001, "media {mean}");
+        assert!(lo >= 1.0 - 2.0 * p0 - 1e-12 && hi <= 1.0 + 1e-12);
+        assert!(sd > 0.3 * p0 && sd < 0.5 * p0, "σ {sd}");
+        // A 60 km/h: p(V) = p/2 → más cerca de Vmax y campana más estrecha; a 140, al revés.
+        let (m60, sd60, lo60, _) = stats(60.0);
+        assert!((m60 - (1.0 - p0 / 2.0)).abs() < 0.001 && sd60 < sd && lo60 >= 1.0 - p0 - 1e-12);
+        let (m140, sd140, _, _) = stats(140.0);
+        assert!(m140 < mean && sd140 > sd);
+        // p0 = 0 → sin variabilidad (invariante: todos a Vmax).
+        assert_eq!(speed_factor(0.0, 120.0, -2.0), 1.0);
+    }
+
+    #[test]
+    fn sin_horarios_solo_la_cabecera_espera_su_hora() {
+        // Con horario: nunca sale antes de su hora, en ninguna parada.
+        assert!(debe_esperar_horario(false, 0, 100.0, 200.0));
+        assert!(debe_esperar_horario(false, 3, 100.0, 200.0));
+        assert!(!debe_esperar_horario(false, 3, 250.0, 200.0));
+        // Sin horarios: la cabecera conserva su hora de salida; el resto sale tras la parada mínima.
+        assert!(debe_esperar_horario(true, 0, 100.0, 200.0));
+        assert!(!debe_esperar_horario(true, 3, 100.0, 200.0));
+    }
+
+    #[test]
+    fn retencion_se_acumula_en_el_tramo_vetado() {
+        let blk = |from: u32, to: u32, sb: usize| Block {
+            origin: false, from, to, sb, last: false, dest: to, arr_idx: 1, x_enter: 0.0,
+            res: 0, res_single: 0, stat_single: false, cap_double: 1, plat_tracks: 1,
+        };
+        let mut t = Train {
+            id: "T1".into(), line: "R2".into(), regional: false, veh: vehicle_for_line("R2"),
+            pts: Vec::new(), cum_l: Vec::new(), canton_zones: Vec::new(), speed_p0: 0.0,
+            speed_z: Vec::new(), dwell_min: Vec::new(), seq: vec![blk(0, 1, 0), blk(1, 2, 0)],
+            phase: Phase::Running, station_idx: 0, canton_idx: 0, target_stop: 1, arrived_at: 0.0,
+            s: 0.0, v: 0.0, cb: 0, delay_s: 0.0, waiting: true, held_since: 100.0, was_waiting: false,
+        };
+        let mut h = HashMap::new();
+        acumular_retencion(&mut h, &t, 102.0, 2.0); // 1er paso retenido: nueva retención
+        t.was_waiting = true;
+        acumular_retencion(&mut h, &t, 104.0, 2.0); // sigue retenido: misma retención
+        let acc = &h[&(1, 2)]; // el tramo vetado es el SIGUIENTE bloque (cb+1), no el actual
+        assert_eq!(acc.secs, 4.0);
+        assert_eq!(acc.events, 1);
+        assert_eq!(acc.max_s, 4.0);
+        assert_eq!(acc.by_line["R2"], 4.0);
+    }
+
+    /// Tren mínimo para probar reglas de ocupación (solo importan fase, bloques y paradas).
+    fn tren_prueba(phase: Phase, seq: Vec<Block>, pts: Vec<Pt>) -> Train {
+        Train {
+            id: "T".into(), line: "R15".into(), regional: true, veh: vehicle_for_line("R15"),
+            pts, cum_l: Vec::new(), canton_zones: Vec::new(), speed_p0: 0.0, speed_z: Vec::new(),
+            dwell_min: Vec::new(), seq, phase, station_idx: 0, canton_idx: 0, target_stop: 0,
+            arrived_at: 0.0, s: 0.0, v: 0.0, cb: 0, delay_s: 0.0, waiting: false,
+            held_since: f64::NAN, was_waiting: false,
+        }
+    }
+    fn bloque(from: u32, to: u32, arr_idx: usize, single: bool, res: u32) -> Block {
+        Block {
+            origin: false, from, to, sb: 0, last: true, dest: to, arr_idx, x_enter: 0.0,
+            res, res_single: res, stat_single: single, cap_double: 1, plat_tracks: 1,
+        }
+    }
+
+    #[test]
+    fn anden_con_dos_vias_solo_se_cierra_lleno_o_con_tren_entrando() {
+        let trains = vec![
+            tren_prueba(Phase::Dwell, vec![], vec![]),
+            tren_prueba(Phase::Dwell, vec![], vec![]),
+            tren_prueba(Phase::Running, vec![], vec![]),
+        ];
+        assert!(!anden_lleno(&[0], &trains, None, 2)); // uno parado: la otra vía sigue libre
+        assert!(anden_lleno(&[0, 1], &trains, None, 2)); // las dos vías del acceso ocupadas
+        assert!(!anden_lleno(&[0, 1], &trains, Some(1), 2)); // el propio tren no cuenta
+        assert!(anden_lleno(&[2], &trains, None, 2)); // un tren circulando por la aproximación
+    }
+
+    #[test]
+    fn cadena_de_via_unica_hasta_la_proxima_parada() {
+        let pt = |id: &str, pass: bool| Pt { id: id.into(), a: 0.0, d: 0.0, lat: 0.0, lon: 0.0, pass };
+        // A →(único) B (no para) →(único) C (para) →(único) D
+        let pts = vec![pt("A", false), pt("B", true), pt("C", false), pt("D", false)];
+        let mut origin = bloque(0, 0, 0, false, 0);
+        origin.origin = true;
+        let seq = vec![origin, bloque(0, 1, 1, true, 10), bloque(1, 2, 2, true, 11), bloque(2, 3, 3, true, 12)];
+        let t = tren_prueba(Phase::Running, seq, pts);
+        let (red, single) = (HashSet::new(), HashSet::new());
+        let dynp = Dyn { red: &red, single: &single };
+        let mut out = Vec::new();
+        cadena_unica(&t, &dynp, 1, &mut out);
+        assert_eq!(out, vec![11]); // reserva B→C (cruza B sin parar), no C→D (para en C)
+        cadena_unica(&t, &dynp, 2, &mut out);
+        assert!(out.is_empty()); // desde B→C la siguiente estación (C) es parada
     }
 
     #[test]

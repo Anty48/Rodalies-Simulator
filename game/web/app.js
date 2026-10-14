@@ -463,7 +463,10 @@ function dispersarFlota() {
 // pantalla previa (GTFS guardado / nuevo / importado), que recarga red + horarios si cambian.
 async function cargarHorarios() {
   const q = new URLSearchParams({ source: S.source || "gtfs" });
+  // Horario cadenciado del creador (/horarios), ya cargado en el servidor con `cargarCadencia`.
+  if (S.cadId) q.set("cad", S.cadId);
   const data = await (await fetch("/api/game/schedule?" + q.toString())).json();
+  if (data.error) throw new Error(data.error);
   S.trains = [];
   for (const t of data.trains) {
     const pts = [];
@@ -500,7 +503,7 @@ async function cargarHorarios() {
   parkedLayer.clearLayers(); parkedMarkers.clear();
   S.kpi = 0; S.arrPtr = 0; actualizarKpi();
   $("netInfo").textContent = `${S.net.n_stations} estaciones · ${S.net.n_lines} líneas · ${S.trains.length} trenes ` +
-    `(${data.source === "optimized" ? "optimizado" : "GTFS"}, ${data.service_id}).`;
+    (data.source === "cadence" ? `(horario cadenciado «${S.cadName || ""}»).` : `(${data.source === "optimized" ? "optimizado" : "GTFS"}, ${data.service_id}).`);
 }
 
 // ---- Enclavamiento (lazy) -----------------------------------------------------------------
@@ -782,6 +785,7 @@ async function cargarTrace(seed, selQ) {
   // que "lanzar incidencia ahora" re-simule exactamente el mismo día (mismas incidencias rodadas).
   S.traceSel = selQ || "";
   const tr = await (await fetch("/api/game/trace?seed=" + S.traceSeed + S.traceSel)).json();
+  if (tr && tr.error) throw new Error(tr.error);
   if (!tr || !tr.trains) throw new Error("trace vacío");
   tr.byId = new Map();
   for (const t of tr.trains) tr.byId.set(t.id, t);
@@ -925,6 +929,7 @@ function pasoRepro(dtGame) {
   if (S.simT >= DIA_FIN && !S.finished) { S.simT = DIA_FIN; finDelDia(); }
   const tr = S.trace; if (!tr) return;
   S.occ.clear();
+  const platPark = new Map();   // recurso del andén → trenes parados (estaciones con varias vías por acceso)
   let activos = 0, liveDelay = 0;
   for (const t of S.trains) {
     t.reproActive = false; t.repro = null; t.reproHeld = false; t.reproDelay = 0;
@@ -951,7 +956,13 @@ function pasoRepro(dtGame) {
     const stopped = frac >= 0.995;
     if (!(stopped && esViaUnica(a, b))) {
       const m = subM(a, b); let sb = Math.min(Math.floor(frac * m), m - 1); if (sb < 0) sb = 0;
-      const rk = sbRes(a, b, sb); let arr = S.occ.get(rk); if (!arr) { arr = []; S.occ.set(rk, arr); } arr.push(t.id);
+      const rk = sbRes(a, b, sb);
+      // Estación con varias vías principales por acceso (Sants: 2, como `anden_lleno` del motor): los
+      // trenes PARADOS solo cierran la señal de entrada cuando ocupan todas las vías de ese acceso.
+      const vias = stopped ? ((S.stationById.get(b) || {}).approach_tracks || 1) : 1;
+      const parados = vias > 1 ? (platPark.get(rk) || 0) + 1 : 0;
+      if (vias > 1) platPark.set(rk, parados);
+      if (vias === 1 || parados >= vias) { let arr = S.occ.get(rk); if (!arr) { arr = []; S.occ.set(rk, arr); } arr.push(t.id); }
     }
     t.repro = { a, b, frac, v };
     t.reproActive = !stopped;
@@ -1462,15 +1473,127 @@ function irAlTren(id) {
 // ---- Fin del día --------------------------------------------------------------------------
 function finDelDia() {
   S.finished = true; setSpeed("PAUSA");
-  // Trenes que llegaron tarde (≥1 min) a alguna estación, según el registro del motor.
-  const retrasados = new Set(S.arrivals.map((a) => a.train)).size;
+  // Las llegadas tarde aún no sumadas (el último paso, o un salto con "Terminar día") entran ya.
+  while (S.arrPtr < S.arrivals.length && S.arrivals[S.arrPtr].t <= S.simT) { S.kpi += S.arrivals[S.arrPtr].delay / 60; S.arrPtr++; }
+  const r = resumenJornada();
+  const loc = window.LOCALE ? LOCALE() : "es-ES", n0 = (x) => Math.round(x).toLocaleString(loc);
   $("finStats").innerHTML = `
-    <div class="stat"><span>Minutos de retraso acumulados</span><b>${Math.round(S.kpi).toLocaleString((window.LOCALE?LOCALE():"es-ES"))} min</b></div>
-    <div class="stat"><span>Trenes con retraso</span><b>${retrasados}</b></div>
-    <div class="stat"><span>Pico de retraso vivo</span><b>${S.delayTL ? Math.round(S.delayTL.max) : 0} min</b></div>
-    <div class="stat"><span>Incidencias del día</span><b>${(S.dayIncidents || []).length}</b></div>`;
+    <div class="stat"><span>Minutos de retraso acumulados</span><b>${n0(r.kpi_min)} min</b></div>
+    <div class="stat"><span>Trenes con retraso</span><b>${r.late_trains}</b></div>
+    <div class="stat"><span>Pico de retraso vivo</span><b>${r.peak_live} min</b></div>
+    <div class="stat" title="Tren·minutos esperando ante señales en rojo (todas las retenciones del día). No depende de ir adelantado o atrasado respecto al horario: sirve para comparar modos de horario."><span>Tiempo retenido ante señales</span><b>${n0(r.held_min)} min · ${n0(r.held_events)} ret.</b></div>` +
+    (r.stuck ? `<div class="stat warn" title="Trenes que a las 24:00 seguían sin llegar a su destino pese a que su llegada prevista era anterior (atascados: no cuentan como llegada tarde)."><span>Trenes atascados al cierre</span><b>${r.stuck}</b></div>` : "") +
+    `<div class="stat"><span>Incidencias del día</span><b>${r.incidents}</b></div>
+    <div class="stat"><span>Horarios</span><b>${escHtml(r.sched)}</b></div>`;
   $("finDia").hidden = false;
+  $("finReopen").hidden = true;
+  guardarEnHistorial(r);
 }
+// Resultados finales de la jornada (fin del día + historial de runs).
+function resumenJornada() {
+  const tr = S.trace || {};
+  // Atascados: su último registro es al cierre, sin estar en su destino, y debían llegar antes.
+  const fin = new Map(S.trains.map((t) => [t.id, t.pts[t.pts.length - 1]]));
+  let stuck = 0;
+  for (const rt of tr.trains || []) {
+    const last = fin.get(rt.id), n = rt.a.length;
+    if (last && rt.t0 + (n - 1) * tr.dt >= tr.end - 10 && tr.ids[rt.b[n - 1]] !== last.id && last.a < tr.end) stuck++;
+  }
+  return {
+    t: Date.now(), seed: S.traceSeed || 0,
+    sched: S.cadId ? "Cadenciado · " + (S.cadName || "") : tr.free_run ? "Sin horarios (modo caos)" : "GTFS",
+    vvar: (/[?&]vvar=([\d.]+)/.exec(S.traceSel || "") || [])[1] || null,
+    kpi_min: S.kpi, late_trains: new Set(S.arrivals.map((a) => a.train)).size,
+    peak_live: S.delayTL ? Math.round(S.delayTL.max) : 0,
+    held_min: (tr.held_total_s || 0) / 60, held_events: tr.held_total_events || 0, stuck,
+    incidents: (S.dayIncidents || []).length, ended_early: !!S.endedEarly,
+    top: (tr.hotspots || []).slice(0, 3).map((h) => ({ n: h.from_name + " → " + h.to_name, min: Math.round(h.held_s / 60) })),
+  };
+}
+
+// ---- Historial de runs visuales (últimas 10, localStorage "rod-visual-history") -----------
+const HIST_KEY = "rod-visual-history", HIST_MAX = 10;
+function historial() { try { const v = JSON.parse(localStorage.getItem(HIST_KEY)); return Array.isArray(v) ? v : []; } catch (e) { return []; } }
+function guardarEnHistorial(r) {
+  if (S.histSaved) return;   // una entrada por jornada (el balance se puede reabrir)
+  S.histSaved = true;
+  try { localStorage.setItem(HIST_KEY, JSON.stringify([r, ...historial()].slice(0, HIST_MAX))); } catch (e) { /* sin storage */ }
+  pintarBotonHistorial();
+}
+function pintarBotonHistorial() { const b = $("preHist"); if (b) { const n = historial().length; b.hidden = !n; b.textContent = `Historial de runs visuales (${n})`; } }
+function abrirHistorial() {
+  const h = historial(), loc = window.LOCALE ? LOCALE() : "es-ES", n0 = (x) => Math.round(x).toLocaleString(loc);
+  $("histTbl").innerHTML = h.length ? `<thead><tr><th>Fecha</th><th>Semilla</th><th>Horarios</th><th>Incid.</th><th>Min retraso</th><th>Trenes tarde</th><th>Pico vivo</th><th>Retenido</th><th>Atascados</th><th>Tramos más problemáticos</th></tr></thead><tbody>` +
+    h.map((r) => `<tr><td>${new Date(r.t).toLocaleString(loc, { dateStyle: "short", timeStyle: "short" })}${r.ended_early ? '<span class="tag">terminado</span>' : ""}</td>
+      <td class="num">${r.seed}</td><td>${escHtml(r.sched)}${r.vvar ? `<span class="tag">vvar ${r.vvar} %</span>` : ""}</td>
+      <td class="num">${r.incidents}</td><td class="num">${n0(r.kpi_min)}</td><td class="num">${r.late_trains}</td><td class="num">${r.peak_live} min</td>
+      <td class="num">${n0(r.held_min)} min</td><td class="num">${r.stuck || 0}</td>
+      <td class="top">${(r.top || []).map((x) => `${escHtml(x.n)} · ${x.min} min`).join("<br>") || "–"}</td></tr>`).join("") + "</tbody>"
+    : `<tr><td class="hist-empty">Todavía no hay runs visuales terminadas.</td></tr>`;
+  $("histDlg").hidden = false;
+}
+$("finHist").addEventListener("click", abrirHistorial);
+$("preHist").addEventListener("click", abrirHistorial);
+$("histClose").addEventListener("click", () => $("histDlg").hidden = true);
+$("histDlg").addEventListener("click", (e) => { if (e.target === $("histDlg")) $("histDlg").hidden = true; });
+$("histClear").addEventListener("click", async () => {
+  if (!(await confirmar({ title: "¿Borrar el historial de runs visuales?", html: "<p>Se borran los resultados guardados en este navegador.</p>", yes: "Borrar" }))) return;
+  try { localStorage.removeItem(HIST_KEY); } catch (e) { /* sin storage */ }
+  pintarBotonHistorial(); abrirHistorial();
+});
+pintarBotonHistorial();
+
+// ---- "Terminar día": salta al final de la jornada (la grabación del motor ya cubre todo el día) --
+$("btnFinDia").addEventListener("click", async () => {
+  if (!S.trace || S.finished) return;
+  const sp = S.speedKey; setSpeed("PAUSA");
+  const ok = await confirmar({ title: "¿Terminar el día?", html: `<p>Se salta de las <b>${hhmm(S.simT)}</b> al final de la jornada y se muestra el balance. La simulación ya está calculada entera, así que los resultados son los mismos que viéndola hasta el final.</p>`, yes: "Terminar día" });
+  if (!ok) { setSpeed(sp); return; }
+  S.endedEarly = true;
+  S.simT = DIA_FIN; pasoRepro(0);
+});
+
+// ---- Ranking de tramos más problemáticos (fin del día) ------------------------------------
+// El motor mide, SOLO en la run visual, cuánto tiempo han esperado los trenes ante la señal de
+// entrada de cada tramo (cantón dirigido) y manda los 15 peores en el trace (`hotspots`).
+function escHtml(x) { return String(x).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])); }
+function abrirTramos() {
+  const hs = (S.trace && S.trace.hotspots) || [];
+  const fmtMin = (sec) => (sec / 60).toLocaleString(window.LOCALE ? LOCALE() : "es-ES", { maximumFractionDigits: sec < 600 ? 1 : 0 });
+  const max = hs.length ? hs[0].held_s : 1;
+  $("hotList").innerHTML = hs.length ? hs.map((h, i) => {
+    const lines = (h.lines || []).slice(0, 5).map(([l, sec]) =>
+      `<span class="ln">${lineImg(l, "line-logo xs") || l} ${Math.round(100 * sec / Math.max(1, h.held_s))} %</span>`).join("");
+    return `<li data-i="${i}" title="Ver el tramo en el mapa">
+      <span class="rk">${i + 1}</span>
+      <span class="nm">${escHtml(h.from_name)} → ${escHtml(h.to_name)}</span>
+      <span class="tot">${fmtMin(h.held_s)} min</span>
+      <span class="bar"><i style="width:${Math.max(2, 100 * h.held_s / max)}%"></i></span>
+      <span class="meta"><span>${h.events} retenciones</span><span>máx. ${fmtMin(h.max_s)} min seguidos</span>${lines}</span>
+    </li>`;
+  }).join("") : `<li class="hot-empty">Ningún tren ha quedado retenido ante una señal en esta jornada.</li>`;
+  $("hotList").querySelectorAll("li[data-i]").forEach((li) => li.onclick = () => verTramoEnMapa(hs[+li.dataset.i]));
+  $("hotDlg").hidden = false;
+}
+// Resalta el tramo en el mapa y deja un botón para volver al balance del día.
+let hotLayer = null;
+function verTramoEnMapa(h) {
+  const pts = viaPts(h.from, h.to);
+  if (!pts.length) return;
+  if (!hotLayer) hotLayer = L.layerGroup().addTo(map);
+  hotLayer.clearLayers();
+  L.polyline(pts, { color: "#ff3b3b", weight: 9, opacity: 0.85, lineCap: "round" }).addTo(hotLayer)
+    .bindTooltip(`${escHtml(h.from_name)} → ${escHtml(h.to_name)} · ${Math.round(h.held_s / 60)} min retenidos`, { sticky: true });
+  map.fitBounds(L.latLngBounds(pts).pad(1.2), { maxZoom: 14 });
+  $("hotDlg").hidden = true; $("finDia").hidden = true; $("finReopen").hidden = false;
+}
+$("finTramos").addEventListener("click", abrirTramos);
+$("hotClose").addEventListener("click", () => $("hotDlg").hidden = true);
+$("hotDlg").addEventListener("click", (e) => { if (e.target === $("hotDlg")) $("hotDlg").hidden = true; });
+$("finReopen").addEventListener("click", () => {
+  if (hotLayer) hotLayer.clearLayers();
+  $("finReopen").hidden = true; $("finDia").hidden = false;
+});
 
 // ---- KPI, leyenda -------------------------------------------------------------------------
 function actualizarKpi() {
@@ -1557,7 +1680,76 @@ $("incidDiaClose").addEventListener("click", () => $("incidDiaPanel").hidden = t
 
 // Pantalla PREVIA — selector de horarios: el campo de fichero solo aparece con "Importar".
 const schedMode = () => (document.querySelector('input[name="sched"]:checked') || {}).value || "saved";
-$("schedOpts").addEventListener("change", () => { $("gtfsFileWrap").hidden = schedMode() !== "import"; $("gtfsStatus").textContent = ""; });
+// "Sin horarios" pide confirmación (explica qué va a pasar); si se cancela, vuelve a la opción previa.
+let schedPrev = "saved";
+$("schedOpts").addEventListener("change", async () => {
+  if (schedMode() === "free" && schedPrev !== "free" && !(await confirmarCaos())) {
+    const r = [...document.querySelectorAll('input[name="sched"]')].find((x) => x.value === schedPrev);
+    if (r) r.checked = true;
+  }
+  schedPrev = schedMode();
+  $("gtfsFileWrap").hidden = schedMode() !== "import"; $("gtfsStatus").textContent = "";
+});
+function confirmarCaos() {
+  return confirmar({
+    kicker: '<span class="chaos-tag">modo caos</span> Experimento',
+    title: "¿Simular sin horarios?",
+    html: `<ul class="chaos-list">
+      <li>Cada tren conserva <b>solo su hora de salida</b> de la estación de cabecera.</li>
+      <li>En el resto de paradas sale en cuanto cumple la <b>parada mínima reglamentaria</b>, aunque vaya adelantado.</li>
+      <li>Las señales solo miran si hay un tren delante: la vía única ya no reserva paso a los regionales según su horario.</li>
+      <li>El retraso se sigue midiendo contra el horario GTFS, así que casi nadie irá «tarde»: fíjate en las retenciones y en los <b>tramos más problemáticos</b> al final del día.</li>
+    </ul>`,
+    yes: "Activar modo caos",
+  });
+}
+// Diálogo de confirmación genérico (Andana) → Promise<boolean>. Esc / clic fuera = cancelar.
+function confirmar({ kicker = "", title, html = "", yes = "Confirmar" }) {
+  return new Promise((res) => {
+    const dlg = $("confirmDlg");
+    $("confirmKicker").innerHTML = kicker; $("confirmKicker").hidden = !kicker;
+    $("confirmTitle").textContent = title; $("confirmBody").innerHTML = html; $("confirmYes").textContent = yes;
+    const fin = (v) => { dlg.hidden = true; document.removeEventListener("keydown", esc); res(v); };
+    const esc = (e) => { if (e.key === "Escape") fin(false); };
+    $("confirmYes").onclick = () => fin(true);
+    $("confirmNo").onclick = () => fin(false);
+    dlg.onclick = (e) => { if (e.target === dlg) fin(false); };
+    document.addEventListener("keydown", esc);
+    dlg.hidden = false;
+    $("confirmYes").focus();
+  });
+}
+// Horarios CADENCIADOS guardados por el creador (/horarios) en este navegador. localStorage
+// "rod-cadences" = [{ id, name, updated, spec: { name, markers: [{ line, pat, min, every, alt }] } }]
+// (el formato lo fija game/web/cadencia.js). Se envían al servidor al confirmar (`cargarCadencia`).
+const CAD_KEY = "rod-cadences";
+function cadenciasGuardadas() {
+  try { const v = JSON.parse(localStorage.getItem(CAD_KEY)); return Array.isArray(v) ? v : []; } catch (e) { return []; }
+}
+function pintarCadencias() {
+  const box = $("schedCads"); if (!box) return;
+  const loc = window.LOCALE ? LOCALE() : "es-ES";
+  box.innerHTML = cadenciasGuardadas().map((c) => {
+    const n = ((c.spec && c.spec.markers) || []).length + ((c.spec && c.spec.groups) || []).length;
+    const f = c.updated ? new Date(c.updated).toLocaleDateString(loc) : "";
+    return `<label class="sched-opt"><input type="radio" name="sched" value="cad:${escHtml(c.id)}">
+      <span><b>${escHtml(c.name || "Sin nombre")} <span class="cad-tag">cadenciado</span></b>
+      <small>${n} marcador${n === 1 ? "" : "es"}${f ? " · guardado el " + f : ""}</small></span></label>`;
+  }).join("");
+  // Enlace "Ver en simulador" de /numeros con un horario cadenciado: lo deja elegido.
+  const want = new URLSearchParams(location.search).get("cad");
+  const r = want && [...box.querySelectorAll("input")].find((x) => x.value === "cad:" + want);
+  if (r) { r.checked = true; schedPrev = r.value; }
+}
+pintarCadencias();
+// Carga en el servidor la malla del horario cadenciado `localId` → id de servidor (`cad=`).
+async function cargarCadencia(localId) {
+  const c = cadenciasGuardadas().find((x) => x.id === localId);
+  if (!c) throw new Error("El horario cadenciado ya no está guardado en este navegador.");
+  const r = await (await fetch("/api/cadence/load", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: c.name, markers: c.spec.markers || [], groups: c.spec.groups || [] }) })).json();
+  if (!r.ok) throw new Error(r.error || "No se pudo generar el horario cadenciado.");
+  return { id: r.id, name: c.name, warnings: r.warnings || [], n: r.n_trains };
+}
 $("gtfsFile").addEventListener("change", () => { const f = $("gtfsFile").files[0]; $("gtfsFileName").textContent = f ? f.name : "Elegir fichero .zip…"; });
 // "Empezar a ver desde" (HH:MM) → segundos de jornada. La jornada se simula ENTERA (es una
 // grabación del motor); esto solo sitúa el cabezal de reproducción.
@@ -1577,6 +1769,43 @@ function fijarHoraInicioDefecto() {
   }
 }
 $("preStart").addEventListener("input", () => { $("preStart").dataset.touched = "1"; });
+
+// ── Variabilidad de velocidad (conducción real): interruptor + factor p (%). El motor hace circular
+// cada tren, en cada tramo entre señales, a Vmax × f con f gaussiana de media 1−p truncada a [1−2p, 1]
+// (p definido a 120 km/h; el motor lo escala con la Vmax del punto). Se guarda
+// por visor (localStorage); un enlace "Ver en simulador" de /numeros (`&vvar=`) manda en esa visita.
+const VVAR_KEY = "rod-vvar-visual";
+function vvarPct() {
+  const p = parseFloat($("preVvar").value);
+  return Number.isFinite(p) ? Math.min(25, Math.max(0.5, p)) : 3;
+}
+// Parámetro de query para el motor (vacío = apagado → todos a Vmax).
+function vvarQuery() { return $("preVvarOn").checked ? "&vvar=" + vvarPct() : ""; }
+function pintarVvar() {
+  const on = $("preVvarOn").checked, p = vvarPct();
+  const fmt = (x) => x.toLocaleString(window.LOCALE ? LOCALE() : "es-ES", { maximumFractionDigits: 2 });
+  $("preVvarRow").hidden = !on; $("preVvarHint").hidden = !on;
+  if (on) $("preVvarHint").textContent = `A 120 km/h: media Vmax − ${fmt(p)} % · entre Vmax − ${fmt(2 * p)} % y Vmax. Escala con la Vmax (a 60 km/h, la mitad) y se sortea en cada tramo entre señales. Súbelo en días de lluvia.`;
+}
+function guardarVvar() {
+  try { localStorage.setItem(VVAR_KEY, JSON.stringify({ on: $("preVvarOn").checked, p: vvarPct() })); } catch (e) { /* sin storage */ }
+}
+(function iniciarVvar() {
+  try {
+    const v = JSON.parse(localStorage.getItem(VVAR_KEY));
+    if (v) { $("preVvarOn").checked = !!v.on; if (Number.isFinite(v.p)) $("preVvar").value = v.p; }
+  } catch (e) { /* sin storage */ }
+  const q = new URLSearchParams(location.search);
+  if (q.get("from") === "numeros") {
+    const p = parseFloat(q.get("vvar"));
+    $("preVvarOn").checked = Number.isFinite(p) && p > 0;
+    if ($("preVvarOn").checked) $("preVvar").value = p;
+  }
+  pintarVvar();
+  $("preVvarOn").addEventListener("change", () => { pintarVvar(); guardarVvar(); });
+  $("preVvar").addEventListener("input", () => { pintarVvar(); guardarVvar(); });
+})();
+
 function horaInicioSeg() {
   const [h, m] = ($("preStart").value || "05:00").split(":").map(Number);
   return (h || 0) * 3600 + (m || 0) * 60;
@@ -1597,8 +1826,23 @@ $("preConfirm").addEventListener("click", async () => {
       st.textContent = "Importando " + f.name + "…";
       if (!(await ejecutarJobGtfs(() => fetch("/api/gtfs/upload", { method: "POST", body: f })))) { st.textContent = "No se pudo importar el GTFS (ver arriba)."; return; }
     }
+    // Horario cadenciado: se genera en el servidor y se recargan los horarios del visor (los ids de
+    // tren del trace deben coincidir). Volver a GTFS tras uno cadenciado también recarga.
+    let cad = null;
+    if (mode.startsWith("cad:")) {
+      st.textContent = "Generando el horario cadenciado…";
+      try { cad = await cargarCadencia(mode.slice(4)); } catch (e) { st.textContent = String(e.message || e); return; }
+    }
+    if ((cad ? cad.id : null) !== (S.cadId || null)) {
+      S.cadId = cad ? cad.id : null; S.cadName = cad ? cad.name : "";
+      await cargarHorarios(); construirSemaforos(); fijarHoraInicioDefecto();
+    }
     st.textContent = "Generando la jornada con el motor (unos segundos)…";
-    const ok = await generarDia(seed, S.tplSelQuery ? S.tplSelQuery() : "", horaInicioSeg());
+    // La variabilidad de velocidad, el horario cadenciado y el modo sin horarios viajan con la
+    // selección: "lanzar incidencia ahora" re-simula exactamente el mismo día.
+    const extra = (S.cadId ? "&cad=" + S.cadId : "") + (mode === "free" ? "&free=1" : "");
+    const ok = await generarDia(seed, (S.tplSelQuery ? S.tplSelQuery() : "") + vvarQuery() + extra, horaInicioSeg());
+    if (ok && cad && cad.warnings.length) console.warn("Horario cadenciado:", cad.warnings.join(" "));
     if (!ok) { st.textContent = "No se pudo generar la jornada (ver Estado de la red)."; return; }
     $("preDay").classList.add("hidden");
     st.textContent = "";
@@ -1661,6 +1905,7 @@ async function generarDia(seed, selQ, startSec) {
     if (startSec > S.trace.start) S.simT = Math.min(startSec, S.trace.end - 60);
     pasoRepro(0);
     pintarIncidenciasDia();
+    $("btnFinDia").disabled = false;
     $("netInfo").textContent = $("netInfo").textContent.replace(" · Calculando la simulación física (motor Rust)…", " · Física del motor Rust (reproductor).");
     return true;
   } catch (e) {
@@ -1859,6 +2104,7 @@ iniciar();
     const lost = want.length - sel.size;
     const box = $("preFrom"); if (!box) return;
     box.innerHTML = `Parámetros de <b>Varias runs</b>: semilla <b>${+q.get("seed") || 0}</b> · <b>${sel.size}</b> plantilla${sel.size === 1 ? "" : "s"} de incidencia. Pulsa <b>Confirmar y generar el día</b> para ver exactamente esa jornada.` +
+      (+q.get("vvar") > 0 ? ` Variabilidad de velocidad: <b>${+q.get("vvar")} %</b>.` : "") +
       (lost ? `<span class="warn">${lost} plantilla${lost === 1 ? " ya no existe" : "s ya no existen"} (se borraron después de la run): el día puede diferir.</span>` : "");
     box.hidden = false;
     const gt = q.get("gtfs");

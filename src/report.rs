@@ -379,6 +379,14 @@ h4 { margin:16px 0 8px; font-size:.98rem; }
 .tile-ic { font-size:1.8rem; line-height:1; margin-bottom:12px; }
 .tile h3 { margin:0 0 6px; font-size:1.15rem; }
 .tile p { color:var(--muted); font-size:.9rem; margin:0; }
+.tiles.three { grid-template-columns:repeat(3,1fr); }
+@media (max-width:900px) { .tiles.three { grid-template-columns:1fr; } }
+.menu-sec { font-size:.8rem; text-transform:uppercase; letter-spacing:.08em; color:var(--muted); margin:30px 0 0; font-weight:700; }
+.tiles .tile-mini { margin-top:10px; }
+.tile-mini { display:flex; align-items:center; gap:14px; margin-top:18px; padding:14px 20px; }
+.tile-mini .tile-ic { margin:0; }
+.tile-mini h3 { font-size:1rem; margin:0 0 2px; }
+.tile-mini p { font-size:.84rem; }
 .menu-more { text-align:center; margin-top:26px; font-size:.9rem; }
 .menu-more a { color:var(--accent); text-decoration:none; font-weight:600; }
 .menu-more a:hover { text-decoration:underline; }
@@ -982,6 +990,7 @@ fn icon(name: &str) -> &'static str {
         "refresh" => r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 11.5a8 8 0 1 0-.8 4.5"/><polyline points="20 4 20 11.5 12.5 11.5"/></svg>"#,
         "back-arrow" => r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="20" y1="12" x2="5" y2="12"/><polyline points="11 6 5 12 11 18"/></svg>"#,
         "download" => r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="3" x2="12" y2="15"/><polyline points="7 10 12 15 17 10"/><path d="M4 20h16"/></svg>"#,
+        "clock" => r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><polyline points="12 7 12 12 15.5 14"/></svg>"#,
         "chart" => r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><path d="M6 15c3-9 5-9 7-4s4 4 8-6"/></svg>"#,
         _ => "",
     }
@@ -1018,7 +1027,7 @@ pub fn render_menu_page() -> String {
     <!-- ANDANA · banda decorativa: tren pixel corriendo, ENCIMA del simulador visual. -->
     <div class="rod-load rod-band" role="img" aria-label="Rodalies en marcha">
       {TRAIN_SCENE}
-      <div class="rod-load-caption">La red en marcha<span class="rod-load-dots" aria-hidden="true"><i></i><i></i><i></i></span></div>
+      <div class="rod-load-caption">La red en marcha</div>
     </div>
 
     <div class="hero">
@@ -1030,7 +1039,7 @@ pub fn render_menu_page() -> String {
       </a>
     </div>
 
-    <div class="tiles">
+    <div class="tiles three">
       <a class="tile" href="/info">
         <div class="tile-ic">ℹ️</div>
         <h3>Información</h3>
@@ -1046,15 +1055,23 @@ pub fn render_menu_page() -> String {
         <h3>Incidencias</h3>
         <p>Crea, edita y borra las plantillas de incidencia (señal roja o vía única) con su probabilidad <b>cada X horas</b>. Las usan el modo visual y las runs.</p>
       </a>
-      <a class="tile" href="/panel#calc">
+    </div>
+
+    <a class="tile tile-mini" href="/horarios">
+      <div class="tile-ic">🕒</div>
+      <div><h3>Horarios cadenciados</h3><p>Coloca en un reloj a qué minuto pasa cada línea por Sants y genera una malla para probarla en el visual o en las runs.</p></div>
+    </a>
+
+    <!-- Herramientas del panel de análisis que aún no se han migrado al motor unificado de la app. -->
+    <h2 class="menu-sec">Otras funciones experimentales</h2>
+    <div class="tiles">
+      <a class="tile tile-mini" href="/panel#calc">
         <div class="tile-ic">📐</div>
-        <h3>Calcular tramos</h3>
-        <p>Tiempo mínimo entre estaciones con la física real del material (datos ADIF · LTV): marchas, paradas y márgenes frente al horario programado.</p>
+        <div><h3>Calcular tramos</h3><p>Tiempo mínimo entre estaciones con la física real del material (datos ADIF · LTV): marchas, paradas y márgenes frente al horario.</p></div>
       </a>
-      <a class="tile" href="/panel#opt">
+      <a class="tile tile-mini" href="/panel#opt">
         <div class="tile-ic">🧮</div>
-        <h3>Optimizador de horarios</h3>
-        <p>Recocido simulado sobre los desfases de fase de cada línea; minimiza el potencial V(H) del sistema completo y exporta la malla optimizada.</p>
+        <div><h3>Optimizador de horarios</h3><p>Recocido simulado sobre los desfases de cada línea; minimiza el potencial V(H) del sistema y exporta la malla optimizada.</p></div>
       </a>
     </div>
 
@@ -1070,9 +1087,150 @@ pub fn render_menu_page() -> String {
         .replace("⚡", icon("runs"))
         .replace("📐", icon("ruler"))
         .replace("🧮", icon("optimize"))
-        .replace("🚨", icon("warning"));
+        .replace("🚨", icon("warning"))
+        .replace("🕒", icon("clock"));
     document(&head, &body)
 }
+
+/// Creador de HORARIOS CADENCIADOS (`/horarios`): relojes por estación de referencia y sentido
+/// donde se arrastra el logo de cada línea al minuto de paso. La lógica vive en
+/// `game/web/cadencia.js` (catálogo de `/api/cadence/catalog`, horarios guardados en el navegador,
+/// vista previa con `/api/cadence/load`); aquí solo la estructura y el estilo de la página.
+pub fn render_cadence_page() -> String {
+    let head = format!("<title>Rodalies Simulator · Horarios cadenciados</title>\n{STYLE}");
+    let body = format!(
+        r##"<style>{CADENCE_STYLE}</style>
+<div class="menu-wrap cad-wrap">
+    <div class="panel-bar"><a class="back-link" href="/">← Menú</a></div>
+    <div class="menu-top"><div class="menu-brand"><img class="logo" src="/game/lines/r_logo.png" alt="Rodalies" width="46" height="46"><div>
+      <h1>Horarios cadenciados</h1>
+      <div class="sub">Arrastra el logo de cada línea al minuto en que debe pasar por la estación de referencia. Se repite cada hora (o cada N horas) desde la apertura, a las 04:30.</div>
+    </div></div></div>
+
+    <section class="card cad-bar">
+      <label class="fld cad-pick">Horario guardado<select id="cadSaved"></select></label>
+      <label class="fld cad-name">Nombre<input id="cadName" type="text" maxlength="60" placeholder="Mi horario cadenciado"></label>
+      <div class="cad-acts">
+        <button class="btn" id="cadSave" type="button">Guardar</button>
+        <button class="btn ghost" id="cadNew" type="button">Nuevo</button>
+        <button class="btn ghost" id="cadExport" type="button">Exportar</button>
+        <label class="btn ghost cad-imp">Importar<input type="file" id="cadImport" accept=".json,application/json" hidden></label>
+        <button class="btn ghost danger" id="cadDelete" type="button">Borrar</button>
+      </div>
+      <div class="cad-status" id="cadStatus" role="status"></div>
+    </section>
+
+    <section class="card cad-sum" id="cadSum"><span class="sub">Cargando recorridos del GTFS…</span></section>
+
+    <nav class="cad-tabs" id="cadTabs" role="tablist"></nav>
+    <div id="cadBody"></div>
+
+    <p class="sub cad-help">Cada marcador es un tren que pasa por la referencia en ese minuto, cada hora (o cada N horas). Pulsa un marcador para elegir el recorrido completo (origen → destino), la frecuencia y, si quieres, una variante cada N horas (p. ej. R3: a Ripoll cada hora y a Puigcerdà cada 3 h). Los trenes que también pasan por otra referencia aparecen allí calculados, en gris, sin poder editarlos. El horario se guarda en este navegador y se elige en la pantalla previa del simulador visual o en Varias runs.</p>
+  </div>
+  <script src="/game/cadencia.js"></script>"##
+    );
+    document(&head, &body)
+}
+
+/// Estilos del creador de horarios cadenciados (relojes, paleta de líneas, editor del marcador).
+const CADENCE_STYLE: &str = r#"
+.cad-wrap{max-width:1240px}
+.fld{display:flex;flex-direction:column;gap:4px;font-size:.72rem;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--muted);min-width:0}
+.fld input,.fld select{height:36px;background:var(--panel2);border:1px solid var(--border);border-radius:7px;padding:0 10px;color:var(--text);font:inherit;font-size:.9rem;font-weight:400;text-transform:none;letter-spacing:0}
+.btn.ghost{background:var(--panel2);color:var(--text);border:1px solid var(--border)}
+.btn.ghost:hover{border-color:var(--accent)}
+.btn.danger:hover{border-color:var(--late);color:var(--late)}
+.cad-bar{display:flex;flex-wrap:wrap;gap:12px;align-items:flex-end;margin-top:12px}
+.cad-pick{flex:1 1 200px}.cad-name{flex:1 1 220px}
+.cad-acts{display:flex;flex-wrap:wrap;gap:6px}
+.cad-acts .btn{border-radius:7px;padding:8px 14px;font-size:.86rem;cursor:pointer}
+.cad-imp{display:inline-flex;align-items:center}
+.cad-status{flex-basis:100%;font-size:.84rem;color:var(--muted);min-height:1.1em}
+.cad-status.ok{color:var(--arr)}.cad-status.err{color:var(--late)}
+.cad-sum{margin-top:12px;font-size:.88rem;display:flex;flex-wrap:wrap;gap:6px 14px;align-items:center}
+.cad-sum b{font-family:var(--mono)}
+.cad-sum .pl{display:inline-flex;align-items:center;gap:4px;font-family:var(--mono);font-size:.8rem}
+.cad-sum .pl img{height:16px}
+.cad-sum .warn{flex-basis:100%;color:var(--warn);font-size:.8rem}
+.cad-tabs{display:flex;flex-wrap:wrap;gap:6px;margin:16px 0 10px}
+.cad-tabs button{background:var(--panel2);border:1px solid var(--border);color:var(--muted);border-radius:20px;padding:7px 15px;font:inherit;font-size:.86rem;font-weight:600;cursor:pointer}
+.cad-tabs button.active{background:var(--grad-cta);color:#fff;border-color:transparent}
+.cad-tabs .cnt{font-family:var(--mono);font-size:.74rem;opacity:.8;margin-left:4px}
+.cad-group{margin-bottom:18px}
+.cad-group h3{font-size:.95rem;margin:4px 0 8px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em}
+.cad-pair{display:grid;grid-template-columns:repeat(auto-fit,minmax(330px,1fr));gap:14px}
+.clock-card{position:relative;background:var(--panel);border:1px solid var(--border);border-top:3px solid var(--accent);border-radius:10px;padding:12px 14px}
+.clock-card h4{margin:0 0 8px;font-family:var(--display);font-size:1rem}
+.clock-card h4 small{font-family:var(--sans);font-weight:500;color:var(--muted);font-size:.78rem;margin-left:6px}
+.palette{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:6px;min-height:30px}
+.pal-chip{display:inline-flex;align-items:center;gap:5px;background:var(--panel2);border:1px solid var(--border);border-radius:8px;padding:3px 8px 3px 4px;font-size:.8rem;font-weight:700;cursor:grab;touch-action:none;user-select:none;color:var(--text)}
+.pal-chip:hover{border-color:var(--accent)}
+.pal-chip img{height:22px;width:auto;pointer-events:none}
+.pal-chip .sw{width:22px;height:22px;border-radius:5px}
+.pal-empty{font-size:.8rem;color:var(--muted)}
+.clock-row{display:flex;gap:12px;align-items:flex-start}
+.clock-svg{width:250px;height:250px;flex:0 0 auto;touch-action:none;user-select:none}
+.clock-svg .face{fill:var(--panel2);stroke:var(--border);stroke-width:2}
+.clock-svg .tick{stroke:var(--muted);stroke-width:1;opacity:.55}
+.clock-svg .tick.h{stroke-width:2;opacity:.9}
+.clock-svg .lbl{fill:var(--muted);font:600 10px var(--mono);text-anchor:middle;dominant-baseline:central}
+.clock-svg .drop{fill:var(--accent);opacity:0;transition:opacity .1s}
+.clock-svg.over .drop{opacity:.10}
+.clock-svg .hand{stroke-width:2.5;stroke-linecap:round;opacity:.75}
+.clock-svg .mk{cursor:grab}
+.clock-svg .mk circle{stroke:#fff;stroke-width:2}
+.clock-svg .mk.sel circle{stroke:var(--accent);stroke-width:3}
+.clock-svg .mk.ghost{cursor:default;opacity:.45}
+.clock-svg .mk.ghost circle{stroke-dasharray:3 2;stroke:var(--muted)}
+.clock-svg .mk text{fill:#fff;font:700 8.5px var(--sans);text-anchor:middle;dominant-baseline:central;pointer-events:none}
+.clock-svg .hub{fill:var(--accent)}
+.mk-list{list-style:none;margin:0;padding:0;font-size:.8rem;display:flex;flex-direction:column;gap:3px;flex:1;min-width:0;max-height:250px;overflow:auto}
+.mk-list li{display:flex;align-items:center;gap:6px;padding:3px 6px;border-radius:6px;cursor:pointer;border:1px solid transparent}
+.mk-list li:hover,.mk-list li.sel{border-color:var(--accent);background:var(--accent-soft)}
+.mk-list li.ghost{cursor:default;opacity:.6}
+.mk-list li.ghost:hover{border-color:transparent;background:none}
+.mk-list img{height:16px}
+.mk-list .t{font-family:var(--mono);font-weight:700}
+.mk-list .d{color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.mk-empty{color:var(--muted);font-size:.8rem;padding:6px}
+.mk-editor{position:absolute;z-index:30;top:46px;right:14px;width:300px;max-width:calc(100% - 28px);background:var(--panel);border:1px solid var(--accent);border-radius:10px;box-shadow:0 14px 34px rgba(0,0,0,.22);padding:12px 14px;display:flex;flex-direction:column;gap:9px}
+.mk-editor .hd{display:flex;align-items:center;gap:8px;font-weight:700}
+.mk-editor .hd img{height:22px}
+.mk-editor .hd .x{margin-left:auto;background:none;border:none;color:var(--muted);font-size:20px;cursor:pointer;line-height:1}
+.mk-editor .row2{display:flex;gap:8px}
+.mk-editor .row2 .fld{flex:1}
+.mk-editor .alt{border-top:1px dashed var(--border);padding-top:8px;display:flex;flex-direction:column;gap:7px}
+.mk-editor .chk{display:flex;gap:7px;align-items:center;font-size:.84rem;cursor:pointer}
+.mk-editor .prev{font-size:.78rem;color:var(--muted);line-height:1.4}
+.mk-editor .prev b{color:var(--text);font-family:var(--mono)}
+.mk-editor .acts{display:flex;gap:6px;justify-content:flex-end}
+.mk-editor .acts .btn{border-radius:7px;padding:6px 12px;font-size:.82rem;cursor:pointer}
+.drag-ghost{position:fixed;z-index:3000;pointer-events:none;transform:translate(-50%,-50%);filter:drop-shadow(0 4px 8px rgba(0,0,0,.3))}
+.drag-ghost img{height:30px}
+.cad-help{margin:18px 0 30px;line-height:1.5}
+.clock-card h4 .dir{font-family:var(--sans);font-weight:500;color:var(--muted);font-size:.86rem}
+.gtag{display:inline-flex;align-items:center;justify-content:center;min-width:22px;height:22px;padding:0 4px;border-radius:11px;color:#fff;font:700 .62rem var(--sans);letter-spacing:.02em}
+.gtag.big{min-width:32px;height:32px;border-radius:16px;font-size:.78rem}
+.mk-list .gtag{height:16px;min-width:16px;font-size:.55rem}
+.pal-chip.grp{border-color:#830065}
+.pal-add{background:none;border:1px dashed var(--border);color:var(--muted);border-radius:8px;padding:3px 9px;font:inherit;font-size:.78rem;font-weight:700;cursor:pointer}
+.pal-add:hover{border-color:var(--accent);color:var(--accent)}
+.mk-list li.grp .d{color:var(--text)}
+.grp-editor{position:static;width:auto;max-width:none;margin-top:10px;box-shadow:none}
+.grp-editor .seq{list-style:decimal;margin:4px 0 0 18px;padding:0;display:flex;flex-direction:column;gap:4px;text-transform:none;letter-spacing:0;font-weight:400}
+.grp-editor .seq li{display:flex;align-items:center;gap:4px}
+.grp-editor .seq img{height:18px}
+.grp-editor .seq select{flex:1;min-width:0;height:28px;font-size:.78rem}
+.grp-editor .seq button,.grp-editor .min-chip button{background:var(--panel2);border:1px solid var(--border);color:var(--text);border-radius:5px;width:24px;height:24px;cursor:pointer;padding:0}
+.grp-editor .seq button:disabled{opacity:.35;cursor:default}
+.grp-editor .add-row select{flex:1;height:32px;background:var(--panel2);border:1px solid var(--border);border-radius:7px;color:var(--text)}
+.grp-editor .mins{display:flex;flex-wrap:wrap;gap:5px;align-items:center;margin-top:4px;text-transform:none;letter-spacing:0}
+.grp-editor .min-chip{display:inline-flex;align-items:center;gap:3px;background:var(--accent-soft);border-radius:12px;padding:2px 3px 2px 8px;font:700 .8rem var(--mono);color:var(--text)}
+.grp-editor .min-chip button{width:18px;height:18px;border-radius:9px;font-size:.7rem}
+.grp-editor .mins input{width:64px;height:28px}
+.grp-editor .btn{border-radius:7px;padding:5px 10px;font-size:.8rem;cursor:pointer}
+@media(max-width:620px){.clock-row{flex-direction:column}.clock-svg{width:100%;height:auto;max-width:280px;align-self:center}.mk-editor{position:static;width:auto;margin-top:8px}}
+"#;
 
 /// Página de INFORMACIÓN: cómo se calculan los tiempos entre estaciones (física) y todas las
 /// probabilidades del modelo de incidencias. Documenta el modelo real del motor unificado.
@@ -1111,6 +1269,7 @@ pub fn render_info_page() -> String {
         <li><b>Frenada anticipada</b> — el tren empieza a frenar con antelación para parar en la estación o ante una señal en rojo.</li>
       </ul>
       <p><b>Conducción:</b> el maquinista acelera a <b>¾ de la aceleración máxima</b> (no todos van a tope) y siempre intenta ir a la máxima permitida. Ante una señal en <b>ámbar</b> reduce un <b>20%</b> para poder detenerse si la siguiente sigue en rojo.</p>
+      <p><b>Variabilidad de velocidad (opcional):</b> con el interruptor de las runs activado, ningún tren va clavado a Vmax. En cada tramo entre dos señales, cada tren circula a Vmax × f, con f sacada de una gaussiana de media 1 − p y σ = p/2, truncada simétricamente entre 1 − 2p y 1 (nunca por encima de Vmax). p es el factor de aleatoriedad, definido a 120 km/h (3 % por defecto; súbelo en días de lluvia), y escala con la Vmax del punto: p(V) = p · V / 120. A menor Vmax, la media se acerca a Vmax y la campana se estrecha (el maquinista clava el límite en agujas, curvas y LTV); a mayor Vmax, es más probable que vaya algo por debajo. Se sortea una vez antes del día con la semilla, en un flujo aparte: no cambia qué incidencias aparecen.</p>
       <p><b>El horario es un OBJETIVO, no una imposición de velocidad:</b> un tren <b>nunca sale de una estación antes de su hora programada</b> de salida, y respeta la <b>parada mínima</b> (20–60 s según la densidad de servicio de la estación). Si la física o la congestión lo retrasan, el retraso se propaga — como en la realidad.</p>
     </section>
 
@@ -1157,6 +1316,10 @@ pub fn render_numbers_page() -> String {
 .sched-opts{display:flex;flex-direction:column;gap:6px}
 .sched-opt{display:flex;gap:9px;align-items:flex-start;padding:8px 10px;border:1px solid var(--border);border-radius:8px;background:var(--panel);cursor:pointer;transition:.14s}
 .sched-opt:hover{border-color:var(--accent)}
+.sched-cads{display:contents}
+.cad-tag{display:inline-block;font-size:.62rem;font-weight:700;letter-spacing:.06em;text-transform:uppercase;border-radius:10px;padding:1px 7px;margin-left:4px;background:var(--accent-soft);color:var(--accent2)}
+.sched-make{display:inline-block;margin-top:8px;font-size:.8rem;color:var(--accent);font-weight:600;text-decoration:none}
+.sched-make:hover{text-decoration:underline}
 .sched-opt:has(input:checked){border-color:var(--accent);box-shadow:inset 0 0 0 1px var(--accent);background:var(--accent-soft)}
 .sched-opt input{margin-top:3px;accent-color:var(--accent)}
 .sched-opt>span{display:flex;flex-direction:column;line-height:1.3;font-size:.86rem}
@@ -1207,6 +1370,17 @@ a.row-btn{text-decoration:none}
 .row-btn .cnt{font-family:var(--mono);background:var(--accent-soft);color:var(--accent);border-radius:5px;padding:0 5px}
 .num-tbl .muted{color:var(--muted)}
 #numLoad{margin:14px auto;max-width:440px}
+/* Interruptor de variabilidad de velocidad (mismo lenguaje que los switches del simulador). */
+.vsw{display:flex;gap:10px;align-items:center;cursor:pointer}
+.vsw input{position:absolute;opacity:0}
+.vsw .trk{width:40px;height:22px;border-radius:12px;background:var(--border);position:relative;flex:0 0 auto;transition:.18s}
+.vsw .trk::after{content:"";position:absolute;top:3px;left:3px;width:16px;height:16px;border-radius:50%;background:#fff;transition:.18s;box-shadow:0 1px 2px rgba(0,0,0,.25)}
+.vsw input:checked+.trk{background:var(--accent)}
+.vsw input:checked+.trk::after{transform:translateX(18px)}
+.vsw input:focus-visible+.trk{outline:2px solid var(--accent);outline-offset:2px}
+.vsw>span:last-child{display:flex;flex-direction:column;line-height:1.3;font-size:.86rem}
+.vsw small{color:var(--muted);font-size:.74rem}
+.vvar-box .fld{margin-top:10px}
 </style>
 <div class="menu-wrap">
     <div class="panel-bar"><a class="back-link" href="/">← Menú</a></div>
@@ -1229,9 +1403,17 @@ a.row-btn{text-decoration:none}
             <label class="sched-opt"><input type="radio" name="sched" value="saved" checked><span><b>GTFS guardado</b><small id="gtfsSavedInfo">Comprobando…</small></span></label>
             <label class="sched-opt"><input type="radio" name="sched" value="new"><span><b>GTFS nuevo</b><small>__DL__ Descarga el feed de hoy (Renfe) antes de correr</small></span></label>
             <label class="sched-opt"><input type="radio" name="sched" value="import"><span><b>Importar horarios <span class="fmt-help" tabindex="0" aria-label="Formato">?<span class="fmt-pop" role="tooltip"><b>Formato: ZIP GTFS estándar</b><br>Debe contener <code>routes.txt</code>, <code>trips.txt</code>, <code>stop_times.txt</code> y <code>stops.txt</code> (CSV con cabecera, como el feed de Renfe/Fomento).<br>Columnas mínimas: <code>route_id, route_short_name</code> · <code>trip_id, route_id, service_id</code> · <code>trip_id, stop_id, stop_sequence, arrival_time, departure_time</code> (HH:MM:SS, admite &gt;24h) · <code>stop_id, stop_name, stop_lat, stop_lon</code>.<br>Se conservan las líneas cuyo <code>route_short_name</code> empieza por <b>R</b>.</span></span></b><small>Sube un .zip propio antes de correr</small></span></label>
+            <div class="sched-cads" id="schedCads"></div>
           </div>
+          <a class="sched-make" href="/horarios">Crear horarios cadenciados →</a>
           <label class="file-pick" id="numFileWrap" hidden><input type="file" id="numGtfsFile" accept=".zip"><span id="numFileName">Elegir fichero .zip…</span></label>
           <div id="numGtfsStatus" class="sub" style="margin:6px 0 0"></div>
+        </div>
+        <div class="gtfs-box vvar-box">
+          <div class="lbl">Conducción</div>
+          <label class="vsw"><input type="checkbox" id="vvarOn"><span class="trk"></span><span><b>Variabilidad de velocidad</b><small>Los trenes no van siempre clavados a Vmax</small></span></label>
+          <label class="fld" id="vvarRow" hidden>Factor de aleatoriedad a 120 km/h (%)<input type="number" id="vvarPct" value="3" min="0.5" max="25" step="0.5"></label>
+          <div class="sub" id="vvarHint" style="margin:6px 0 0" hidden></div>
         </div>
         <div class="tpl-title">Incidencias en juego <span class="sub" style="text-transform:none;letter-spacing:0;font-weight:400">· plantillas del apartado <a href="/incidencias">Incidencias</a>; esta selección es solo de este modo</span></div>
         <label class="all-toggle"><input type="checkbox" id="selAll"><span>Todas / ninguna</span></label>
@@ -1314,6 +1496,22 @@ a.row-btn{text-decoration:none}
     $("selAll").onchange=()=>{ SEL=$("selAll").checked?new Set(TPLS.map(t=>t.id)):new Set(); saveSel(); renderTpls(); };
     loadTpls();
 
+    // Variabilidad de velocidad: cada tren, en cada tramo entre señales, circula a Vmax·f con f gaussiana
+    // de media 1−p truncada a [1−2p, 1] (p definido a 120 km/h; el motor lo escala con la Vmax). Preferencia de este modo (localStorage "rod-vvar-numeros").
+    const VVKEY="rod-vvar-numeros";
+    const vvarPct=()=>{ const p=parseFloat($("vvarPct").value); return Number.isFinite(p)?Math.min(25,Math.max(0.5,p)):3; };
+    const vvarOn=()=>$("vvarOn").checked;
+    function paintVvar(){
+      const on=vvarOn(), p=vvarPct(), f=x=>x.toLocaleString((window.LOCALE?LOCALE():"es-ES"),{maximumFractionDigits:2});
+      $("vvarRow").hidden=!on; $("vvarHint").hidden=!on;
+      if(on) $("vvarHint").textContent=`A 120 km/h: media Vmax − ${f(p)} % · entre Vmax − ${f(2*p)} % y Vmax. Escala con la Vmax (a 60 km/h, la mitad) y se sortea en cada tramo entre señales. Súbelo en días de lluvia.`;
+    }
+    function saveVvar(){ try{ localStorage.setItem(VVKEY, JSON.stringify({on:vvarOn(),p:vvarPct()})); }catch(e){} }
+    try{ const v=JSON.parse(localStorage.getItem(VVKEY)); if(v){ $("vvarOn").checked=!!v.on; if(Number.isFinite(v.p)) $("vvarPct").value=v.p; } }catch(e){}
+    paintVvar();
+    $("vvarOn").onchange=()=>{ paintVvar(); saveVvar(); };
+    $("vvarPct").oninput=()=>{ paintVvar(); saveVvar(); };
+
     // Selector de horarios (igual que el visual): guardado (con su fecha) / nuevo / importar.
     let GTFS_DATE="";   // fecha del GTFS cargado (se adjunta a cada tanda para "ver en simulador")
     async function infoGtfs(){
@@ -1326,6 +1524,12 @@ a.row-btn{text-decoration:none}
     }
     infoGtfs();
     const schedMode=()=>(document.querySelector('input[name="sched"]:checked')||{}).value||"saved";
+    // Horarios CADENCIADOS del creador (/horarios), guardados en este navegador ("rod-cadences").
+    // Aquí no existe el modo sin horarios: solo tiene sentido en el visual.
+    const cadList=()=>{ try{ const v=JSON.parse(localStorage.getItem("rod-cadences")); return Array.isArray(v)?v:[]; }catch(e){ return []; } };
+    const escH=x=>String(x).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+    $("schedCads").innerHTML=cadList().map(c=>{ const n=((c.spec&&c.spec.markers)||[]).length+((c.spec&&c.spec.groups)||[]).length;
+      return `<label class="sched-opt"><input type="radio" name="sched" value="cad:${escH(c.id)}"><span><b>${escH(c.name||"Sin nombre")} <span class="cad-tag">cadenciado</span></b><small>${n} marcador${n===1?"":"es"}</small></span></label>`; }).join("");
     $("schedOpts").onchange=()=>{ $("numFileWrap").hidden=schedMode()!=="import"; $("numGtfsStatus").textContent=""; };
     $("numGtfsFile").onchange=()=>{ const f=$("numGtfsFile").files[0]; $("numFileName").textContent=f?f.name:"Elegir fichero .zip…"; };
     // Arranca la descarga/importación en el servidor y espera a que acabe (true = OK).
@@ -1355,13 +1559,24 @@ a.row-btn{text-decoration:none}
         $("prog").textContent="Importando "+f.name+"…";
         if(!(await jobGtfs(()=>fetch("/api/gtfs/upload",{method:"POST",body:f})))){ $("prog").textContent=""; $("runBtn").disabled=false; return; }
       }
+      // Horario cadenciado: se genera en el servidor una vez y todas las semillas lo usan (`cad=`).
+      let cad=null;
+      if(mode.startsWith("cad:")){
+        const c=cadList().find(x=>x.id===mode.slice(4));
+        let r=null;
+        try{ r=c&&await (await fetch("/api/cadence/load",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({name:c.name,markers:c.spec.markers||[],groups:c.spec.groups||[]})})).json(); }catch(e){}
+        if(!r||!r.ok){ $("numGtfsStatus").textContent=(r&&r.error)||"No se pudo generar el horario cadenciado."; $("runBtn").disabled=false; return; }
+        cad={local:c.id,id:r.id,name:c.name};
+        $("numGtfsStatus").textContent=`Horario cadenciado «${c.name}»: ${r.n_trains} trenes.`+((r.warnings||[]).length?" "+r.warnings.join(" "):"");
+      }
       const tb=$("tbl").querySelector("tbody"); tb.innerHTML="";
       const nl=$("numLoad"); if(nl) nl.hidden=false;
       const chosen=TPLS.filter(t=>SEL.has(t.id));
-      const selQ = "&sel="+chosen.map(t=>encodeURIComponent(t.id)).join(",");
+      const vv=vvarOn()?vvarPct():null;   // variabilidad de velocidad de ESTA tanda (null = a Vmax)
+      const selQ = "&sel="+chosen.map(t=>encodeURIComponent(t.id)).join(",")+(vv?"&vvar="+vv:"")+(cad?"&cad="+cad.id:"");
       // Resultados de ESTA tanda (para exportar): runs + plantillas en juego + rango de semillas.
       LAST={runs:[],templates:chosen.map(t=>({motivo:t.motivo,effect:t.effect,dur_min:t.dur_min,prob:t.prob,every_h:t.every_h})),a,b,
-        selIds:chosen.map(t=>t.id),gtfs:GTFS_DATE};
+        selIds:chosen.map(t=>t.id),gtfs:GTFS_DATE,vvar:vv,cad};
       $("dlBtn").disabled=true;
       for(let s=a;s<=b;s++){
         $("prog").textContent="Ejecutando semilla "+s+"…";
@@ -1376,7 +1591,7 @@ a.row-btn{text-decoration:none}
           const tr=document.createElement("tr");
           tr.innerHTML=`<td>${s}</td><td>${r.n_trains}</td><td>${r.max_delay_min.toFixed(0)}</td><td>${f(pk(r.track&&r.track.mean),2)}</td><td>${f(pk(r.track&&r.track.total),0)}</td><td>${r.peak_waiting}</td><td>${r.final_waiting}</td><td>${Math.round(r.pax_min).toLocaleString((window.LOCALE?LOCALE():"es-ES"))}</td>
             <td class="act"><button class="row-btn" data-inc="${k}" ${ni?"":"disabled"}>__ALERT__ Incidencias <span class="cnt">${ni}</span></button></td>
-            <td class="act"><div class="row-acts"><button class="row-btn" data-trk="${k}">__CHART__ Seguimiento</button><a class="row-btn" target="_blank" rel="noopener" title="Abre el simulador visual con esta misma semilla, incidencias y horarios: solo queda pulsar Confirmar" href="/game?seed=${s}&sel=${encodeURIComponent(LAST.selIds.join(","))}&from=numeros${LAST.gtfs?"&gtfs="+LAST.gtfs:""}">__PLAY__ Ver en simulador</a></div></td>`;
+            <td class="act"><div class="row-acts"><button class="row-btn" data-trk="${k}">__CHART__ Seguimiento</button><a class="row-btn" target="_blank" rel="noopener" title="Abre el simulador visual con esta misma semilla, incidencias, horarios y variabilidad de velocidad: solo queda pulsar Confirmar" href="/game?seed=${s}&sel=${encodeURIComponent(LAST.selIds.join(","))}&from=numeros${LAST.gtfs?"&gtfs="+LAST.gtfs:""}${LAST.vvar?"&vvar="+LAST.vvar:""}${LAST.cad?"&cad="+encodeURIComponent(LAST.cad.local):""}">__PLAY__ Ver en simulador</a></div></td>`;
           tb.appendChild(tr);
         }catch(e){
           const tr=document.createElement("tr"); tr.innerHTML=`<td>${s}</td><td colspan="9">error</td>`; tb.appendChild(tr);
@@ -1411,7 +1626,7 @@ a.row-btn{text-decoration:none}
       $("prog").textContent="Generando "+(fmt==="pdf"?"PDF":"Excel")+(hor?" con horarios":"")+"…";
       $("dlBtn").disabled=true;
       try{
-        const res=await fetch(`/api/runs/export?fmt=${fmt}&horarios=${hor?1:0}`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({runs:LAST.runs.map(({track,analysis,...r})=>r),templates:LAST.templates})});
+        const res=await fetch(`/api/runs/export?fmt=${fmt}&horarios=${hor?1:0}${LAST.cad?"&cad="+LAST.cad.id+"&cadname="+encodeURIComponent(LAST.cad.name):""}`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({runs:LAST.runs.map(({track,analysis,...r})=>r),templates:LAST.templates,speed_var_pct:LAST.vvar})});
         if(!res.ok) throw new Error(await res.text());
         const blob=await res.blob(), url=URL.createObjectURL(blob);
         const a=document.createElement("a");
