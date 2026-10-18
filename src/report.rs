@@ -990,6 +990,10 @@ fn icon(name: &str) -> &'static str {
         "refresh" => r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 11.5a8 8 0 1 0-.8 4.5"/><polyline points="20 4 20 11.5 12.5 11.5"/></svg>"#,
         "back-arrow" => r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="20" y1="12" x2="5" y2="12"/><polyline points="11 6 5 12 11 18"/></svg>"#,
         "download" => r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="3" x2="12" y2="15"/><polyline points="7 10 12 15 17 10"/><path d="M4 20h16"/></svg>"#,
+        "gear" => r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M2 12h3M19 12h3M4.9 19.1 7 17M17 7l2.1-2.1"/></svg>"#,
+        "list" => r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="3" width="16" height="18" rx="2"/><line x1="8" y1="8" x2="16" y2="8"/><line x1="8" y1="12" x2="16" y2="12"/><line x1="8" y1="16" x2="13" y2="16"/></svg>"#,
+        "freight" => r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="7" width="7" height="9" rx="1"/><rect x="10" y="9" width="12" height="7" rx="1"/><circle cx="5" cy="18.5" r="1.5"/><circle cx="14" cy="18.5" r="1.5"/><circle cx="19" cy="18.5" r="1.5"/></svg>"#,
+        "signal" => r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="2"/><path d="M7.8 7.8a6 6 0 0 0 0 8.4M16.2 7.8a6 6 0 0 1 0 8.4M4.9 4.9a10 10 0 0 0 0 14.2M19.1 4.9a10 10 0 0 1 0 14.2"/></svg>"#,
         "clock" => r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><polyline points="12 7 12 12 15.5 14"/></svg>"#,
         "chart" => r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><path d="M6 15c3-9 5-9 7-4s4 4 8-6"/></svg>"#,
         _ => "",
@@ -1062,6 +1066,28 @@ pub fn render_menu_page() -> String {
       <div><h3>Horarios cadenciados</h3><p>Coloca en un reloj a qué minuto pasa cada línea por Sants y genera una malla para probarla en el visual o en las runs.</p></div>
     </a>
 
+    <!-- Modelo: qué se puede ajustar, qué se asume y los trenes de mercancías. -->
+    <h2 class="menu-sec">Modelo</h2>
+    <div class="tiles three">
+      <a class="tile tile-mini" href="/configuracion">
+        <div class="tile-ic">⚙️</div>
+        <div><h3>Configuración del modelo</h3><p>Todo lo configurable del realismo: viajeros y paradas, rotación en cabecera, conducción (ASFA), vía, cruces y mercancías. Actualizar LTV.</p></div>
+      </a>
+      <a class="tile tile-mini" href="/supuestos">
+        <div class="tile-ic">📋</div>
+        <div><h3>Supuestos</h3><p>Qué sale de datos reales, qué es aproximado y qué se asume sin dato.</p></div>
+      </a>
+      <a class="tile tile-mini" href="/mercancias">
+        <div class="tile-ic">🚛</div>
+        <div><h3>Mercancías</h3><p>Corredores y trenes de mercancías: generador semialeatorio, escenarios guardados y vista previa del día.</p></div>
+      </a>
+    </div>
+
+    <a class="tile tile-mini" href="/datos" style="margin-top:14px">
+      <div class="tile-ic">📡</div>
+      <div><h3>Datos reales de Renfe</h3><p>Graba día a día dónde están los trenes de Rodalies, sus retrasos, cancelaciones y avisos (GTFS-RT de Renfe); recogida automática con un botón y comparación con el simulador.</p></div>
+    </a>
+
     <!-- Herramientas del panel de análisis que aún no se han migrado al motor unificado de la app. -->
     <h2 class="menu-sec">Otras funciones experimentales</h2>
     <div class="tiles">
@@ -1088,7 +1114,11 @@ pub fn render_menu_page() -> String {
         .replace("📐", icon("ruler"))
         .replace("🧮", icon("optimize"))
         .replace("🚨", icon("warning"))
-        .replace("🕒", icon("clock"));
+        .replace("🕒", icon("clock"))
+        .replace("⚙️", icon("gear"))
+        .replace("📋", icon("list"))
+        .replace("🚛", icon("freight"))
+        .replace("📡", icon("signal"));
     document(&head, &body)
 }
 
@@ -1309,7 +1339,7 @@ pub fn render_numbers_page() -> String {
 .num-seeds{display:flex;gap:10px;margin-bottom:14px}
 .fld{display:flex;flex-direction:column;gap:4px;font-size:.74rem;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--muted)}
 .num-seeds .fld{flex:1;min-width:0}
-.fld input{width:100%;min-width:0;background:var(--panel2);border:1px solid var(--border);border-radius:7px;padding:8px 9px;color:var(--text);font:inherit;font-weight:400;text-transform:none;letter-spacing:0}
+.fld input,.fld select{width:100%;min-width:0;background:var(--panel2);border:1px solid var(--border);border-radius:7px;padding:8px 9px;color:var(--text);font:inherit;font-weight:400;text-transform:none;letter-spacing:0}
 .gtfs-box{border:1px solid var(--border);border-radius:9px;padding:11px 12px;margin-bottom:14px;background:var(--panel2)}
 .gtfs-box .lbl{font-size:.72rem;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:var(--muted);margin-bottom:6px}
 .gtfs-box b{color:var(--text)}
@@ -1415,6 +1445,11 @@ a.row-btn{text-decoration:none}
           <label class="fld" id="vvarRow" hidden>Factor de aleatoriedad a 120 km/h (%)<input type="number" id="vvarPct" value="3" min="0.5" max="25" step="0.5"></label>
           <div class="sub" id="vvarHint" style="margin:6px 0 0" hidden></div>
         </div>
+        <div class="gtfs-box vvar-box">
+          <div class="lbl">Mercancías</div>
+          <label class="fld">Escenario<select id="numFrt"><option value="none">Sin mercancías</option></select></label>
+          <div class="sub" style="margin:6px 0 0"><a href="/mercancias">Crear o editar escenarios →</a></div>
+        </div>
         <div class="tpl-title">Incidencias en juego <span class="sub" style="text-transform:none;letter-spacing:0;font-weight:400">· plantillas del apartado <a href="/incidencias">Incidencias</a>; esta selección es solo de este modo</span></div>
         <label class="all-toggle"><input type="checkbox" id="selAll"><span>Todas / ninguna</span></label>
         <ul class="num-tpls" id="numTpls"><li class="empty">Cargando plantillas…</li></ul>
@@ -1509,6 +1544,17 @@ a.row-btn{text-decoration:none}
     function saveVvar(){ try{ localStorage.setItem(VVKEY, JSON.stringify({on:vvarOn(),p:vvarPct()})); }catch(e){} }
     try{ const v=JSON.parse(localStorage.getItem(VVKEY)); if(v){ $("vvarOn").checked=!!v.on; if(Number.isFinite(v.p)) $("vvarPct").value=v.p; } }catch(e){}
     paintVvar();
+    // Escenarios de mercancías (compartidos con el visual); preferencia de este modo en "rod-frt-numeros".
+    (async()=>{
+      const el=$("numFrt"); let saved=null; try{ saved=localStorage.getItem("rod-frt-numeros"); }catch(e){}
+      try{
+        const scs=await (await fetch("/api/freight/scenarios")).json();
+        scs.forEach(sc=>{ const o=document.createElement("option"); o.value=sc.id; o.textContent=sc.name+(sc.kind==="fixed"?` (${sc.trains.length} trenes fijos)`:" (generado)"); el.appendChild(o); });
+        const def=(scs.find(x=>x.kind!=="fixed")||{}).id||"none";
+        el.value=saved&&[...el.options].some(o=>o.value===saved)?saved:def;
+      }catch(e){}
+      el.onchange=()=>{ try{ localStorage.setItem("rod-frt-numeros",el.value); }catch(e){} };
+    })();
     $("vvarOn").onchange=()=>{ paintVvar(); saveVvar(); };
     $("vvarPct").oninput=()=>{ paintVvar(); saveVvar(); };
 
@@ -1573,10 +1619,11 @@ a.row-btn{text-decoration:none}
       const nl=$("numLoad"); if(nl) nl.hidden=false;
       const chosen=TPLS.filter(t=>SEL.has(t.id));
       const vv=vvarOn()?vvarPct():null;   // variabilidad de velocidad de ESTA tanda (null = a Vmax)
-      const selQ = "&sel="+chosen.map(t=>encodeURIComponent(t.id)).join(",")+(vv?"&vvar="+vv:"")+(cad?"&cad="+cad.id:"");
+      const frt=$("numFrt").value;   // escenario de mercancías de ESTA tanda ("none" = sin)
+      const selQ = "&sel="+chosen.map(t=>encodeURIComponent(t.id)).join(",")+(vv?"&vvar="+vv:"")+(cad?"&cad="+cad.id:"")+(frt&&frt!=="none"?"&frt="+encodeURIComponent(frt):"");
       // Resultados de ESTA tanda (para exportar): runs + plantillas en juego + rango de semillas.
       LAST={runs:[],templates:chosen.map(t=>({motivo:t.motivo,effect:t.effect,dur_min:t.dur_min,prob:t.prob,every_h:t.every_h})),a,b,
-        selIds:chosen.map(t=>t.id),gtfs:GTFS_DATE,vvar:vv,cad};
+        selIds:chosen.map(t=>t.id),gtfs:GTFS_DATE,vvar:vv,cad,frt};
       $("dlBtn").disabled=true;
       for(let s=a;s<=b;s++){
         $("prog").textContent="Ejecutando semilla "+s+"…";
@@ -1591,7 +1638,7 @@ a.row-btn{text-decoration:none}
           const tr=document.createElement("tr");
           tr.innerHTML=`<td>${s}</td><td>${r.n_trains}</td><td>${r.max_delay_min.toFixed(0)}</td><td>${f(pk(r.track&&r.track.mean),2)}</td><td>${f(pk(r.track&&r.track.total),0)}</td><td>${r.peak_waiting}</td><td>${r.final_waiting}</td><td>${Math.round(r.pax_min).toLocaleString((window.LOCALE?LOCALE():"es-ES"))}</td>
             <td class="act"><button class="row-btn" data-inc="${k}" ${ni?"":"disabled"}>__ALERT__ Incidencias <span class="cnt">${ni}</span></button></td>
-            <td class="act"><div class="row-acts"><button class="row-btn" data-trk="${k}">__CHART__ Seguimiento</button><a class="row-btn" target="_blank" rel="noopener" title="Abre el simulador visual con esta misma semilla, incidencias, horarios y variabilidad de velocidad: solo queda pulsar Confirmar" href="/game?seed=${s}&sel=${encodeURIComponent(LAST.selIds.join(","))}&from=numeros${LAST.gtfs?"&gtfs="+LAST.gtfs:""}${LAST.vvar?"&vvar="+LAST.vvar:""}${LAST.cad?"&cad="+encodeURIComponent(LAST.cad.local):""}">__PLAY__ Ver en simulador</a></div></td>`;
+            <td class="act"><div class="row-acts"><button class="row-btn" data-trk="${k}">__CHART__ Seguimiento</button><a class="row-btn" target="_blank" rel="noopener" title="Abre el simulador visual con esta misma semilla, incidencias, horarios y variabilidad de velocidad: solo queda pulsar Confirmar" href="/game?seed=${s}&sel=${encodeURIComponent(LAST.selIds.join(","))}&from=numeros${LAST.gtfs?"&gtfs="+LAST.gtfs:""}${LAST.vvar?"&vvar="+LAST.vvar:""}${LAST.cad?"&cad="+encodeURIComponent(LAST.cad.local):""}&frt=${encodeURIComponent(LAST.frt||"none")}">__PLAY__ Ver en simulador</a></div></td>`;
           tb.appendChild(tr);
         }catch(e){
           const tr=document.createElement("tr"); tr.innerHTML=`<td>${s}</td><td colspan="9">error</td>`; tb.appendChild(tr);
@@ -1810,6 +1857,519 @@ pub fn render_incidents_page() -> String {
     }
   };
   load();
+})();
+</script>"##;
+    document(&head, body)
+}
+
+/// Estilos comunes de las páginas de realismo (configuración, supuestos, mercancías).
+const REALISM_CSS: &str = r##"<style>
+.menu-wrap{max-width:1180px}
+.cfg-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:16px;margin-top:14px}
+.cfg-sec h2{margin:0 0 4px;font-size:1.05rem}
+.cfg-sec .sub{margin:0 0 12px}
+.cfg-row{display:grid;grid-template-columns:minmax(0,1fr) 120px;gap:10px;align-items:center;padding:8px 0;border-top:1px solid var(--border)}
+.cfg-row:first-of-type{border-top:0}
+.cfg-row .lbl{font-size:.88rem;font-weight:600}
+.cfg-row .hlp{font-size:.76rem;color:var(--muted);margin-top:2px;line-height:1.35}
+.cfg-row .def{font-size:.72rem;color:var(--muted)}
+.cfg-row input[type=number],.cfg-row input[type=text]{width:100%;height:34px;background:var(--panel2);border:1px solid var(--border);border-radius:7px;padding:0 8px;color:var(--text);font:inherit}
+.cfg-row input[type=checkbox]{width:20px;height:20px;accent-color:var(--accent);justify-self:start}
+.cfg-row.changed .lbl::after{content:" •";color:var(--accent)}
+.cfg-wide{grid-column:1/-1}
+.cfg-wide textarea{width:100%;min-height:70px;background:var(--panel2);border:1px solid var(--border);border-radius:7px;padding:8px;color:var(--text);font:inherit;font-size:.85rem}
+.bar{display:flex;gap:8px;flex-wrap:wrap;align-items:center;position:sticky;top:0;z-index:5;background:var(--bg);padding:10px 0;border-bottom:1px solid var(--border)}
+.bar .msg{font-size:.82rem;color:var(--muted);margin-left:6px}
+.btn.ghost{background:var(--panel2);color:var(--text);border:1px solid var(--border)}
+.btn.ghost:hover{border-color:var(--accent)}
+.tbl{width:100%;border-collapse:collapse;font-size:.84rem}
+.tbl th,.tbl td{padding:6px 6px;border-bottom:1px solid var(--border);text-align:left;vertical-align:middle}
+.tbl th{font-size:.7rem;text-transform:uppercase;letter-spacing:.04em;color:var(--muted)}
+.tbl input,.tbl select{width:100%;min-width:60px;height:30px;background:var(--panel2);border:1px solid var(--border);border-radius:6px;padding:0 6px;color:var(--text);font:inherit;font-size:.82rem}
+.tbl input[type=checkbox]{width:18px;height:18px;min-width:0;accent-color:var(--accent)}
+.tbl-wrap{overflow-x:auto}
+.lvl{display:inline-block;font-size:.68rem;font-weight:700;text-transform:uppercase;letter-spacing:.04em;padding:2px 7px;border-radius:999px;white-space:nowrap}
+.lvl.dato{background:#1f9d5522;color:#1f9d55}
+.lvl.aprox{background:#d9770622;color:#d97706}
+.lvl.supuesto{background:#dc262622;color:#dc2626}
+.links{display:flex;flex-direction:column;gap:6px;font-size:.88rem}
+.links a{color:var(--accent)}
+.fr-wide{max-width:1500px}
+.fr-layout{display:grid;grid-template-columns:240px minmax(0,1fr);gap:18px;align-items:start;margin-top:14px}
+.tbl input[data-f=name]{min-width:220px}
+.tbl input[data-f=from],.tbl input[data-f=to],.tbl input[data-f=via]{min-width:170px}
+.tbl input[type=number]{min-width:70px}
+@media(max-width:860px){.fr-layout{grid-template-columns:1fr}}
+.sc-list{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:6px}
+.sc-list li{background:var(--panel);border:1px solid var(--border);border-left:4px solid var(--accent);border-radius:8px;padding:9px 12px;cursor:pointer}
+.sc-list li.sel{box-shadow:0 0 0 2px var(--accent-soft);border-color:var(--accent)}
+.sc-list li small{display:block;color:var(--muted);font-size:.74rem}
+.fld{display:flex;flex-direction:column;gap:4px;font-size:.72rem;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--muted);margin-bottom:10px}
+.fld input,.fld select{height:34px;background:var(--panel2);border:1px solid var(--border);border-radius:7px;padding:0 9px;color:var(--text);font:inherit;font-weight:400;text-transform:none;letter-spacing:0}
+.fld-row{display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end}
+.fld-row .fld{flex:1;min-width:140px}
+.prev-list{max-height:320px;overflow:auto;font-size:.82rem}
+.err{color:var(--late);font-size:.82rem}
+.icon-act{border:1px solid var(--border);background:var(--panel2);color:var(--text);border-radius:7px;padding:5px 9px;font:inherit;font-size:.8rem;font-weight:600;cursor:pointer}
+.icon-act.del:hover{border-color:var(--late);color:var(--late)}
+</style>"##;
+
+/// Página `/configuracion`: TODO lo configurable del realismo del motor, con los valores por
+/// defecto propuestos al lado. Se guarda en el servidor (`report/realism.json`) y vale para el modo
+/// visual, las runs headless y el optimizador.
+pub fn render_config_page() -> String {
+    let head = format!("<title>Rodalies Simulator · Configuración del modelo</title>\n{STYLE}\n{REALISM_CSS}");
+    let body = r##"<div class="menu-wrap">
+  <div class="panel-bar"><a class="back-link" href="/">← Menú</a></div>
+  <div class="menu-top"><div class="menu-brand"><img class="logo" src="/game/lines/r_logo.png" alt="Rodalies" width="46" height="46"><div>
+    <h1>Configuración del modelo</h1>
+    <div class="sub">Todo lo que se puede ajustar del realismo del simulador. Los valores iniciales son los propuestos como razonables (se indican al lado). Vale para el <a href="/game">modo visual</a>, <a href="/numeros">Varias runs</a> y el optimizador. Lo que se asume sin poder ajustarlo está en <a href="/supuestos">Supuestos</a>.</div>
+  </div></div></div>
+  <div class="bar">
+    <button class="btn" id="saveBtn">Guardar cambios</button>
+    <button class="btn ghost" id="resetBtn">Restaurar valores por defecto</button>
+    <span class="msg" id="msg"></span>
+  </div>
+  <div class="cfg-grid" id="grid"><div class="card">Cargando…</div></div>
+</div>
+<script>
+(function(){
+  const $=id=>document.getElementById(id);
+  const esc=x=>String(x).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");
+  // Esquema de la página: secciones y campos (clave del JSON, etiqueta, ayuda, tipo, paso).
+  const SECTIONS=[
+    {t:"Pasajeros y tiempo de parada",s:"La parada sale de los viajeros que suben y bajan (datos reales de Renfe por estación y franja de 30 min). Si un tren va tarde, se acumula más gente y para más tiempo.",f:[
+      ["pax_enabled","Modelo de viajeros","Si se desactiva, parada fija de 20–60 s según la estación (modelo antiguo).","bool"],
+      ["demand_scale","Multiplicador de la demanda","1 = demanda real de Renfe (369.477 viajeros/día en el núcleo, 2018).","num",0.05],
+      ["demand_noise","Variabilidad de la demanda por run","Desviación del factor aleatorio de cada estación en cada run (0 = siempre igual).","num",0.01],
+      ["fallback_pax_per_stop","Viajeros por parada fuera del núcleo","Estaciones sin datos de Renfe: viajeros/día por cada tren que para.","num",1],
+      ["door_fixed_s","Parte fija de la parada (s)","Abrir puertas, avisos, cerrar puertas y orden de salida.","num",1],
+      ["board_s_per_pax","Segundos por viajero que sube (por puerta)","","num",0.1],
+      ["alight_s_per_pax","Segundos por viajero que baja (por puerta)","","num",0.1],
+      ["crowd_threshold","Ocupación a partir de la que el tren lleno frena el intercambio","0–1.","num",0.05],
+      ["crowd_penalty","Penalización con el tren lleno","El intercambio tarda ×(1 + este valor) al 100 % de ocupación.","num",0.1],
+      ["dwell_min_s","Parada mínima (s)","","num",1],
+      ["extra_dwell_prob","Probabilidad de imprevisto menor en una parada","Puertas retenidas, rampa, bicicleta… (0–1).","num",0.005],
+      ["extra_dwell_max_s","Duración máxima del imprevisto (s)","Se sortea entre 10 s y este valor.","num",5],
+      ["pax_mass_kg","Peso medio de un viajero (kg)","Suma a la masa del tren: un tren lleno acelera menos.","num",1],
+      ["peak_windows","Horas punta (doble composición)","Franjas en horas, p. ej. «6.5-9.5, 17-20».","windows"],
+    ]},
+    {t:"Rotación en cabecera",s:"La unidad que llega a una cabecera hace el siguiente servicio: si llega tarde, sale tarde. Nunca se suprimen trenes.",f:[
+      ["rotation_enabled","Rotación de material","","bool"],
+      ["turnaround_min_s","Cambio de cabina mínimo (s)","Tiempo que necesita el maquinista para cambiar de cabina y preparar el tren.","num",10],
+      ["rotation_max_wait_min","Espera máxima para encadenar (min)","Si el siguiente servicio sale más tarde, la unidad se va a cocheras.","num",5],
+      ["reserve_unit_after_min","Unidad de reserva tras (min)","Si la unidad no llega, a los X min de la hora sale otra.","num",5],
+    ]},
+    {t:"Conducción real",s:"Cómo conduce el maquinista: ASFA, frenada de servicio, anticipación de los límites y reacción a las señales.",f:[
+      ["asfa_enabled","ASFA (anuncio de parada)","Al pasar un ámbar baja a la velocidad de anuncio de parada y no acelera hasta la señal siguiente.","bool"],
+      ["asfa_amber_kmh","Velocidad tras anuncio de parada (km/h)","","num",5],
+      ["service_decel","Deceleración de servicio (m/s²)","La que usa el maquinista; la máxima del material solo en emergencia.","num",0.05],
+      ["accel_fraction","Fracción de la aceleración máxima","","num",0.05],
+      ["anticipate_limits","Frenar antes de cada reducción de velocidad","Si no, el límite cae de golpe al llegar a la zona.","bool"],
+      ["reaction_min_s","Reacción al abrirse una señal: mínimo (s)","","num",0.5],
+      ["reaction_max_s","Reacción al abrirse una señal: máximo (s)","","num",0.5],
+      ["tunnel_speed_factor","Margen en túneles de Barcelona","Factor sobre la Vmax de la vía (1 = sin margen).","num",0.01],
+      ["davis_enabled","Resistencia al avance (estimada)","","bool"],
+      ["davis_r0","Resistencia a 0 km/h (N/kN)","","num",0.1],
+      ["davis_r100","Resistencia a 100 km/h (N/kN)","","num",0.1],
+    ]},
+    {t:"Vía y cabeceras",s:"Huecos sin dato de velocidad y salidas desde vías de estacionamiento.",f:[
+      ["fill_track_gaps","Rellenar huecos de velocidad de vía","Con la menor velocidad de los tramos vecinos.","bool"],
+      ["default_track_kmh","Vmax sin ningún dato (km/h)","Para tramos sin dato OSM/ADIF en toda su longitud.","num",5],
+      ["terminal_crossing","Cruce al salir de vía de estacionamiento","Las dos señales del cruce en rojo mientras se incorpora el tren.","bool"],
+      ["crossing_time_s","Duración de la maniobra de cruce (s)","","num",5],
+    ]},
+    {t:"Mercancías",s:"Reglas de circulación de los mercancías. Los trenes y corredores se editan en <a href='/mercancias'>Mercancías</a>.",f:[
+      ["freight_yield","Se apartan para dejar pasar a viajeros","En estaciones con más de 2 vías.","bool"],
+      ["freight_yield_lookback_m","Distancia hacia atrás que vigilan (m)","","num",100],
+      ["freight_yield_decide_m","Antelación para decidir apartarse (m)","","num",100],
+      ["freight_siding_max_s","Espera máxima en el apartadero (s)","","num",30],
+      ["freight_yield_window_s","Cesión de paso en bifurcación / vía única (s)","Ceden si un tren de viajeros va a entrar en este tiempo.","num",5],
+    ]},
+  ];
+  let CUR=null, DEF=null;
+  const fmtWin=w=>(w||[]).map(([a,b])=>a+"-"+b).join(", ");
+  const parseWin=s=>String(s||"").split(",").map(x=>x.trim()).filter(Boolean).map(x=>x.split("-").map(Number)).filter(p=>p.length===2&&p.every(n=>isFinite(n)));
+  const showDef=(k,t)=>{const d=DEF[k]; if(t==="bool") return d?"sí":"no"; if(t==="windows") return fmtWin(d); return d;};
+  function rowHtml([k,l,h,t,st]){
+    const v=CUR[k];
+    let inp;
+    if(t==="bool") inp=`<input type="checkbox" data-k="${k}" data-t="bool" ${v?"checked":""}>`;
+    else if(t==="windows") inp=`<input type="text" data-k="${k}" data-t="windows" value="${esc(fmtWin(v))}">`;
+    else inp=`<input type="number" data-k="${k}" data-t="num" step="${st||"any"}" value="${v}">`;
+    return `<div class="cfg-row" data-row="${k}"><div><div class="lbl">${esc(l)}</div>${h?`<div class="hlp">${h}</div>`:""}<div class="def">Por defecto: ${esc(showDef(k,t))}</div></div>${inp}</div>`;
+  }
+  function seriesHtml(){
+    const rows=(CUR.series||[]).map((s,i)=>`<tr><td><b>${esc(s.id)}</b></td>
+      <td><input type="number" data-s="${i}" data-f="capacity" value="${s.capacity}"></td>
+      <td><input type="number" data-s="${i}" data-f="doors" value="${s.doors}"></td>
+      <td><input type="number" data-s="${i}" data-f="length_m" value="${s.length_m}"></td>
+      <td><input type="number" step="0.05" data-s="${i}" data-f="door_factor" value="${s.door_factor}"></td>
+      <td><input type="checkbox" data-s="${i}" data-f="double_in_peak" ${s.double_in_peak?"checked":""}></td></tr>`).join("");
+    return `<section class="card cfg-sec cfg-wide"><h2>Material (una unidad)</h2><p class="sub">Capacidad, puertas por costado y longitud de cada serie (aproximadas). El factor de puertas alarga el tiempo por viajero (dos pisos = más lento).</p>
+      <div class="tbl-wrap"><table class="tbl"><thead><tr><th>Serie</th><th>Plazas</th><th>Puertas</th><th>Longitud (m)</th><th>Factor puertas</th><th>Doble en punta</th></tr></thead><tbody>${rows}</tbody></table></div></section>`;
+  }
+  function render(){
+    const secs=SECTIONS.map(s=>`<section class="card cfg-sec"><h2>${esc(s.t)}</h2><p class="sub">${s.s}</p>${s.f.map(rowHtml).join("")}</section>`).join("");
+    const tunnel=`<section class="card cfg-sec cfg-wide"><h2>Estaciones subterráneas (túneles de Barcelona)</h2><p class="sub">Un tramo entre dos de estas estaciones se considera en túnel. Una por línea, con el nombre exacto del GTFS.</p><textarea id="tunnel">${esc((CUR.tunnel_stations||[]).join("\n"))}</textarea></section>`;
+    const ltv=`<section class="card cfg-sec"><h2>Limitaciones Temporales de Velocidad (LTV)</h2><p class="sub">Las LTV vigentes de ADIF se aplican a la velocidad de cada tramo. Descárgalas de nuevo para usar las de hoy.</p>
+      <div id="ltvInfo" class="hlp">Comprobando…</div><div style="margin-top:10px"><button class="btn" id="ltvBtn">Buscar y actualizar LTV</button></div></section>`;
+    const other=`<section class="card cfg-sec"><h2>Configurable en otras pantallas</h2><div class="links">
+      <a href="/incidencias">Incidencias: tipos, duración y probabilidad →</a>
+      <a href="/mercancias">Mercancías: corredores, trenes y escenarios →</a>
+      <a href="/horarios">Horarios cadenciados →</a>
+      <span class="hlp">Antes de cada run (modo visual / Varias runs): semilla, variabilidad de velocidad del maquinista, horario, incidencias activas y escenario de mercancías.</span></div></section>`;
+    $("grid").innerHTML=secs+seriesHtml()+tunnel+ltv+other;
+    $("grid").querySelectorAll("input").forEach(el=>el.addEventListener("input",mark));
+    $("ltvBtn").onclick=fetchLtv;
+    ltvStatus(); mark();
+  }
+  function collect(){
+    const c=JSON.parse(JSON.stringify(CUR));
+    $("grid").querySelectorAll("input[data-k]").forEach(el=>{
+      const k=el.dataset.k, t=el.dataset.t;
+      if(t==="bool") c[k]=el.checked; else if(t==="windows") c[k]=parseWin(el.value); else c[k]=+el.value;
+    });
+    $("grid").querySelectorAll("input[data-s]").forEach(el=>{
+      const s=c.series[+el.dataset.s]; s[el.dataset.f]=el.type==="checkbox"?el.checked:+el.value;
+    });
+    c.tunnel_stations=$("tunnel").value.split("\n").map(x=>x.trim()).filter(Boolean);
+    return c;
+  }
+  function mark(){
+    const c=collect();
+    $("grid").querySelectorAll(".cfg-row").forEach(r=>{const k=r.dataset.row; r.classList.toggle("changed",JSON.stringify(c[k])!==JSON.stringify(DEF[k]));});
+  }
+  async function load(){
+    const j=await (await fetch("/api/realism")).json(); CUR=j.current; DEF=j.defaults; render();
+  }
+  $("saveBtn").onclick=async()=>{
+    const r=await (await fetch("/api/realism",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(collect())})).json();
+    if(r.ok){CUR=r.current; render(); $("msg").textContent="Guardado. Las próximas runs usan estos valores.";} else $("msg").textContent="Error: "+(r.error||"no se pudo guardar");
+  };
+  $("resetBtn").onclick=async()=>{
+    if(!confirm("¿Restaurar todos los valores por defecto?")) return;
+    const r=await (await fetch("/api/realism/reset")).json(); CUR=r.current; render(); $("msg").textContent="Valores por defecto restaurados.";
+  };
+  async function ltvStatus(){
+    try{const j=await (await fetch("/api/ltv/status")).json();
+      $("ltvInfo").textContent=j.available?`${j.count} LTV cargadas · descarga del ${j.snapshot} (${j.source})`:"No hay LTV cargadas.";}catch(e){}
+  }
+  async function fetchLtv(){
+    $("ltvBtn").disabled=true; $("ltvInfo").textContent="Descargando de ADIF… (puede tardar un minuto)";
+    try{const j=await (await fetch("/api/ltv/fetch")).json();
+      if(j.ok){ await ltvStatus(); $("ltvInfo").textContent+=" · actualizado"; } else $("ltvInfo").textContent=j.error;}
+    catch(e){$("ltvInfo").textContent="Error de red";}
+    $("ltvBtn").disabled=false;
+  }
+  load();
+})();
+</script>"##;
+    document(&head, body)
+}
+
+/// Página `/supuestos`: todo lo que el modelo ASUME (sin dato o con dato aproximado), por áreas,
+/// con su nivel (dato real · aproximado · supuesto) y su fuente.
+pub fn render_assumptions_page() -> String {
+    let head = format!("<title>Rodalies Simulator · Supuestos del modelo</title>\n{STYLE}\n{REALISM_CSS}");
+    let body = r##"<div class="menu-wrap">
+  <div class="panel-bar"><a class="back-link" href="/">← Menú</a></div>
+  <div class="menu-top"><div class="menu-brand"><img class="logo" src="/game/lines/r_logo.png" alt="Rodalies" width="46" height="46"><div>
+    <h1>Supuestos del modelo</h1>
+    <div class="sub">Qué sale de datos reales, qué es una aproximación y qué se asume sin dato. Lo que se puede ajustar está en <a href="/configuracion">Configuración del modelo</a>.</div>
+  </div></div></div>
+  <p class="sub"><span class="lvl dato">dato</span> dato real · <span class="lvl aprox">aprox</span> dato aproximado o derivado · <span class="lvl supuesto">supuesto</span> sin dato</p>
+  <div id="list"><div class="card">Cargando…</div></div>
+</div>
+<script>
+(function(){
+  const esc=x=>String(x).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
+  const LV={dato:"dato",aprox:"aprox",supuesto:"supuesto"};
+  fetch("/api/assumptions").then(r=>r.json()).then(a=>{
+    const by={}; a.forEach(x=>(by[x.area]=by[x.area]||[]).push(x));
+    document.getElementById("list").innerHTML=Object.entries(by).map(([area,xs])=>`<section class="card" style="margin-top:14px"><h2 style="margin:0 0 8px">${esc(area)}</h2>
+      <div class="tbl-wrap"><table class="tbl"><thead><tr><th style="width:90px">Nivel</th><th>Supuesto</th><th style="width:28%">Fuente</th></tr></thead><tbody>
+      ${xs.map(x=>`<tr><td><span class="lvl ${x.level}">${LV[x.level]||x.level}</span></td><td>${esc(x.text)}</td><td class="hlp">${esc(x.source)}</td></tr>`).join("")}
+      </tbody></table></div></section>`).join("");
+  });
+})();
+</script>"##;
+    document(&head, body)
+}
+
+/// Página `/mercancias`: escenarios de mercancías (corredores generados o trenes fijos), vista
+/// previa del día por semilla y guardado de un día generado como escenario fijo.
+pub fn render_freight_page() -> String {
+    let head = format!("<title>Rodalies Simulator · Mercancías</title>\n{STYLE}\n{REALISM_CSS}");
+    let body = r##"<div class="menu-wrap fr-wide">
+  <div class="panel-bar"><a class="back-link" href="/">← Menú</a></div>
+  <div class="menu-top"><div class="menu-brand"><img class="logo" src="/game/lines/r_logo.png" alt="Rodalies" width="46" height="46"><div>
+    <h1>Mercancías</h1>
+    <div class="sub">Escenarios de trenes de mercancías. No hay surcos publicados, así que se generan por <b>corredores</b> (aparecen y desaparecen siempre en sus terminales) o se guardan como lista fija de trenes. El escenario se elige antes de cada run. Reglas de circulación en <a href="/configuracion">Configuración</a>.</div>
+  </div></div></div>
+  <div class="fr-layout">
+    <aside class="card">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px"><h2 style="margin:0">Escenarios</h2><button class="btn ghost" id="newBtn">+ Nuevo</button></div>
+      <ul class="sc-list" id="scList"></ul>
+    </aside>
+    <section>
+      <div class="card" id="editor">Cargando…</div>
+      <div class="card" style="margin-top:14px">
+        <div class="fld-row"><label class="fld">Semilla<input type="number" id="pvSeed" value="1" min="1"></label>
+          <button class="btn ghost" id="pvBtn" style="margin-bottom:10px">Ver los trenes del día</button>
+          <button class="btn ghost" id="matBtn" style="margin-bottom:10px">Guardar este día como escenario fijo</button></div>
+        <div id="preview" class="prev-list hlp">Elige un escenario y pulsa «Ver los trenes del día».</div>
+      </div>
+    </section>
+  </div>
+</div>
+<datalist id="stList"></datalist>
+<script>
+(function(){
+  const $=id=>document.getElementById(id);
+  const esc=x=>String(x??"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");
+  let SC=[], sel=0, ST={}, BYNAME={};
+  const stName=id=>ST[id]||id;
+  const stId=v=>BYNAME[String(v).trim().toLowerCase()]||String(v).trim();
+  const DEF_STOCK={vmax_kmh:100,length_m:500,mass_t:1200,power_kw:5600};
+  function list(){
+    $("scList").innerHTML=SC.map((s,i)=>`<li class="${i===sel?"sel":""}" data-i="${i}"><b>${esc(s.name||"(sin nombre)")}</b><small>${s.kind==="fixed"?`Fijo · ${s.trains.length} trenes`:`Generado · ${s.corridors.length} corredores`}</small></li>`).join("");
+    $("scList").querySelectorAll("li").forEach(li=>li.onclick=()=>{sel=+li.dataset.i; list(); edit();});
+  }
+  const stInp=(v,attrs)=>`<input list="stList" value="${esc(stName(v))}" ${attrs}>`;
+  function edit(){
+    const s=SC[sel]; if(!s){$("editor").innerHTML="No hay escenarios."; return;}
+    const corr=s.corridors.map((c,i)=>`<tr data-c="${i}">
+      <td><input type="checkbox" data-f="enabled" ${c.enabled?"checked":""}></td>
+      <td><input data-f="name" value="${esc(c.name)}"></td>
+      <td>${stInp(c.from,'data-f="from"')}</td><td>${stInp(c.to,'data-f="to"')}</td>
+      <td><input data-f="via" value="${esc((c.via||[]).map(stName).join(", "))}" placeholder="opcional"></td>
+      <td><input type="number" step="0.5" data-f="per_day" value="${c.per_day}"></td>
+      <td><input type="checkbox" data-f="both_ways" ${c.both_ways?"checked":""}></td>
+      <td><input type="number" data-g="vmax_kmh" value="${c.stock.vmax_kmh}"></td>
+      <td><input type="number" data-g="length_m" value="${c.stock.length_m}"></td>
+      <td><input type="number" data-g="mass_t" value="${c.stock.mass_t}"></td>
+      <td><button class="icon-act del" data-del="${i}">✕</button></td></tr>`).join("");
+    const fixed=s.trains.map((t,i)=>`<tr data-t="${i}">
+      <td><input data-f="name" value="${esc(t.name)}"></td>
+      <td>${stInp(t.from,'data-f="from"')}</td><td>${stInp(t.to,'data-f="to"')}</td>
+      <td><input data-f="via" value="${esc((t.via||[]).map(stName).join(", "))}" placeholder="opcional"></td>
+      <td><input type="time" data-f="dep" value="${esc(t.dep)}"></td>
+      <td><input type="number" data-g="vmax_kmh" value="${t.stock.vmax_kmh}"></td>
+      <td><input type="number" data-g="length_m" value="${t.stock.length_m}"></td>
+      <td><input type="number" data-g="mass_t" value="${t.stock.mass_t}"></td>
+      <td><button class="icon-act del" data-delt="${i}">✕</button></td></tr>`).join("");
+    $("editor").innerHTML=`<div class="fld-row">
+        <label class="fld">Nombre<input id="eName" value="${esc(s.name)}"></label>
+        <label class="fld">Tipo<select id="eKind"><option value="generated" ${s.kind!=="fixed"?"selected":""}>Generado por corredores (cambia con la semilla)</option><option value="fixed" ${s.kind==="fixed"?"selected":""}>Lista fija de trenes</option></select></label>
+        <label class="fld" style="flex:0 0 auto">Evitar horas punta<input type="checkbox" id="ePeak" ${s.avoid_peak?"checked":""} style="height:22px;width:22px"></label></div>
+      ${s.note?`<p class="hlp">${esc(s.note)}</p>`:""}
+      <div ${s.kind==="fixed"?"hidden":""}><h3>Corredores</h3><div class="tbl-wrap"><table class="tbl"><thead><tr><th></th><th>Nombre</th><th>Origen</th><th>Destino</th><th>Pasando por</th><th>Trenes/día y sentido</th><th>Ida y vuelta</th><th>Vmax</th><th>Longitud (m)</th><th>Masa (t)</th><th></th></tr></thead><tbody id="corrBody">${corr}</tbody></table></div>
+        <button class="btn ghost" id="addCorr" style="margin-top:8px">+ Corredor</button></div>
+      <div ${s.kind==="fixed"?"":"hidden"}><h3>Trenes</h3><div class="tbl-wrap"><table class="tbl"><thead><tr><th>Nombre</th><th>Origen</th><th>Destino</th><th>Pasando por</th><th>Salida</th><th>Vmax</th><th>Longitud (m)</th><th>Masa (t)</th><th></th></tr></thead><tbody id="fixBody">${fixed}</tbody></table></div>
+        <button class="btn ghost" id="addFix" style="margin-top:8px">+ Tren</button></div>
+      <div class="bar" style="position:static;border:0;margin-top:10px"><button class="btn" id="saveBtn">Guardar escenario</button><button class="btn ghost" id="dupBtn">Duplicar</button><button class="btn ghost" id="delBtn">Borrar</button><span class="msg" id="msg"></span></div>`;
+    $("eKind").onchange=()=>{collect(); SC[sel].kind=$("eKind").value; edit();};
+    $("addCorr").onclick=()=>{collect(); SC[sel].corridors.push({id:"",name:"Nuevo corredor",from:"",to:"",via:[],per_day:2,both_ways:true,stock:{...DEF_STOCK},enabled:true}); edit();};
+    $("addFix").onclick=()=>{collect(); SC[sel].trains.push({name:"Mercancías",from:"",to:"",via:[],dep:"22:00",stock:{...DEF_STOCK}}); edit();};
+    $("editor").querySelectorAll("[data-del]").forEach(b=>b.onclick=()=>{collect(); SC[sel].corridors.splice(+b.dataset.del,1); edit();});
+    $("editor").querySelectorAll("[data-delt]").forEach(b=>b.onclick=()=>{collect(); SC[sel].trains.splice(+b.dataset.delt,1); edit();});
+    $("saveBtn").onclick=()=>{collect(); save("Escenario guardado.");};
+    $("dupBtn").onclick=()=>{collect(); const c=JSON.parse(JSON.stringify(SC[sel])); c.id=""; c.name+=" (copia)"; SC.push(c); sel=SC.length-1; save("Duplicado.");};
+    $("delBtn").onclick=()=>{ if(!confirm("¿Borrar este escenario?")) return; SC.splice(sel,1); sel=0; save("Borrado.");};
+  }
+  function readRow(tr,obj){
+    tr.querySelectorAll("[data-f]").forEach(el=>{
+      const f=el.dataset.f;
+      if(el.type==="checkbox") obj[f]=el.checked;
+      else if(f==="per_day") obj[f]=+el.value;
+      else if(f==="from"||f==="to") obj[f]=stId(el.value);
+      else if(f==="via") obj[f]=el.value.split(",").map(x=>x.trim()).filter(Boolean).map(stId);
+      else obj[f]=el.value;
+    });
+    tr.querySelectorAll("[data-g]").forEach(el=>obj.stock[el.dataset.g]=+el.value);
+  }
+  function collect(){
+    const s=SC[sel]; if(!s||!$("eName")) return;
+    s.name=$("eName").value; s.avoid_peak=$("ePeak").checked;
+    document.querySelectorAll("#corrBody tr").forEach(tr=>readRow(tr,s.corridors[+tr.dataset.c]));
+    document.querySelectorAll("#fixBody tr").forEach(tr=>readRow(tr,s.trains[+tr.dataset.t]));
+  }
+  async function save(m){
+    const r=await (await fetch("/api/freight/scenarios",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(SC)})).json();
+    if(r.ok){SC=r.scenarios; list(); edit(); if($("msg")) $("msg").textContent=m;} else alert(r.error||"Error");
+  }
+  $("newBtn").onclick=()=>{collect(); SC.push({id:"",name:"Nuevo escenario",kind:"generated",corridors:[],trains:[],avoid_peak:true,note:""}); sel=SC.length-1; list(); edit();};
+  $("pvBtn").onclick=async()=>{
+    const s=SC[sel]; if(!s||!s.id){$("preview").textContent="Guarda el escenario primero."; return;}
+    $("preview").textContent="Generando…";
+    const j=await (await fetch(`/api/freight/preview?frt=${encodeURIComponent(s.id)}&seed=${+$("pvSeed").value||1}`)).json();
+    $("preview").innerHTML=`<p><b>${j.trains.length}</b> trenes de mercancías en la jornada (semilla ${j.seed}).</p>`+
+      (j.errors.length?`<p class="err">${j.errors.map(esc).join("<br>")}</p>`:"")+
+      `<table class="tbl"><thead><tr><th>Tren</th><th>Salida</th><th>Origen</th><th>Destino</th><th>Corredor</th></tr></thead><tbody>${j.trains.map(t=>`<tr><td>${esc(t.id)}</td><td>${esc(t.dep)}</td><td>${esc(t.from)}</td><td>${esc(t.to)}</td><td>${esc(t.corridor)}</td></tr>`).join("")}</tbody></table>`;
+  };
+  $("matBtn").onclick=async()=>{
+    const s=SC[sel]; if(!s||!s.id) return;
+    const seed=+$("pvSeed").value||1;
+    const name=prompt("Nombre del escenario fijo:",`${s.name} · semilla ${seed}`); if(name===null) return;
+    const r=await (await fetch(`/api/freight/materialize?frt=${encodeURIComponent(s.id)}&seed=${seed}&name=${encodeURIComponent(name)}`,{method:"POST"})).json();
+    if(r.ok){SC=r.scenarios; sel=SC.findIndex(x=>x.id===r.id); list(); edit();} else alert(r.error||"Error");
+  };
+  (async()=>{
+    const st=await (await fetch("/api/stations")).json();
+    st.forEach(s=>{ST[s.id]=s.name; BYNAME[s.name.toLowerCase()]=s.id;});
+    $("stList").innerHTML=st.map(s=>`<option value="${esc(s.name)}">`).join("");
+    SC=await (await fetch("/api/freight/scenarios")).json(); list(); edit();
+  })();
+})();
+</script>"##;
+    document(&head, body)
+}
+
+/// Página `/datos`: datos REALES de Renfe (GTFS-RT). Explica qué da Renfe, gestiona el recolector
+/// (ahora / automático con el Programador de tareas de Windows), lista lo grabado, lo analiza y lo
+/// compara con el simulador (`compare`).
+pub fn render_data_page() -> String {
+    let head = format!("<title>Rodalies Simulator · Datos reales</title>\n{STYLE}\n{REALISM_CSS}");
+    let body = r##"<style>
+.dr-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(360px,1fr));gap:16px;margin-top:14px}
+.dr-state{display:flex;align-items:center;gap:10px;font-weight:700;font-size:1.05rem;margin:4px 0 8px}
+.dr-dot{width:12px;height:12px;border-radius:50%;background:#9ca3af}
+.dr-dot.on{background:#1f9d55;box-shadow:0 0 0 4px #1f9d5530}
+.dr-btns{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}
+.dr-list{margin:6px 0 0;padding-left:18px;font-size:.88rem;line-height:1.5}
+.dr-list b{color:var(--text)}
+.dr-out{margin-top:12px;font-size:.84rem}
+.dr-alert{border-left:3px solid var(--accent);padding:4px 8px;margin:6px 0;font-size:.82rem;background:var(--panel2);border-radius:4px}
+.num{text-align:right;font-variant-numeric:tabular-nums}
+</style>
+<div class="menu-wrap fr-wide">
+  <div class="panel-bar"><a class="back-link" href="/">← Menú</a></div>
+  <div class="menu-top"><div class="menu-brand"><img class="logo" src="/game/lines/r_logo.png" alt="Rodalies" width="46" height="46"><div>
+    <h1>Datos reales de Renfe</h1>
+    <div class="sub">Renfe publica en tiempo real dónde está cada tren de Rodalies y cuánto retraso lleva, pero no guarda el histórico. Aquí se graba día a día para comparar el simulador con la realidad.</div>
+  </div></div></div>
+
+  <div class="dr-grid">
+    <section class="card">
+      <h2 style="margin:0 0 4px">Recogida de datos</h2>
+      <div class="dr-state"><span class="dr-dot" id="dot"></span><span id="stTxt">Comprobando…</span></div>
+      <div class="hlp" id="stInfo"></div>
+      <div class="dr-btns">
+        <button class="btn" id="startBtn">Empezar a grabar ahora</button>
+        <button class="btn ghost" id="stopBtn">Parar</button>
+      </div>
+      <h3 style="margin:18px 0 4px">Recogida automática</h3>
+      <p class="hlp" style="margin:0">Crea una tarea en el Programador de tareas de Windows que arranca el recolector al iniciar sesión (y cada día a las 04:30 por si se cerró), sin ventana y sin permisos de administrador. El ordenador tiene que estar encendido y sin suspender para grabar.</p>
+      <div class="dr-state" style="font-size:.92rem"><span class="dr-dot" id="autoDot"></span><span id="autoTxt">Comprobando…</span></div>
+      <div class="dr-btns">
+        <button class="btn" id="installBtn">Activar recogida automática</button>
+        <button class="btn ghost" id="uninstallBtn">Desactivar</button>
+      </div>
+      <div class="hlp" id="autoMsg"></div>
+    </section>
+
+    <section class="card">
+      <h2 style="margin:0 0 4px">¿Qué datos da Renfe?</h2>
+      <p class="hlp" style="margin:0">Feed GTFS-RT de Cercanías (incluye Rodalies), refrescado cada ~20-30 s:</p>
+      <ul class="dr-list">
+        <li><b>Posición de cada tren</b>: coordenadas GPS, viaje y número de tren, línea y vía de andén anunciada (cuando la hay).</li>
+        <li><b>Estado</b>: parado en una estación, llegando a ella o en camino a ella (con su código de estación).</li>
+        <li><b>Retraso</b> de cada viaje (s) y la hora prevista de llegada a la siguiente parada.</li>
+        <li><b>Cancelaciones</b> de viajes y <b>paradas suprimidas</b>.</li>
+        <li><b>Avisos de incidencia</b>: texto libre (vía única, servicio alternativo por carretera, averías…), sin causa codificada.</li>
+      </ul>
+      <p class="hlp">De ahí se deducen los tiempos reales de cada tramo y de cada parada y la puntualidad por línea. No incluye trenes de mercancías, ocupación de los trenes ni el motivo exacto de cada retraso. Las paradas más cortas que el refresco no se ven como «parado».</p>
+    </section>
+
+    <section class="card">
+      <h2 style="margin:0 0 4px">Datos guardados</h2>
+      <div id="days" class="dr-out hlp">Cargando…</div>
+    </section>
+  </div>
+
+  <section class="card" style="margin-top:16px">
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap">
+      <h2 style="margin:0">Realidad por línea</h2>
+      <button class="btn" id="anaBtn">Analizar los datos grabados</button>
+    </div>
+    <div id="ana" class="dr-out hlp">Pulsa «Analizar» para calcular retrasos, puntualidad y cancelaciones reales.</div>
+  </section>
+
+  <section class="card" style="margin-top:16px">
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap">
+      <h2 style="margin:0">Simulador frente a realidad</h2>
+      <button class="btn" id="cmpBtn">Comparar con el simulador</button>
+    </div>
+    <p class="hlp" style="margin:6px 0 0">Jornada sin incidencias: <b>antes</b> = motor sin el realismo nuevo, <b>ahora</b> = con la configuración guardada. Los tramos son los que también se han observado en los datos reales (marcha entre paradas, suma en minutos).</p>
+    <div id="cmp" class="dr-out"></div>
+  </section>
+</div>
+<script>
+(function(){
+  const $=id=>document.getElementById(id);
+  const esc=x=>String(x??"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
+  const L=()=>(window.LOCALE?LOCALE():"es-ES");
+  const n=(v,d=0)=>v==null||!isFinite(v)?"–":(+v).toLocaleString(L(),{minimumFractionDigits:d,maximumFractionDigits:d});
+  const pc=v=>v==null||!isFinite(v)?"–":Math.round(v*100)+" %";
+  const hm=ts=>ts?new Date(ts*1000).toLocaleString(L(),{dateStyle:"short",timeStyle:"medium"}):"–";
+  const post=u=>fetch(u,{method:"POST"}).then(r=>r.json());
+  async function status(){
+    const j=await (await fetch("/api/gtfsrt/status")).json();
+    const r=j.running;
+    $("dot").classList.toggle("on",!!r);
+    $("stTxt").textContent=r?"Grabando":"Parado";
+    $("stInfo").textContent=r?`${n(r.polls)} sondeos en esta sesión · último: ${hm(r.last)} · en marcha desde ${hm(r.started)}`:"No hay ningún recolector en marcha.";
+    $("startBtn").disabled=!!r; $("stopBtn").disabled=!r;
+    const tot=j.days.reduce((a,d)=>a+d.polls,0), mb=j.days.reduce((a,d)=>a+d.mb,0);
+    $("days").innerHTML=j.days.length?`<table class="tbl"><thead><tr><th>Día</th><th class="num">Sondeos</th><th class="num">MB</th></tr></thead><tbody>${j.days.slice().reverse().map(d=>`<tr><td>${esc(d.day)}</td><td class="num">${n(d.polls)}</td><td class="num">${n(d.mb,1)}</td></tr>`).join("")}</tbody></table><p>Total: ${n(tot)} sondeos · ${n(mb,1)} MB · ${n(j.alerts)} avisos de incidencia</p>`:"Aún no hay datos grabados.";
+    paintAnalysis(j.observed);
+  }
+  async function autostart(){
+    const j=await (await fetch("/api/gtfsrt/autostart")).json();
+    $("autoDot").classList.toggle("on",!!j.installed);
+    $("autoTxt").textContent=j.installed?"Activada (tarea de Windows)":"Desactivada";
+    $("installBtn").disabled=!!j.installed; $("uninstallBtn").disabled=!j.installed;
+  }
+  function paintAnalysis(o){
+    if(!o||!o.delays_by_line) return;
+    const lines=Object.keys(o.delays_by_line).sort((a,b)=>a.localeCompare(b,undefined,{numeric:true}));
+    const can=o.canceled_by_line||{};
+    $("ana").innerHTML=`<p>Días analizados: <b>${esc((o.days||[]).join(", "))}</b> · ${n(o.polls)} sondeos · ${n(o.trips)} viajes · ${n(o.segments)} tramos con tiempo real.</p>
+      <div class="tbl-wrap"><table class="tbl"><thead><tr><th>Línea</th><th class="num">Retraso mediano (min)</th><th class="num">p90 (min)</th><th class="num">Puntual &lt; 5 min</th><th class="num">≥ 15 min</th><th class="num">Viajes cancelados</th></tr></thead><tbody>
+      ${lines.map(l=>{const d=o.delays_by_line[l]; return `<tr><td><b>${esc(l)}</b></td><td class="num">${n(d.median_s/60,1)}</td><td class="num">${n(d.p90_s/60,1)}</td><td class="num">${pc(d.punct_5min)}</td><td class="num">${pc(d.over_15min)}</td><td class="num">${n(can[l]||0)}</td></tr>`;}).join("")}
+      </tbody></table></div>`+
+      ((o.alerts_last||[]).length?`<h3>Últimos avisos de incidencia</h3>${o.alerts_last.slice().reverse().map(a=>`<div class="dr-alert"><b>${hm(a.seen)}</b> · ${esc(a.text)}</div>`).join("")}`:"");
+  }
+  $("startBtn").onclick=async()=>{ await post("/api/gtfsrt/start"); setTimeout(status,1500); };
+  $("stopBtn").onclick=async()=>{ await post("/api/gtfsrt/stop"); setTimeout(status,1500); };
+  $("installBtn").onclick=async()=>{
+    $("autoMsg").textContent="Creando la tarea…";
+    const j=await post("/api/gtfsrt/install");
+    $("autoMsg").textContent=j.ok?"Recogida automática activada: grabará cada vez que inicies sesión.":("Error: "+(j.error||"no se pudo crear la tarea"));
+    autostart(); setTimeout(status,2500);
+  };
+  $("uninstallBtn").onclick=async()=>{
+    const j=await post("/api/gtfsrt/uninstall");
+    $("autoMsg").textContent=j.ok?"Recogida automática desactivada (el recolector actual sigue hasta que lo pares).":("Error: "+(j.error||""));
+    autostart();
+  };
+  $("anaBtn").onclick=async()=>{
+    $("anaBtn").disabled=true; $("ana").textContent="Analizando…";
+    const j=await post("/api/gtfsrt/analyze");
+    if(!j.ok) $("ana").textContent=j.error||"Error";
+    await status(); $("anaBtn").disabled=false;
+  };
+  $("cmpBtn").onclick=async()=>{
+    $("cmpBtn").disabled=true; $("cmp").textContent="Simulando dos jornadas…";
+    const r=await (await fetch("/api/compare")).json();
+    $("cmp").innerHTML=`<p>Retraso acumulado de la red: antes <b>${n(r.total_delay_before_train_min)}</b> → ahora <b>${n(r.total_delay_now_train_min)}</b> tren·min · datos reales: ${n(r.observed_polls)} sondeos (${esc((r.observed_days||[]).join(", "))}).</p>
+      <div class="tbl-wrap"><table class="tbl"><thead><tr><th>Línea</th><th class="num">Tramos</th><th class="num">GTFS</th><th class="num">Antes</th><th class="num">Ahora</th><th class="num">Real</th><th class="num">Parada ahora (s)</th><th class="num">Parada real (s)</th><th class="num">≥15 min ahora</th><th class="num">≥15 min real</th></tr></thead><tbody>
+      ${r.lines.map(l=>`<tr><td><b>${esc(l.line)}</b></td><td class="num">${n(l.seg_covered)}</td><td class="num">${l.seg_covered?n(l.seg_gtfs_min):"–"}</td><td class="num">${l.seg_covered?n(l.seg_before_min):"–"}</td><td class="num">${l.seg_covered?n(l.seg_now_min):"–"}</td><td class="num">${l.seg_covered?n(l.seg_observed_min):"–"}</td><td class="num">${n(l.dwell_now_s)}</td><td class="num">${n(l.dwell_observed_s)}</td><td class="num">${pc(l.over15_now)}</td><td class="num">${pc(l.over15_real)}</td></tr>`).join("")}
+      </tbody></table></div>`;
+    $("cmpBtn").disabled=false;
+  };
+  status(); autostart(); setInterval(status,15000);
 })();
 </script>"##;
     document(&head, body)

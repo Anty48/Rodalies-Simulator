@@ -9,13 +9,17 @@
 
 mod cadence;
 mod calculator;
+mod compare;
+mod demand;
 mod engine;
 mod exporter;
+mod freight;
 mod game;
 mod gtfs_loader;
 mod gtfs_update;
 mod map;
 mod optimizer;
+mod realism;
 mod recovery;
 mod report;
 mod runs_export;
@@ -74,6 +78,17 @@ async fn main() {
     // Modo motor unificado (Fase 1, headless): `cargo run --release -- simulate`
     if std::env::args().any(|a| a == "simulate") {
         run_engine_demo(&net);
+        return;
+    }
+    // Comparación con Renfe: `cargo run --release -- compare [semilla]` (antes vs ahora vs real).
+    if std::env::args().any(|a| a == "compare") {
+        let seed = std::env::args().skip_while(|a| a != "compare").nth(1).and_then(|s| s.parse().ok()).unwrap_or(1);
+        let adif = calculator::infrastructure::AdifNet::load_default();
+        let ltv = calculator::ltv::load_default();
+        let t0 = Instant::now();
+        let rep = compare::compare(&net, adif.as_ref(), ltv.as_ref(), seed);
+        compare::print_and_save(&rep);
+        println!("  ({:.1} s)", t0.elapsed().as_secs_f64());
         return;
     }
     // Diagnóstico de UN tren: `cargo run --release -- diag <trainid>` (rastrea retraso/retenciones).
@@ -339,6 +354,14 @@ fn run_engine_demo(net: &Network) {
     match &adif {
         Some(a) => println!("✓ CVM ADIF: {} segments de via (física per cantó)", a.n_segments()),
         None => println!("· CVM ADIF no trobada → Vmax de via per defecte (100 km/h). Executa scripts/fetch_adif_cvm.py"),
+    }
+    match demand::global() {
+        Some(d) => println!(
+            "✓ Demanda Renfe 2018: {} estacions · {:.0} viatgers/dia (pujades per franja de 30 min)",
+            d.stations.len(),
+            d.total_board_day()
+        ),
+        None => println!("· Sense dades de demanda (raw/renfe) → demanda estimada. Executa scripts/fetch_renfe_demand.py"),
     }
     // `simulate noinc` → jornada SIN incidencias (solo retrasos estructurales GTFS vs física).
     let noinc = std::env::args().any(|a| a == "noinc");

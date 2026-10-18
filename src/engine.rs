@@ -13,6 +13,12 @@
 //! congestión lo retrasan, el retraso se propaga. Los atascos emergen solos (un tren clavado en un
 //! rojo retiene a los de detrás).
 //!
+//! **Capa de realismo (`realism.rs`, 2026-10-18):** con los parámetros por defecto, la ¾ y el ámbar
+//! −20 % de arriba se sustituyen por la conducción real configurable (ASFA tras anuncio de parada,
+//! frenada de servicio que anticipa cada reducción de la vía, reacción al abrirse la señal, Davis),
+//! la parada sale de los viajeros (demanda real de Renfe), la unidad rota en cabecera (el retraso
+//! se propaga), las salidas de vía de estacionamiento cortan el cruce y hay mercancías sin prioridad.
+//!
 //! **Señalización de BLOQUES (portada de la Fase 1b):** 1 tren/bloque, sub-bloques por distancia,
 //! andén = cola del último sub-bloque del cantón de llegada, vía única = testigo canónico compartido
 //! (liberado al parar en el apartadero) con prioridad de cruce Regional. El gating ahora se dispara
@@ -27,8 +33,10 @@
 
 use crate::calculator::physics::{self, Restriction, SpeedZone, Vehicle};
 use crate::calculator::{infrastructure, ltv, rolling_stock, vehicle_of};
+use crate::freight::FreightTrain;
 use crate::gtfs_loader::Network;
-use crate::{game, topology, track_geometry};
+use crate::realism::RealismCfg;
+use crate::{demand, game, topology, track_geometry};
 use rand::{rngs::StdRng, Rng, SeedableRng};
 use serde::Serialize;
 use std::collections::{HashMap, HashSet};
@@ -41,8 +49,6 @@ const DWELL_MIN: f64 = 20.0;
 const DWELL_MAX: f64 = 60.0;
 const NOMINAL_PAX: f64 = 300.0;
 const VENTANA_PRIORIDAD_SEC: f64 = 8.0 * 60.0;
-/// Fracción de la aceleración máxima que aplica el maquinista (no todos van a tope).
-const ACCEL_FRACTION: f64 = 0.75;
 /// Reducción de velocidad ante señal en ámbar (para poder frenar si el siguiente está en rojo).
 const AMBER_FACTOR: f64 = 0.8;
 /// Variabilidad de velocidad (conducción real): truncado de la gaussiana en desviaciones típicas.
@@ -192,6 +198,7 @@ struct Block {
     stat_single: bool,  // el cantón es vía única ESTÁTICA (topología)
     cap_double: u32,    // capacidad cuando NO es vía única (platCap en el último sub-bloque; si no, 1)
     plat_tracks: u32,   // último sub-bloque: vías principales de andén de este acceso (1 = sin andén aparte)
+    cross_id: u32,      // último sub-bloque: cruce de salida de cabecera que lo corta (MAX = ninguno)
 }
 
 /// Fase del tren en su recorrido.
@@ -228,6 +235,27 @@ struct Train {
     waiting: bool,      // retenido por señal/ocupación (no por dwell ni por su hora)
     held_since: f64,    // instante en que empezó la retención actual (NaN = no retenido)
     was_waiting: bool,  // estado `waiting` del step anterior (para contar conflictos distintos)
+    // --- realismo (ver `realism.rs`) ---
+    len_m: f64,              // longitud del tren: su cola sigue ocupando el bloque anterior
+    freight: bool,           // mercancías: sin viajeros, sin prioridad, fuera de las métricas
+    prev_unit: Option<usize>, // tren cuya unidad hace este servicio (rotación en cabecera)
+    t_done: f64,             // instante de llegada a su destino (NaN = aún no)
+    asfa_cb: usize,          // bloque en el que rige el anuncio de parada del ASFA (MAX = ninguno)
+    react_until: f64,        // reacción del maquinista al abrirse la señal (NaN = no aplica)
+    onboard: f64,            // viajeros a bordo
+    pool: Vec<u32>,          // bolsa de viajeros en andén por parada (u32::MAX = sin viajeros)
+    alight_p: Vec<f32>,      // fracción de los de a bordo que baja en cada parada
+    capacity: f64,           // plazas (según composición simple/doble)
+    doors: f64,              // puertas por costado
+    door_factor: f64,        // factor de tiempo por viajero del material
+    base_mass: f64,          // masa en vacío (kg) de la composición
+    cross_id: u32,           // cruce de salida en su estación de origen (MAX = sin cruce)
+    cross_app_res: u32,      // recurso del tramo de llegada que cruza al salir (MAX = ninguno)
+    siding: Vec<bool>,       // mercancías: estación con vía de apartado en cada punto
+    in_siding: bool,         // mercancías parado en vía de apartado (fuera de la vía principal)
+    siding_since: f64,
+    yield_target: usize,     // parada de apartado decidida (MAX = ninguna)
+    stop_log: Vec<(f32, f32)>, // (llegada, salida) reales por punto del recorrido (NaN = no pasó)
 }
 
 impl Train {
@@ -279,6 +307,9 @@ struct Infra {
     res_dir: HashMap<(u32, u32, u32), u32>,    // (a,b,sb) → recurso dirigido (build/visor)
     res_canon: HashMap<(u32, u32), u32>,       // (min,max) → recurso canónico (build/visor)
     n_res: usize,
+    /// Cruces de salida de cabecera: (estación origen, siguiente punto) → índice del cruce. Solo en
+    /// vía doble (en vía única manda el testigo).
+    cross_index: HashMap<(u32, u32), u32>,
 }
 
 impl Infra {
@@ -636,6 +667,35 @@ pub struct HoldSpot {
     pub lines: Vec<(String, f64)>,
 }
 
+/// Paso de un tren por una de sus paradas: horas programadas y reales (s; NaN = no llegó a pasar).
+#[derive(Serialize, Clone)]
+pub struct StopRecord {
+    pub stop: String,
+    pub sched_arr: f64,
+    pub sched_dep: f64,
+    pub arr: f64,
+    pub dep: f64,
+}
+
+/// Recorrido de un tren de viajeros con sus pasos por parada (ver [`Engine::stop_records`]).
+#[derive(Serialize, Clone)]
+pub struct TripRecord {
+    pub id: String,
+    pub line: String,
+    pub stops: Vec<StopRecord>,
+}
+
+/// Resumen del modelo de realismo de una run (ver [`Engine::realism_stats`]).
+#[derive(Serialize, Clone, Copy)]
+pub struct RealismStats {
+    pub pax_enabled: bool,
+    pub pax_boarded: f64,
+    pub pax_left_behind: f64,
+    pub n_freight: usize,
+    pub n_freight_done: usize,
+    pub n_rotations: usize,
+}
+
 pub struct Engine {
     cfg: EngineCfg,
     /// Retención acumulada por tramo `(from_nid, to_nid)`; `None` = no se mide (runs headless).
@@ -661,6 +721,36 @@ pub struct Engine {
     /// Registro de todas las llegadas tarde a estación (≥ `LATE_LOG_THRESHOLD_S`) de la jornada,
     /// en orden temporal. Alimenta el contador de minutos de retraso y el log de CTC del visor.
     late_arrivals: Vec<LateArrival>,
+    /// Parámetros de realismo y estado vivo asociado (viajeros, cruces, cesiones de paso).
+    rt: RealismRt,
+}
+
+/// Bolsa de viajeros esperando en un andén a una línea y sentido concretos.
+#[derive(Clone)]
+struct Pool {
+    station: u32,  // nid de la estación (índice en `RealismRt::cum`)
+    share: f64,    // fracción de la demanda de la estación que espera a esta línea y sentido
+    last_t: f64,   // última vez que un tren la vació
+    carry: f64,    // viajeros que no cupieron y siguen esperando
+}
+
+/// Estado de realismo del motor: parámetros (copia) + datos precalculados + estado vivo.
+struct RealismRt {
+    cfg: RealismCfg,
+    /// Curva acumulada de viajeros que llegan al andén por estación (índice = nid), ya escalada
+    /// por la demanda configurada y por el ruido de la run.
+    cum: Vec<[f64; demand::BANDS + 1]>,
+    pools: Vec<Pool>,
+    rng: StdRng,
+    /// Instante hasta el que cada cruce de salida de cabecera está ocupado (índice = cross_id).
+    cross_until: Vec<f64>,
+    /// ETA mínima (s) de un tren de VIAJEROS que va a entrar en cada recurso (cesión de paso de
+    /// los mercancías en bifurcaciones). `INFINITY` = nadie; se resetea por step vía `claim_touched`.
+    claim_eta: Vec<f64>,
+    claim_touched: Vec<u32>,
+    /// Totales de la run (para el informe).
+    pax_boarded: f64,
+    pax_left_behind: f64,
 }
 
 /// Umbral para registrar una llegada como "tarde": un tren cuenta como retrasado en una estación si
@@ -704,7 +794,23 @@ impl Engine {
 
     /// Como [`Engine::new`] pero sobre un horario YA construido (p. ej. una malla CADENCIADA del
     /// creador de horarios, `cadence::generate`), con la misma descomposición en cantones atómicos.
+    /// Usa los parámetros de realismo guardados (`report/realism.json`) y sin mercancías.
     pub fn with_schedule(
+        net: &Network,
+        cfg: EngineCfg,
+        adif: Option<&infrastructure::AdifNet>,
+        ltv: Option<&ltv::LtvSet>,
+        templates: &[IncidentTemplate],
+        offsets: Option<&HashMap<String, i64>>,
+        game_trains: &[game::GameTrain],
+    ) -> Self {
+        let rc = RealismCfg::load();
+        Self::with_schedule_ext(net, cfg, adif, ltv, templates, offsets, game_trains, &rc, &[])
+    }
+
+    /// Constructor completo: horario de viajeros + parámetros de realismo + trenes de mercancías.
+    #[allow(clippy::too_many_arguments)]
+    pub fn with_schedule_ext(
         net: &Network,
         mut cfg: EngineCfg,
         adif: Option<&infrastructure::AdifNet>,
@@ -712,6 +818,8 @@ impl Engine {
         templates: &[IncidentTemplate],
         offsets: Option<&HashMap<String, i64>>,
         game_trains: &[game::GameTrain],
+        rc: &RealismCfg,
+        freight: &[FreightTrain],
     ) -> Self {
         let coord = |id: &str| net.coord(id); // estaciones y bifurcaciones
 
@@ -734,6 +842,10 @@ impl Engine {
             }
         }
 
+        // Estaciones subterráneas (margen del maquinista en túnel): por NOMBRE, como la config.
+        let tunnel: HashSet<&str> = rc.tunnel_stations.iter().map(|s| s.as_str()).collect();
+        let default_track_ms = if rc.fill_track_gaps { rc.default_track_kmh / 3.6 } else { DEFAULT_TRACK_VMAX_MS };
+
         // Cache de perfil de velocidad por cantón dirigido (una vez; no se recalcula por tren).
         let mut zone_cache: HashMap<(String, String), Vec<SpeedZone>> = HashMap::new();
         // Trazado real de vía (OSM) si existe; si no, la recta entre estaciones.
@@ -749,7 +861,7 @@ impl Engine {
                 Some(g) => (g.pts, g.len_m.max(1.0), infrastructure::LTV_TOL_TRACK_M),
                 None => (vec![ca, cb], infrastructure::haversine_m(ca.0, ca.1, cb.0, cb.1).max(1.0), infrastructure::LTV_TOL_CHORD_M),
             };
-            let zones = adif
+            let raw = adif
                 .and_then(|net_adif| {
                     infrastructure::adif_profile_ltv_tol(net_adif, ltv, &poly, ADIF_STEP_M, ADIF_TOL_M, ltv_tol)
                 })
@@ -759,18 +871,37 @@ impl Engine {
                         .map(|z| SpeedZone { from: z.from_m, to: z.to_m, vmax: z.vmax_kmh / 3.6 })
                         .collect::<Vec<_>>()
                 })
-                .filter(|z| !z.is_empty())
-                .unwrap_or_else(|| vec![SpeedZone { from: 0.0, to: length, vmax: DEFAULT_TRACK_VMAX_MS }]);
+                .unwrap_or_default();
+            let mut zones = if rc.fill_track_gaps {
+                fill_zone_gaps(raw, length, default_track_ms)
+            } else if raw.is_empty() {
+                vec![SpeedZone { from: 0.0, to: length, vmax: DEFAULT_TRACK_VMAX_MS }]
+            } else {
+                raw
+            };
+            // Túnel (ambos extremos subterráneos): el maquinista lleva margen bajo la Vmax.
+            if tunnel.contains(net.stop_name(a)) && tunnel.contains(net.stop_name(b)) {
+                for z in &mut zones {
+                    z.vmax *= rc.tunnel_speed_factor;
+                }
+            }
             zone_cache.insert(k, zones.clone());
             zones
         };
 
-        // Construir trenes (paradas con coordenadas, como el juego).
-        let mut trains: Vec<Train> = Vec::with_capacity(game_trains.len());
-        for gt in game_trains {
+        // Construir trenes (paradas con coordenadas, como el juego). Viajeros primero, luego
+        // mercancías (mismo formato de recorrido; material y reglas propios).
+        let all: Vec<(&game::GameTrain, Option<&crate::freight::FreightStock>)> = game_trains
+            .iter()
+            .map(|g| (g, None))
+            .chain(freight.iter().map(|f| (&f.gt, Some(&f.stock))))
+            .collect();
+        let mut trains: Vec<Train> = Vec::with_capacity(all.len());
+        for (gt, fstock) in all {
+            let is_freight = fstock.is_some();
             // Desfase de fase de la línea (optimizador): desplaza TODA la marcha del tren un mismo
             // Δt → cambia solo la fase relativa entre líneas, no la estructura del recorrido.
-            let off = offsets.and_then(|m| m.get(&gt.line)).copied().unwrap_or(0);
+            let off = if is_freight { 0 } else { offsets.and_then(|m| m.get(&gt.line)).copied().unwrap_or(0) };
             let shift = |t: u32| -> f64 { (t as i64 + off).max(0) as f64 };
             let mut pts = Vec::with_capacity(gt.stops.len());
             for s in &gt.stops {
@@ -791,11 +922,37 @@ impl Engine {
                 cum_l.push(cum_l.last().unwrap() + len);
                 canton_zones.push(zones_for(&w[0].id, &w[1].id, ca, cb));
             }
+            // Material: viajeros por línea (doble composición en punta si la serie lo admite);
+            // mercancías con su ficha de corredor.
+            let (mut veh, len_m, capacity, doors, door_factor) = match fstock {
+                Some(st) => (freight_vehicle(st), st.length_m, 0.0, 1.0, 1.0),
+                None => {
+                    let ops = rc.series_ops(fleet_for_line(&gt.line));
+                    let units = if rc.pax_enabled && ops.double_in_peak && rc.is_peak(pts[0].d) { 2.0 } else { 1.0 };
+                    let mut v = vehicle_for_line(&gt.line);
+                    v.mass_kg *= units;
+                    v.power_w *= units;
+                    (v, ops.length_m * units, ops.capacity * units, ops.doors * units, ops.door_factor)
+                }
+            };
+            if rc.davis_enabled {
+                apply_davis(&mut veh, rc.davis_r0, rc.davis_r100);
+            }
+            let base_mass = veh.mass_kg;
+            let siding: Vec<bool> = if is_freight {
+                let n = pts.len();
+                pts.iter()
+                    .enumerate()
+                    .map(|(j, p)| j > 0 && j + 1 < n && net.node(&p.id).is_some() && topology::platform_tracks(net.stop_name(&p.id)) > 2)
+                    .collect()
+            } else {
+                Vec::new()
+            };
             trains.push(Train {
                 id: gt.train.clone(),
                 line: gt.line.clone(),
-                regional: topology::is_regional_line(&gt.line),
-                veh: vehicle_for_line(&gt.line),
+                regional: !is_freight && topology::is_regional_line(&gt.line),
+                veh,
                 pts,
                 cum_l,
                 speed_p0: 0.0,
@@ -815,6 +972,26 @@ impl Engine {
                 waiting: false,
                 was_waiting: false,
                 held_since: f64::NAN,
+                len_m,
+                freight: is_freight,
+                prev_unit: None,
+                t_done: f64::NAN,
+                asfa_cb: usize::MAX,
+                react_until: f64::NAN,
+                onboard: 0.0,
+                pool: Vec::new(),
+                alight_p: Vec::new(),
+                capacity,
+                doors,
+                door_factor,
+                base_mass,
+                cross_id: u32::MAX,
+                cross_app_res: u32::MAX,
+                siding,
+                in_siding: false,
+                siding_since: f64::NAN,
+                yield_target: usize::MAX,
+                stop_log: Vec::new(),
             });
         }
 
@@ -824,7 +1001,7 @@ impl Engine {
         // ventana). Arrancar en la primera salida real elimina ese artefacto. `arrived_at` de cada
         // tren en su origen se ancla al inicio (dwell trivialmente cubierto; la salida la gobierna
         // su hora programada + señal de salida, como en la realidad).
-        if let Some(first_dep) = trains.iter().map(|t| t.pts[0].d as u32).min() {
+        if let Some(first_dep) = trains.iter().filter(|t| !t.freight).map(|t| t.pts[0].d as u32).min() {
             cfg.start_sec = first_dep.min(cfg.end_sec);
             let start = cfg.start_sec as f64;
             for t in &mut trains {
@@ -833,14 +1010,17 @@ impl Engine {
         }
 
         // Parada mínima por estación (densidad de servicio) — floor de dwell (no rebaquea horarios).
+        // Con el modelo de viajeros es solo el valor inicial: la parada real se calcula al llegar.
         let dwell_map = dwell_por_estacion(&trains);
         for t in &mut trains {
+            let freight_t = t.freight;
             t.dwell_min = t
                 .pts
                 .iter()
-                .map(|p| if p.pass { 0.0 } else { dwell_map.get(&p.id).copied().unwrap_or(DWELL_MIN) })
+                .map(|p| if p.pass || freight_t { 0.0 } else { dwell_map.get(&p.id).copied().unwrap_or(DWELL_MIN) })
                 .collect();
             t.target_stop = next_real_stop(&t.pts, 0);
+            t.stop_log = vec![(f32::NAN, f32::NAN); t.pts.len()];
         }
 
         let infra = build_infra(net, &trains, single_track_str);
@@ -849,6 +1029,25 @@ impl Engine {
         for t in &mut trains {
             t.seq = construir_secuencia(&t.pts, &t.cum_l, &infra);
             t.cb = 0;
+        }
+
+        // Cruce de salida de cabecera: el tren que sale de vía de estacionamiento hacia el siguiente
+        // punto N cruza la vía de llegada N→origen (su último sub-bloque).
+        if rc.terminal_crossing {
+            for t in &mut trains {
+                let (o, n) = (infra.stop_index[&t.pts[0].id], infra.stop_index[&t.pts[1].id]);
+                if let Some(&cid) = infra.cross_index.get(&(o, n)) {
+                    t.cross_id = cid;
+                    if let Some(&m) = infra.sub_blocks.get(&(n, o)) {
+                        t.cross_app_res = infra.dir_res(n, o, m.saturating_sub(1)).unwrap_or(u32::MAX);
+                    }
+                }
+            }
+        }
+
+        // Rotación de material en cabecera (el GTFS no la trae: se infiere del horario).
+        if rc.rotation_enabled {
+            asignar_rotaciones(&mut trains, rc);
         }
 
         // Variabilidad de velocidad: un sorteo por tren y por BLOQUE (tramo entre dos señales), tirado
@@ -862,6 +1061,9 @@ impl Engine {
                 t.speed_z = (0..t.seq.len()).map(|_| trunc_std_normal(&mut rng, SPEED_VAR_TRUNC_Z)).collect();
             }
         }
+
+        // Viajeros: demanda real por estación + bolsas por (estación, línea, sentido).
+        let rt = construir_realismo(rc, &infra, &mut trains, cfg.seed, cfg.start_sec as f64);
 
         // Incidencias: pesos espaciales del sistema + tirada de dados ANTES del día (reproducible).
         let spatial = spatial_weights(net, &trains, &infra);
@@ -887,6 +1089,7 @@ impl Engine {
             timeline_active: Vec::new(),
             next_sample: cfg.start_sec as f64,
             late_arrivals: Vec::new(),
+            rt,
         }
     }
 
@@ -903,11 +1106,17 @@ impl Engine {
         let (dyn_red, dyn_single) = dyn_effects(&self.infra, &self.incidents, now);
 
         let free_run = self.cfg.free_run;
-        let Engine { trains, infra, occ, late_arrivals, holds, .. } = self;
+        let Engine { trains, infra, occ, late_arrivals, holds, rt, .. } = self;
         let dynp = Dyn { red: &dyn_red, single: &dyn_single };
         for v in occ.iter_mut() {
             v.clear(); // reutiliza la capacidad; nada de realojar por step
         }
+        // Intenciones de paso de los trenes de viajeros (cesión de paso de los mercancías).
+        for &r in &rt.claim_touched {
+            rt.claim_eta[r as usize] = f64::INFINITY;
+        }
+        rt.claim_touched.clear();
+        let claim_window = rt.cfg.freight_yield_window_s;
 
         // Pass 1: ocupación de bloques según el bloque comprometido (cb) de cada tren activo.
         let mut active: Vec<bool> = Vec::with_capacity(trains.len());
@@ -920,6 +1129,10 @@ impl Engine {
             active.push(true);
             let b = &t.seq[t.cb];
             if b.origin {
+                continue;
+            }
+            // Mercancías parado en vía de apartado: fuera de la vía principal (no la ocupa).
+            if t.in_siding && t.phase == Phase::Dwell {
                 continue;
             }
             // Terminal: un tren que finaliza se aparta a vía secundaria (no retiene el bloque).
@@ -936,6 +1149,33 @@ impl Engine {
             // mientras el tren está en la estación (no se vacía al llegar). Los trenes de detrás esperan
             // en el tramo previo (colapso realista), no se cuelan en vías extra.
             occ[dynp.block_res(b) as usize].push(idx);
+            // COLA DEL TREN: mientras la cola no haya rebasado la señal del bloque comprometido, el
+            // bloque anterior sigue ocupado (un mercancías de 500 m tarda en liberarlo).
+            let mut j = t.cb;
+            while j > 1 && t.s - t.len_m < t.seq[j].x_enter {
+                let pb = &t.seq[j - 1];
+                if pb.origin {
+                    break;
+                }
+                let r = dynp.block_res(pb) as usize;
+                if !occ[r].contains(&idx) {
+                    occ[r].push(idx);
+                }
+                j -= 1;
+            }
+            // Intención de paso de un tren de viajeros en marcha: su siguiente bloque y su ETA.
+            if !t.freight && t.phase == Phase::Running {
+                if let Some(nb) = t.seq.get(t.cb + 1) {
+                    let eta = (nb.x_enter - t.s).max(0.0) / t.v.max(1.0);
+                    if eta < claim_window {
+                        let r = dynp.block_res(nb);
+                        if rt.claim_eta[r as usize].is_infinite() {
+                            rt.claim_touched.push(r);
+                        }
+                        rt.claim_eta[r as usize] = rt.claim_eta[r as usize].min(eta);
+                    }
+                }
+            }
             // Sin horarios: el tramo de vía única que se recorre reserva también la cadena de vía
             // única que cruzará sin parar (evita interbloqueos en apartaderos donde no para).
             if free_run && t.phase == Phase::Running {
@@ -954,14 +1194,16 @@ impl Engine {
             if !active[idx] {
                 continue;
             }
-            let held = avanzar_tren(idx, trains, infra, &dynp, occ, now, dt, late_arrivals, free_run);
+            let held = avanzar_tren(idx, trains, infra, &dynp, occ, now, dt, late_arrivals, free_run, rt);
             if held {
                 waiting += 1;
             }
         }
 
         // Métricas del sub-paso (acumuladas en locales; se vuelcan a self tras soltar los borrows).
-        let pax = (NOMINAL_PAX * demanda(now)).round();
+        // Solo trenes de VIAJEROS: los mercancías no tienen horario comercial ni pasajeros.
+        let nominal_pax = (NOMINAL_PAX * demanda(now)).round();
+        let pax_model = rt.cfg.pax_enabled;
         let dt_min = dt / 60.0;
         let mut add_train_min = 0.0;
         let mut step_max = 0.0_f64;
@@ -973,20 +1215,23 @@ impl Engine {
             if !active[idx] {
                 continue;
             }
-            if t.in_service() {
+            if t.in_service() && !t.freight {
                 in_service += 1;
             }
-            if t.delay_s > 0.0 {
+            if t.delay_s > 0.0 && !t.freight {
                 let dmin = t.delay_s / 60.0;
                 add_train_min += dmin * dt_min;
                 total_delay += t.delay_s;
-                // pax·min de retraso: pasajeros a bordo (nominal × demanda horaria) × minutos de
-                // retraso REAL de ESTE tren, integrado en el tiempo. Cada tren pesa por LO TARDE que
-                // va (no un 0/1 por estar retenido), así el KPI del visor (derivado del `d` del
-                // trace) y el de /numeros son la MISMA magnitud honesta, no un proxy por retenidos.
+                // pax·min de retraso: pasajeros a bordo × minutos de retraso REAL de ESTE tren,
+                // integrado en el tiempo. Con el modelo de viajeros, los que lleva de verdad; sin él,
+                // el nominal × demanda horaria. Cada tren pesa por LO TARDE que va (no un 0/1 por
+                // estar retenido), así el KPI del visor y el de /numeros son la MISMA magnitud.
+                let pax = if pax_model { t.onboard } else { nominal_pax };
                 add_pax += dmin * pax * dt_min;
             }
-            step_max = step_max.max(t.delay_s);
+            if !t.freight {
+                step_max = step_max.max(t.delay_s);
+            }
             // Conflicto DISTINTO: el tren entra en retención (flanco de subida de `waiting`).
             if t.waiting && !t.was_waiting {
                 new_conflicts += 1;
@@ -1208,6 +1453,46 @@ impl Engine {
         }
     }
 
+    /// Paso REAL de cada tren de viajeros por sus paradas (no los puntos de paso): horario frente a
+    /// lo simulado. Base de la comparación con Renfe (`compare`).
+    pub fn stop_records(&self) -> Vec<TripRecord> {
+        self.trains
+            .iter()
+            .filter(|t| !t.freight)
+            .map(|t| TripRecord {
+                id: t.id.clone(),
+                line: t.line.clone(),
+                stops: t
+                    .pts
+                    .iter()
+                    .zip(&t.stop_log)
+                    .filter(|(p, _)| !p.pass)
+                    .map(|(p, l)| StopRecord {
+                        stop: p.id.clone(),
+                        sched_arr: p.a,
+                        sched_dep: p.d,
+                        arr: l.0 as f64,
+                        dep: l.1 as f64,
+                    })
+                    .collect(),
+            })
+            .collect()
+    }
+
+    /// Totales del modelo de realismo de la run: viajeros que han subido, viajeros que se quedaron
+    /// en el andén porque el tren iba lleno, mercancías y trenes con unidad encadenada.
+    pub fn realism_stats(&self) -> RealismStats {
+        let freight: Vec<&Train> = self.trains.iter().filter(|t| t.freight).collect();
+        RealismStats {
+            pax_enabled: self.rt.cfg.pax_enabled,
+            pax_boarded: self.rt.pax_boarded.round(),
+            pax_left_behind: self.rt.pax_left_behind.round(),
+            n_freight: freight.len(),
+            n_freight_done: freight.iter().filter(|t| t.phase == Phase::Done).count(),
+            n_rotations: self.trains.iter().filter(|t| t.prev_unit.is_some()).count(),
+        }
+    }
+
     /// Registro de todas las llegadas tarde (≥ `LATE_LOG_THRESHOLD_S`) acumuladas en la jornada,
     /// en orden de aparición. Diagnóstico: permite listar los retrasos más severos por tren/estación.
     pub fn late_arrivals(&self) -> &[LateArrival] {
@@ -1280,6 +1565,7 @@ pub struct TrainDiag {
 
 /// Avanza un tren un `step` completo (sub-pasos físicos ≤ `PHYS_SUBSTEP_S`). Devuelve `true` si el
 /// tren queda RETENIDO por señal/ocupación (no por dwell ni por esperar su hora).
+#[allow(clippy::too_many_arguments)]
 fn avanzar_tren(
     idx: usize,
     trains: &mut [Train],
@@ -1290,35 +1576,80 @@ fn avanzar_tren(
     dt: f64,
     late: &mut Vec<LateArrival>,
     free_run: bool,
+    rt: &mut RealismRt,
 ) -> bool {
     // --- Parado en estación: gestión de dwell / hora de salida / señal de salida ---
     if trains[idx].phase == Phase::Dwell {
         trains[idx].waiting = false;
         let k = trains[idx].station_idx;
+        let freight = trains[idx].freight;
         let dwell_ok = now - trains[idx].arrived_at >= trains[idx].dwell_min[k];
-        let sched_ok = !debe_esperar_horario(free_run, k, now, trains[idx].pts[k].d);
-        if !(dwell_ok && sched_ok) {
-            trains[idx].held_since = f64::NAN; // parado por su dwell/hora, no retenido
+        // Los mercancías no tienen horas comerciales: solo esperan la de salida de origen.
+        let sched_ok = !debe_esperar_horario(free_run || freight, k, now, trains[idx].pts[k].d);
+        // Rotación: en cabecera, la unidad que hace este servicio tiene que haber llegado y
+        // cambiado de cabina (si no, sale tarde: el retraso de la llegada se propaga).
+        let unit_ok = k != 0 || unidad_lista(trains, idx, now, &rt.cfg);
+        if !(dwell_ok && sched_ok && unit_ok) {
+            let t = &mut trains[idx];
+            if k == 0 && dwell_ok && sched_ok && !freight {
+                t.delay_s = t.delay_s.max(now - t.pts[0].d); // esperando a su unidad: retraso vivo
+            }
+            t.held_since = f64::NAN; // parado por su dwell/hora, no retenido
             return false;
+        }
+        // Mercancías en vía de apartado: no sale mientras le siga un tren de viajeros (o hasta la
+        // espera máxima).
+        if trains[idx].in_siding {
+            let lookback = rt.cfg.freight_yield_lookback_m;
+            if now - trains[idx].siding_since < rt.cfg.freight_siding_max_s
+                && pasajero_detras(trains, occ, dynp, idx, lookback)
+            {
+                trains[idx].held_since = f64::NAN;
+                return false;
+            }
         }
         // Intentar cruzar la señal de salida (primer bloque del cantón k→k+1 = seq[cb+1]).
         let cb = trains[idx].cb;
         if cb + 1 >= trains[idx].seq.len() {
             trains[idx].phase = Phase::Done;
+            trains[idx].t_done = now;
             return false;
         }
         let nb = trains[idx].seq[cb + 1].clone();
-        if !bloque_entrada(infra, occ, dynp, trains, idx, &nb, now, free_run) {
-            trains[idx].waiting = true; // salida bloqueada por ocupación
+        // Salida de cabecera desde vía de estacionamiento: cruza la vía de llegada; el cruce tiene
+        // que estar libre y ningún tren puede venir ya por ese último tramo de llegada.
+        let cross_ok = k != 0 || salida_cruce_libre(trains, occ, idx, now, rt);
+        if !cross_ok || !bloque_entrada(infra, occ, dynp, trains, idx, &nb, now, free_run, rt) {
+            let t = &mut trains[idx];
+            t.waiting = true; // salida bloqueada por ocupación
+            t.react_until = f64::NAN;
             // Retenido en el andén con la salida en rojo: pasado el umbral, el retraso vivo es lo que
             // lleva de más sobre su hora de salida.
-            let t = &mut trains[idx];
-            if marcar_retencion(t, now) {
+            if marcar_retencion(t, now) && !t.freight {
                 t.delay_s = t.delay_s.max(now - t.pts[k].d);
             }
             return true;
         }
+        // Tiempo de reacción del maquinista si la salida estaba en rojo y acaba de abrirse.
+        if reaccion_pendiente(&mut trains[idx], now, rt) {
+            return false;
+        }
         trains[idx].held_since = f64::NAN;
+        // Viajeros que suben en el origen (la espera en cabecera no alarga nada: es la regulación).
+        if k == 0 && !freight && rt.cfg.pax_enabled {
+            intercambio_viajeros(&mut trains[idx], 0, now, rt, false);
+        }
+        if k == 0 && trains[idx].cross_id != u32::MAX {
+            let cid = trains[idx].cross_id as usize;
+            rt.cross_until[cid] = now + rt.cfg.crossing_time_s;
+        }
+        if trains[idx].in_siding {
+            trains[idx].in_siding = false;
+            trains[idx].yield_target = usize::MAX;
+        }
+        if let Some(l) = trains[idx].stop_log.get_mut(k) {
+            l.1 = now as f32;
+        }
         // Sale: libera el bloque de andén y ocupa el primer bloque del cantón de salida.
         ocupar(occ, dynp, idx, &trains[idx].seq[cb], false);
         trains[idx].cb = cb + 1;
@@ -1327,12 +1658,22 @@ fn avanzar_tren(
         trains[idx].canton_idx = k;
         trains[idx].target_stop = next_real_stop(&trains[idx].pts, k);
         trains[idx].v = 0.0;
+        actualizar_asfa(infra, occ, dynp, trains, idx, now, free_run, rt);
         // continúa hacia la integración de movimiento este mismo sub-paso
     }
 
     if trains[idx].phase != Phase::Running {
         return false;
     }
+
+    // Mercancías: ¿apartarse en la próxima estación con vía de apartado para dejar pasar al tren de
+    // viajeros que le sigue? (decisión antes de llegar, con distancia para frenar).
+    if trains[idx].freight && rt.cfg.freight_yield && trains[idx].yield_target == usize::MAX {
+        decidir_apartado(trains, occ, dynp, idx, rt);
+    }
+
+    let b_serv = trains[idx].veh.decel.min(rt.cfg.service_decel);
+    let accel_frac = rt.cfg.accel_fraction;
 
     // --- En marcha: integración cinemática con gating de bloques por posición ---
     let mut held = false;
@@ -1351,20 +1692,26 @@ fn avanzar_tren(
             Some(&z) => v_lim * speed_factor(trains[idx].speed_p0, v_lim * 3.6, z),
             None => v_lim,
         };
+        // Límite "blando" (al que se baja frenando con la deceleración de servicio, no de golpe).
+        let mut v_soft = f64::INFINITY;
 
         // Objetivos de frenada: próxima parada REAL (v=0) y señal en ROJO más cercana (v=0).
         let stop_x = trains[idx].cum_l[trains[idx].target_stop];
         let mut restrictions = vec![Restriction { x: stop_x, v: 0.0 }];
+        // Anticipar las reducciones de velocidad de la vía (el maquinista frena ANTES de la zona).
+        if rt.cfg.anticipate_limits {
+            limites_por_delante(&trains[idx], trains[idx].v, b_serv, &mut restrictions);
+        }
         let cb = trains[idx].cb;
         if cb + 1 < trains[idx].seq.len() {
             let nb = trains[idx].seq[cb + 1].clone();
             // Solo importa el bloque siguiente si está ANTES de la próxima parada real.
             if nb.x_enter < stop_x - 1e-6 {
-                let enterable = bloque_entrada(infra, occ, dynp, trains, idx, &nb, now, free_run);
+                let enterable = bloque_entrada(infra, occ, dynp, trains, idx, &nb, now, free_run, rt);
                 if !enterable {
                     restrictions.push(Restriction { x: nb.x_enter, v: 0.0 }); // rojo → frenar antes
-                } else {
-                    // Ámbar: siguiente libre pero el de más allá ocupado → reducir un 20%.
+                } else if !rt.cfg.asfa_enabled {
+                    // Modelo simple: siguiente libre pero el de más allá ocupado → reducir un 20%.
                     if let Some(nn) = trains[idx].seq.get(cb + 2) {
                         if !nn.origin
                             && nn.x_enter < stop_x - 1e-6
@@ -1376,12 +1723,19 @@ fn avanzar_tren(
                 }
             }
         }
-        let v_allow = v_cap.min(physics::braking_cap(&restrictions, trains[idx].s, trains[idx].veh.decel));
+        // ASFA: pasó una señal en anuncio de parada → velocidad limitada hasta la siguiente señal.
+        if rt.cfg.asfa_enabled && trains[idx].asfa_cb == cb {
+            v_soft = rt.cfg.asfa_amber_kmh / 3.6;
+        }
+        let v_hard = v_cap.min(physics::braking_cap(&restrictions, trains[idx].s, b_serv));
 
-        // Integración (acelera a ¾ de la máxima hacia el límite; si no, sigue la envolvente).
+        // Integración (acelera a una fracción de la máxima hacia el límite, descontando la
+        // resistencia al avance; un límite blando se alcanza frenando a la deceleración de servicio).
         let v = trains[idx].v;
+        let v_allow = v_hard.min(v_soft.max(v - b_serv * h));
         let v_next = if v < v_allow {
-            (v + ACCEL_FRACTION * trains[idx].veh.accel_at(v) * h).min(v_allow)
+            let a = accel_frac * trains[idx].veh.accel_at(v) - trains[idx].veh.resist_accel(v);
+            (v + a.max(0.0) * h).min(v_allow)
         } else {
             v_allow
         };
@@ -1392,31 +1746,7 @@ fn avanzar_tren(
         // ¿Ha llegado a la próxima parada REAL?
         if new_s >= stop_x - 0.5 {
             let k = trains[idx].target_stop;
-            trains[idx].s = stop_x;
-            trains[idx].v = 0.0;
-            trains[idx].canton_idx = (k.saturating_sub(1)).min(trains[idx].pts.len() - 2);
-            trains[idx].delay_s = (now - trains[idx].pts[k].a).max(0.0);
-            // Registro de CTC: si el tren llega ≥1 min tarde a esta estación, se anota (instante,
-            // tren, línea, stop, retraso). Vale para paradas intermedias Y terminal (mismo punto).
-            if trains[idx].delay_s >= LATE_LOG_THRESHOLD_S {
-                late.push(LateArrival {
-                    t: now as u32,
-                    train: trains[idx].id.clone(),
-                    line: trains[idx].line.clone(),
-                    stop: trains[idx].pts[k].id.clone(),
-                    delay: trains[idx].delay_s.min(65535.0) as u16,
-                });
-            }
-            if k >= trains[idx].pts.len() - 1 {
-                // Terminal: libera el bloque y termina.
-                ocupar(occ, dynp, idx, &trains[idx].seq[trains[idx].cb], false);
-                trains[idx].phase = Phase::Done;
-            } else {
-                trains[idx].phase = Phase::Dwell;
-                trains[idx].station_idx = k;
-                trains[idx].arrived_at = now;
-            }
-            trains[idx].waiting = false;
+            llegada_a_parada(trains, idx, k, stop_x, now, occ, dynp, late, rt);
             return held;
         }
 
@@ -1430,7 +1760,14 @@ fn avanzar_tren(
             if nb.x_enter >= stop_x - 1e-6 || nb.x_enter > new_s {
                 break; // el siguiente bloque es la parada, o aún no lo alcanza
             }
-            if bloque_entrada(infra, occ, dynp, trains, idx, &nb, now, free_run) {
+            if bloque_entrada(infra, occ, dynp, trains, idx, &nb, now, free_run, rt) {
+                // Estaba clavado ante esta señal: el maquinista tarda unos segundos en arrancar.
+                if trains[idx].v < 0.5 && reaccion_pendiente(&mut trains[idx], now, rt) {
+                    new_s = nb.x_enter;
+                    trains[idx].v = 0.0;
+                    break;
+                }
+                trains[idx].react_until = f64::NAN;
                 ocupar(occ, dynp, idx, &trains[idx].seq[cb], false);
                 trains[idx].cb = cb + 1;
                 ocupar(occ, dynp, idx, &trains[idx].seq[trains[idx].cb], true);
@@ -1438,10 +1775,12 @@ fn avanzar_tren(
                 if nb.sb == 0 {
                     trains[idx].canton_idx = (trains[idx].canton_idx + 1).min(trains[idx].pts.len() - 2);
                 }
+                actualizar_asfa(infra, occ, dynp, trains, idx, now, free_run, rt);
             } else {
                 // Señal en rojo: clavar el tren justo antes de la señal.
                 new_s = nb.x_enter;
                 trains[idx].v = 0.0;
+                trains[idx].react_until = f64::NAN;
                 held = true;
                 break;
             }
@@ -1455,7 +1794,7 @@ fn avanzar_tren(
     // Retenido en plena vía: pasado el umbral, retraso vivo = el de su posición respecto al horario.
     let t = &mut trains[idx];
     if held {
-        if marcar_retencion(t, now) {
+        if marcar_retencion(t, now) && !t.freight {
             let live = retraso_en_posicion(&t.pts, &t.cum_l, t.canton_idx, t.s, now);
             t.delay_s = t.delay_s.max(live);
         }
@@ -1463,6 +1802,216 @@ fn avanzar_tren(
         t.held_since = f64::NAN;
     }
     held
+}
+
+/// Llegada del tren `idx` a su parada `k`: retraso de llegada, registro de CTC, intercambio de
+/// viajeros (que fija la parada) o fin de recorrido; los mercancías entran en la vía de apartado.
+#[allow(clippy::too_many_arguments)]
+fn llegada_a_parada(
+    trains: &mut [Train],
+    idx: usize,
+    k: usize,
+    stop_x: f64,
+    now: f64,
+    occ: &mut [Vec<usize>],
+    dynp: &Dyn,
+    late: &mut Vec<LateArrival>,
+    rt: &mut RealismRt,
+) {
+    let t = &mut trains[idx];
+    t.s = stop_x;
+    t.v = 0.0;
+    t.asfa_cb = usize::MAX;
+    t.react_until = f64::NAN;
+    t.canton_idx = (k.saturating_sub(1)).min(t.pts.len() - 2);
+    if let Some(l) = t.stop_log.get_mut(k) {
+        l.0 = now as f32;
+    }
+    if !t.freight {
+        t.delay_s = (now - t.pts[k].a).max(0.0);
+        // Registro de CTC: si el tren llega ≥1 min tarde a esta estación, se anota (instante,
+        // tren, línea, stop, retraso). Vale para paradas intermedias Y terminal (mismo punto).
+        if t.delay_s >= LATE_LOG_THRESHOLD_S {
+            late.push(LateArrival {
+                t: now as u32,
+                train: t.id.clone(),
+                line: t.line.clone(),
+                stop: t.pts[k].id.clone(),
+                delay: t.delay_s.min(65535.0) as u16,
+            });
+        }
+    }
+    if k >= t.pts.len() - 1 {
+        // Terminal: libera el bloque y termina (la unidad queda en vía de estacionamiento).
+        ocupar(occ, dynp, idx, &t.seq[t.cb], false);
+        t.onboard = 0.0;
+        t.phase = Phase::Done;
+        t.t_done = now;
+    } else {
+        t.phase = Phase::Dwell;
+        t.station_idx = k;
+        t.arrived_at = now;
+        if t.freight {
+            if t.yield_target == k {
+                // Entra en la vía de apartado: deja libre la vía principal al tren que le sigue.
+                t.in_siding = true;
+                t.siding_since = now;
+                t.dwell_min[k] = 30.0;
+            }
+        } else if rt.cfg.pax_enabled && !t.pts[k].pass {
+            t.dwell_min[k] = intercambio_viajeros(t, k, now, rt, true);
+        }
+    }
+    t.waiting = false;
+}
+
+/// ¿Está lista la unidad que hace el servicio `idx`? (rotación en cabecera). La unidad anterior
+/// tiene que haber llegado y cumplido el cambio de cabina; si no llega nunca, a los X min de la
+/// hora sale una unidad de reserva (evita que una avería bloquee el resto del día).
+fn unidad_lista(trains: &[Train], idx: usize, now: f64, rc: &RealismCfg) -> bool {
+    let t = &trains[idx];
+    match t.prev_unit {
+        None => true,
+        Some(p) => {
+            let u = &trains[p];
+            (u.phase == Phase::Done && now >= u.t_done + rc.turnaround_min_s)
+                || now >= t.pts[0].d + rc.reserve_unit_after_min * 60.0
+        }
+    }
+}
+
+/// Salida de cabecera: el cruce hacia la vía de salida está libre (ninguna otra maniobra en curso)
+/// y ningún tren circula ya por el último tramo de llegada que hay que cruzar.
+fn salida_cruce_libre(trains: &[Train], occ: &[Vec<usize>], idx: usize, now: f64, rt: &RealismRt) -> bool {
+    let t = &trains[idx];
+    if t.cross_id == u32::MAX {
+        return true;
+    }
+    if rt.cross_until[t.cross_id as usize] > now {
+        return false;
+    }
+    if t.cross_app_res != u32::MAX {
+        if let Some(arr) = occ.get(t.cross_app_res as usize) {
+            if arr.iter().any(|&o| o != idx && trains[o].phase == Phase::Running) {
+                return false;
+            }
+        }
+    }
+    true
+}
+
+/// Tiempo de reacción del maquinista: si el tren estaba retenido (o ya reaccionando) y la señal
+/// se acaba de abrir, sortea `[min, max]` s y lo mantiene parado hasta entonces. `true` = aún no sale.
+fn reaccion_pendiente(t: &mut Train, now: f64, rt: &mut RealismRt) -> bool {
+    if rt.cfg.reaction_max_s <= 0.0 || !(t.was_waiting || !t.react_until.is_nan()) {
+        return false;
+    }
+    if t.react_until.is_nan() {
+        let (a, b) = (rt.cfg.reaction_min_s, rt.cfg.reaction_max_s);
+        t.react_until = now + a + rt.rng.gen::<f64>() * (b - a).max(0.0);
+    }
+    if now < t.react_until {
+        return true;
+    }
+    t.react_until = f64::NAN;
+    false
+}
+
+/// ASFA: al entrar en un bloque, si la señal que acaba de pasar estaba en ANUNCIO DE PARADA (el
+/// bloque siguiente, antes de su parada, no se puede ocupar), la velocidad queda limitada hasta la
+/// próxima señal aunque esta se abra entretanto.
+#[allow(clippy::too_many_arguments)]
+fn actualizar_asfa(
+    infra: &Infra,
+    occ: &[Vec<usize>],
+    dynp: &Dyn,
+    trains: &mut [Train],
+    idx: usize,
+    now: f64,
+    free_run: bool,
+    rt: &RealismRt,
+) {
+    if !rt.cfg.asfa_enabled {
+        return;
+    }
+    let cb = trains[idx].cb;
+    let stop_x = trains[idx].cum_l[trains[idx].target_stop];
+    let amber = match trains[idx].seq.get(cb + 1) {
+        Some(nn) if !nn.origin && nn.x_enter < stop_x - 1e-6 => {
+            let nn = nn.clone();
+            !bloque_entrada(infra, occ, dynp, trains, idx, &nn, now, free_run, rt)
+        }
+        _ => false,
+    };
+    trains[idx].asfa_cb = if amber { cb } else { usize::MAX };
+}
+
+/// Reducciones de velocidad de la vía por delante (cantón actual y siguientes, hasta ~2,5 km):
+/// restricciones de frenada anticipada a la velocidad de cada zona más lenta que la actual.
+fn limites_por_delante(t: &Train, v: f64, b: f64, out: &mut Vec<Restriction>) {
+    let horizon = t.s + (v * v / (2.0 * b.max(0.1))) + 200.0;
+    let mut c = t.canton_idx;
+    while c < t.canton_zones.len() {
+        let base = t.cum_l[c];
+        if base > horizon {
+            break;
+        }
+        for z in &t.canton_zones[c] {
+            let x = base + z.from;
+            if x > t.s && x <= horizon && z.vmax < v {
+                out.push(Restriction { x, v: z.vmax });
+            }
+        }
+        c += 1;
+    }
+}
+
+/// ¿Hay un tren de VIAJEROS detrás del tren `idx`, dentro de `lookback` m por su misma vía?
+/// (recorre hacia atrás los bloques de su propio recorrido; ocupación viva del step).
+fn pasajero_detras(trains: &[Train], occ: &[Vec<usize>], dynp: &Dyn, idx: usize, lookback: f64) -> bool {
+    let t = &trains[idx];
+    let lim = t.s - lookback;
+    let mut j = t.cb;
+    while j > 0 {
+        let b = &t.seq[j];
+        if b.origin {
+            break;
+        }
+        if let Some(arr) = occ.get(dynp.block_res(b) as usize) {
+            if arr.iter().any(|&o| o != idx && !trains[o].freight && trains[o].phase != Phase::Done) {
+                return true;
+            }
+        }
+        if b.x_enter < lim {
+            break;
+        }
+        j -= 1;
+    }
+    false
+}
+
+/// Mercancías: elige la próxima estación con vía de apartado (a distancia de frenado y dentro de la
+/// ventana de decisión) si un tren de viajeros le sigue de cerca; allí parará fuera de la vía principal.
+fn decidir_apartado(trains: &mut [Train], occ: &[Vec<usize>], dynp: &Dyn, idx: usize, rt: &RealismRt) {
+    let (s, v, b) = (trains[idx].s, trains[idx].v, trains[idx].veh.decel.min(rt.cfg.service_decel));
+    let brake = v * v / (2.0 * b.max(0.1)) + 50.0;
+    let t = &trains[idx];
+    let mut cand = None;
+    for j in (t.canton_idx + 1)..t.target_stop {
+        let d = t.cum_l[j] - s;
+        if d > rt.cfg.freight_yield_decide_m {
+            break;
+        }
+        if t.siding.get(j).copied().unwrap_or(false) && d >= brake {
+            cand = Some(j);
+            break;
+        }
+    }
+    let Some(j) = cand else { return };
+    if pasajero_detras(trains, occ, dynp, idx, rt.cfg.freight_yield_lookback_m) {
+        trains[idx].yield_target = j;
+        trains[idx].target_stop = j;
+    }
 }
 
 /// Factor de velocidad de crucero de un maquinista (nadie circula clavado a Vmax): `f = 1 − p(V) +
@@ -1610,16 +2159,23 @@ fn cadena_unica(t: &Train, dynp: &Dyn, k: usize, out: &mut Vec<u32>) {
     }
 }
 
-fn regional_entrando_pronto(
+/// ¿Va a entrar pronto (según su horario + retraso) en el cantón de vía única `rk` un tren con
+/// prioridad? `solo_regionales` = prioridad de cruce de los regionales; si no, cualquier tren de
+/// VIAJEROS (los mercancías ceden el paso a todos).
+fn prioritario_entrando_pronto(
     infra: &Infra,
     trains: &[Train],
     rk: u32,
     now: f64,
     except: usize,
+    solo_regionales: bool,
 ) -> bool {
     let Some(users) = infra.single_track_users.get(&rk) else { return false };
     for &(k, j) in users {
-        if k == except || !trains[k].regional {
+        if k == except || trains[k].freight || (solo_regionales && !trains[k].regional) {
+            continue;
+        }
+        if trains[k].phase == Phase::Done {
             continue;
         }
         let entrada = trains[k].pts[j].d + trains[k].delay_s;
@@ -1630,6 +2186,7 @@ fn regional_entrando_pronto(
     false
 }
 
+#[allow(clippy::too_many_arguments)]
 fn bloque_entrada(
     infra: &Infra,
     occ: &[Vec<usize>],
@@ -1639,8 +2196,24 @@ fn bloque_entrada(
     nb: &Block,
     now: f64,
     free_run: bool,
+    rt: &RealismRt,
 ) -> bool {
     if bloque_ocupado(dynp, occ, trains, nb, Some(idx)) {
+        return false;
+    }
+    // Un tren está saliendo de la vía de estacionamiento de la estación y cruza este último tramo
+    // de llegada: la señal de entrada queda en ROJO mientras dura la maniobra.
+    if nb.cross_id != u32::MAX && rt.cross_until.get(nb.cross_id as usize).is_some_and(|&u| u > now) {
+        return false;
+    }
+    let freight = trains[idx].freight;
+    // Mercancías sin prioridad en bifurcaciones: cede el paso si un tren de viajeros va a entrar en
+    // ese mismo tramo en los próximos segundos.
+    if freight
+        && nb.sb == 0
+        && rt.cfg.freight_yield
+        && rt.claim_eta.get(dynp.block_res(nb) as usize).is_some_and(|&e| e < rt.cfg.freight_yield_window_s)
+    {
         return false;
     }
     if free_run && nb.sb == 0 {
@@ -1652,13 +2225,18 @@ fn bloque_entrada(
             return false;
         }
     }
-    // Prioridad de regionales en vía única: se anticipa con su HORARIO; sin horarios no hay reserva.
-    if !free_run
-        && !trains[idx].regional
-        && dynp.block_single(nb)
-        && regional_entrando_pronto(infra, trains, nb.res_single, now, idx)
-    {
-        return false;
+    // Prioridad en vía única: se anticipa con su HORARIO; sin horarios no hay reserva. Los
+    // regionales tienen prioridad sobre el resto de viajeros; los mercancías ceden a todos.
+    if !free_run && dynp.block_single(nb) {
+        if freight && prioritario_entrando_pronto(infra, trains, nb.res_single, now, idx, false) {
+            return false;
+        }
+        if !freight
+            && !trains[idx].regional
+            && prioritario_entrando_pronto(infra, trains, nb.res_single, now, idx, true)
+        {
+            return false;
+        }
     }
     true
 }
@@ -1742,6 +2320,283 @@ enum Aspecto {
 
 // ---- Precálculo (una vez, en new) ---------------------------------------------------------
 
+/// Rellena los huecos del perfil de velocidad de un tramo (muestras sin dato OSM/ADIF). Un hueco
+/// corto (≤ 2 pasos de muestreo) es un artefacto del muestreo y alarga la zona anterior; uno largo
+/// toma la MENOR velocidad de sus vecinos (prudente: no se inventa una vía más rápida que la que se
+/// conoce a ambos lados). Sin ningún dato, todo el tramo a `default_ms`. Antes, un hueco devolvía
+/// `infra_limit = ∞` y el tren corría a la Vmax del material por vía desconocida.
+fn fill_zone_gaps(mut z: Vec<SpeedZone>, length: f64, default_ms: f64) -> Vec<SpeedZone> {
+    z.retain(|x| x.vmax.is_finite() && x.vmax > 0.0 && x.from < length);
+    if z.is_empty() {
+        return vec![SpeedZone { from: 0.0, to: length, vmax: default_ms }];
+    }
+    z.sort_by(|a, b| a.from.total_cmp(&b.from));
+    let mut out: Vec<SpeedZone> = Vec::with_capacity(z.len() * 2);
+    let mut cur = 0.0_f64;
+    for x in &z {
+        if x.from > cur + 1e-6 {
+            match out.last_mut() {
+                Some(p) if x.from - cur <= 2.0 * ADIF_STEP_M => p.to = x.from,
+                Some(p) => {
+                    let v = p.vmax.min(x.vmax);
+                    out.push(SpeedZone { from: cur, to: x.from, vmax: v });
+                }
+                None => out.push(SpeedZone { from: 0.0, to: x.from, vmax: x.vmax }),
+            }
+        }
+        let from = x.from.max(cur);
+        let to = x.to.max(from).min(length);
+        out.push(SpeedZone { from, to, vmax: x.vmax });
+        cur = to;
+    }
+    if let Some(l) = out.last_mut() {
+        l.to = l.to.max(length);
+    }
+    out.retain(|x| x.to > x.from);
+    out
+}
+
+/// Vehículo de un tren de mercancías (locomotora + vagones). Arranque y frenado de servicio de un
+/// tren pesado de mercancías (valores típicos, no publicados por tren).
+fn freight_vehicle(st: &crate::freight::FreightStock) -> Vehicle {
+    Vehicle {
+        vmax: st.vmax_kmh.max(10.0) / 3.6,
+        power_w: st.power_kw.max(100.0) * 1000.0,
+        mass_kg: st.mass_t.max(50.0) * 1000.0,
+        accel_start: 0.25,
+        decel: 0.45,
+        efficiency: 0.85,
+        rotary: 0.06,
+        res_a: 0.0,
+        res_b: 0.0,
+        res_c: 0.0,
+    }
+}
+
+/// Resistencia al avance tipo Davis ESTIMADA (no publicada por serie): `r(v) = r0 + (r100 − r0)·
+/// (v/100 km/h)²` en N por kN de peso. Con r0≈1,6 y r100≈4 un tren de cercanías pierde ~0,04 m/s²
+/// a 100 km/h: poco, pero alarga la aceleración final hacia la Vmax.
+fn apply_davis(veh: &mut Vehicle, r0: f64, r100: f64) {
+    const G: f64 = 9.81;
+    let w_kn = veh.mass_kg * G / 1000.0;
+    let v100 = 100.0 / 3.6;
+    veh.res_a = r0 * w_kn;
+    veh.res_b = 0.0;
+    veh.res_c = ((r100 - r0).max(0.0) * w_kn) / (v100 * v100);
+}
+
+/// ROTACIÓN DE MATERIAL inferida del horario (el GTFS de Renfe no trae `block_id` útil: es el propio
+/// viaje). Para cada llegada a una estación (en orden de llegada), la unidad hace la PRIMERA salida
+/// libre desde esa estación que cumpla el cambio de cabina mínimo y no espere más que la ventana:
+/// primero de la misma línea, si no, de la misma serie de material. Así un tren que llega tarde
+/// sale tarde en su siguiente servicio (mecanismo principal de propagación del retraso).
+fn asignar_rotaciones(trains: &mut [Train], rc: &RealismCfg) {
+    let mut starts: HashMap<String, Vec<(f64, usize)>> = HashMap::new();
+    for (i, t) in trains.iter().enumerate() {
+        if !t.freight {
+            starts.entry(t.pts[0].id.clone()).or_default().push((t.pts[0].d, i));
+        }
+    }
+    for v in starts.values_mut() {
+        v.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)));
+    }
+    let mut ends: Vec<(f64, usize)> =
+        trains.iter().enumerate().filter(|(_, t)| !t.freight).map(|(i, t)| (t.pts.last().unwrap().a, i)).collect();
+    ends.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)));
+    let mut taken = vec![false; trains.len()];
+    let mut assign: Vec<(usize, usize)> = Vec::new();
+    for (arr, i) in ends {
+        let Some(list) = starts.get(&trains[i].pts.last().unwrap().id) else { continue };
+        let (lo, hi) = (arr + rc.turnaround_min_s, arr + rc.rotation_max_wait_min * 60.0);
+        let fleet_i = fleet_for_line(&trains[i].line);
+        let cand = |same_line: bool| {
+            list.iter()
+                .filter(|(d, j)| *j != i && !taken[*j] && *d >= lo && *d <= hi)
+                .find(|(_, j)| {
+                    if same_line {
+                        trains[*j].line == trains[i].line
+                    } else {
+                        fleet_for_line(&trains[*j].line) == fleet_i
+                    }
+                })
+                .map(|&(_, j)| j)
+        };
+        if let Some(j) = cand(true).or_else(|| cand(false)) {
+            taken[j] = true;
+            assign.push((j, i));
+        }
+    }
+    for (j, i) in assign {
+        trains[j].prev_unit = Some(i);
+    }
+}
+
+/// Sal del flujo aleatorio de viajeros (independiente de incidencias, velocidades y mercancías).
+const PAX_SALT: u64 = 0x9A55_E26E;
+const DEMAND_NOISE_SALT: u64 = 0x00D3_4A9D;
+
+/// Prepara el modelo de viajeros: curva acumulada de llegadas al andén por estación (datos reales de
+/// Renfe, o estimación por nº de paradas fuera del núcleo), bolsas por (estación, línea, sentido) y
+/// la fracción que baja en cada parada. Todo una vez, fuera del bucle caliente.
+fn construir_realismo(rc: &RealismCfg, infra: &Infra, trains: &mut [Train], seed: u64, start: f64) -> RealismRt {
+    let n_st = infra.stop_index.len();
+    let mut id_of = vec![String::new(); n_st];
+    for (id, &n) in &infra.stop_index {
+        id_of[n as usize] = id.clone();
+    }
+    // Paradas de viajeros por estación (para la demanda estimada y el reparto entre líneas).
+    let mut stops_at = vec![0u32; n_st];
+    for t in trains.iter().filter(|t| !t.freight) {
+        for p in t.pts.iter().filter(|p| !p.pass) {
+            stops_at[infra.stop_index[&p.id] as usize] += 1;
+        }
+    }
+    let dem = demand::global();
+    let profile: [f64; demand::BANDS] = match dem {
+        Some(d) => d.profile,
+        None => {
+            let mut p = [0.0; demand::BANDS];
+            for (i, x) in p.iter_mut().enumerate() {
+                *x = demanda((i as f64 + 0.5) * 1800.0);
+            }
+            let tot: f64 = p.iter().sum::<f64>().max(1e-9);
+            p.map(|x| x / tot)
+        }
+    };
+    let mut noise_rng = StdRng::seed_from_u64(seed ^ DEMAND_NOISE_SALT);
+    let sigma = rc.demand_noise;
+    let mut cum = vec![[0.0; demand::BANDS + 1]; n_st];
+    let mut alight_w = vec![0.0f64; n_st];
+    for n in 0..n_st {
+        // Ruido log-normal de media 1 por estación y run (siempre se tira: misma secuencia).
+        let z = trunc_std_normal(&mut noise_rng, 3.0);
+        let noise = (sigma * z - 0.5 * sigma * sigma).exp();
+        let k = rc.demand_scale * noise;
+        let real = dem.and_then(|d| d.stations.get(&id_of[n]));
+        let per_band: [f64; demand::BANDS] = match real {
+            Some(sd) => {
+                alight_w[n] = sd.alight_day().max(1.0);
+                sd.board.map(|b| b * k)
+            }
+            None => {
+                let day = rc.fallback_pax_per_stop * stops_at[n] as f64;
+                alight_w[n] = day.max(1.0);
+                profile.map(|p| p * day * k)
+            }
+        };
+        cum[n] = demand::cumulative(&per_band);
+    }
+
+    // Bolsas por (estación, línea, siguiente parada real) y reparto según trenes que paran.
+    let mut pool_idx: HashMap<(u32, String, u32), u32> = HashMap::new();
+    let mut pool_cnt: Vec<u32> = Vec::new();
+    let mut pools: Vec<Pool> = Vec::new();
+    for t in trains.iter_mut() {
+        if t.freight || !rc.pax_enabled {
+            continue;
+        }
+        let n = t.pts.len();
+        t.pool = vec![u32::MAX; n];
+        t.alight_p = vec![0.0; n];
+        // Fracción que baja: proporcional a las bajadas de Renfe de esta parada frente a las
+        // que quedan por delante (en la última baja todo el mundo).
+        let real: Vec<usize> = (0..n).filter(|&j| !t.pts[j].pass).collect();
+        let mut rest = 0.0;
+        for &j in real.iter().rev() {
+            let w = alight_w[infra.stop_index[&t.pts[j].id] as usize];
+            rest += w;
+            if j > 0 {
+                t.alight_p[j] = (w / rest) as f32;
+            }
+        }
+        if let Some(&last) = real.last() {
+            t.alight_p[last] = 1.0;
+        }
+        for (w, &j) in real.iter().enumerate() {
+            if j == n - 1 {
+                continue; // en el destino no sube nadie
+            }
+            let st = infra.stop_index[&t.pts[j].id];
+            let next = real.get(w + 1).map(|&k| infra.stop_index[&t.pts[k].id]).unwrap_or(u32::MAX);
+            let key = (st, t.line.clone(), next);
+            let id = *pool_idx.entry(key).or_insert_with(|| {
+                pools.push(Pool { station: st, share: 0.0, last_t: start, carry: 0.0 });
+                pool_cnt.push(0);
+                (pools.len() - 1) as u32
+            });
+            pool_cnt[id as usize] += 1;
+            t.pool[j] = id;
+        }
+    }
+    let mut st_tot = vec![0u32; n_st];
+    for (p, &c) in pools.iter().zip(&pool_cnt) {
+        st_tot[p.station as usize] += c;
+    }
+    for (p, &c) in pools.iter_mut().zip(&pool_cnt) {
+        p.share = c as f64 / st_tot[p.station as usize].max(1) as f64;
+    }
+
+    RealismRt {
+        cfg: rc.clone(),
+        cum,
+        pools,
+        rng: StdRng::seed_from_u64(seed ^ PAX_SALT),
+        cross_until: vec![f64::NEG_INFINITY; infra.cross_index.len()],
+        claim_eta: vec![f64::INFINITY; infra.n_res],
+        claim_touched: Vec::new(),
+        pax_boarded: 0.0,
+        pax_left_behind: 0.0,
+    }
+}
+
+/// Intercambio de viajeros al llegar a la parada `k` y tiempo de parada resultante (s). Bajan
+/// `onboard·alight_p[k]`; suben los que esperan en su bolsa (llegados desde el último tren de esa
+/// línea y sentido + los que no cupieron), con ruido de Poisson; si no caben, se quedan en el andén.
+/// Parada = parte fija + (bajan·t_b + suben·t_s)·factor/puertas, penalizada con el tren lleno, con
+/// un mínimo y un imprevisto menor ocasional. INVARIANTE: más tiempo desde el tren anterior (p. ej.
+/// porque este va tarde) ⇒ más viajeros ⇒ parada más larga (realimentación del retraso).
+fn intercambio_viajeros(t: &mut Train, k: usize, now: f64, rt: &mut RealismRt, with_dwell: bool) -> f64 {
+    let alight = (t.onboard * t.alight_p.get(k).copied().unwrap_or(0.0) as f64).round().min(t.onboard);
+    t.onboard -= alight;
+    let mut board = 0.0;
+    if let Some(&pid) = t.pool.get(k) {
+        if pid != u32::MAX {
+            let p = &mut rt.pools[pid as usize];
+            let c = &rt.cum[p.station as usize];
+            let arrived = (demand::cum_at(c, now) - demand::cum_at(c, p.last_t)).max(0.0) * p.share;
+            let mean = arrived + p.carry;
+            // Poisson ≈ normal para medias grandes; acotado a ≥ 0.
+            let z = trunc_std_normal(&mut rt.rng, 3.0);
+            let want = (mean + mean.sqrt() * z).round().max(0.0);
+            let room = (t.capacity - t.onboard).max(0.0);
+            board = want.min(room);
+            p.carry = (want - board).max(0.0);
+            p.last_t = now;
+            rt.pax_boarded += board;
+            rt.pax_left_behind += want - board;
+        }
+    }
+    t.onboard += board;
+    let rc = &rt.cfg;
+    t.veh.mass_kg = t.base_mass + t.onboard * rc.pax_mass_kg;
+    if !with_dwell {
+        return 0.0;
+    }
+    let exchange = (alight * rc.alight_s_per_pax + board * rc.board_s_per_pax) * t.door_factor / t.doors.max(1.0);
+    let load = if t.capacity > 0.0 { t.onboard / t.capacity } else { 0.0 };
+    let crowd = if load > rc.crowd_threshold {
+        1.0 + rc.crowd_penalty * ((load - rc.crowd_threshold) / (1.0 - rc.crowd_threshold).max(1e-6)).min(1.0)
+    } else {
+        1.0
+    };
+    let mut dwell = (rc.door_fixed_s + exchange * crowd).max(rc.dwell_min_s);
+    let (p_extra, extra_max) = (rc.extra_dwell_prob, rc.extra_dwell_max_s);
+    if rt.rng.gen::<f64>() < p_extra {
+        dwell += 10.0 + rt.rng.gen::<f64>() * (extra_max - 10.0).max(0.0);
+    }
+    dwell
+}
+
 /// Parada mínima por estación (20–60 s) escalada por la densidad de servicio del GTFS (√ frecuencia).
 fn dwell_por_estacion(trains: &[Train]) -> HashMap<String, f64> {
     let mut freq: HashMap<&str, u32> = HashMap::new();
@@ -1783,6 +2638,7 @@ fn construir_secuencia(pts: &[Pt], cum_l: &[f64], infra: &Infra) -> Vec<Block> {
         stat_single: false,
         cap_double: 1,
         plat_tracks: 1,
+        cross_id: u32::MAX,
     });
     for i in 0..pts.len() - 1 {
         let a = nid(&pts[i].id);
@@ -1816,6 +2672,13 @@ fn construir_secuencia(pts: &[Pt], cum_l: &[f64], infra: &Infra) -> Vec<Block> {
                 // Salvo en estaciones con varias vías principales por acceso (Sants): ahí un tren
                 // PARADO solo cierra la señal cuando están todas ocupadas (ver `anden_lleno`).
                 plat_tracks: if sb == m - 1 && !stat_single { topology::approach_main_tracks(&pts[i + 1].id) } else { 1 },
+                // Llegada a una estación desde la que salen trenes de vía de estacionamiento hacia
+                // `a`: su salida cruza este último sub-bloque (ambas señales en rojo al cruzar).
+                cross_id: if sb == m - 1 && !stat_single {
+                    infra.cross_index.get(&(b, a)).copied().unwrap_or(u32::MAX)
+                } else {
+                    u32::MAX
+                },
             });
         }
     }
@@ -1906,6 +2769,20 @@ fn build_infra(net: &Network, trains: &[Train], single_track_str: HashSet<String
         }
     }
 
+    // 6. Cruces de salida de cabecera: todo origen de recorrido (el tren sale de una vía de
+    //    estacionamiento) hacia su siguiente punto, si ese tramo es de vía doble.
+    let mut cross_index: HashMap<(u32, u32), u32> = HashMap::new();
+    for t in trains {
+        let o = stop_index[&t.pts[0].id];
+        let n = stop_index[&t.pts[1].id];
+        let ckey = if o < n { (o, n) } else { (n, o) };
+        let single = res_canon.get(&ckey).is_some_and(|c| single_track.contains(c));
+        if !single {
+            let next = cross_index.len() as u32;
+            cross_index.entry((o, n)).or_insert(next);
+        }
+    }
+
     Infra {
         stop_index,
         sub_blocks,
@@ -1916,6 +2793,7 @@ fn build_infra(net: &Network, trains: &[Train], single_track_str: HashSet<String
         res_dir,
         res_canon,
         n_res: next_res as usize,
+        cross_index,
     }
 }
 
@@ -2065,6 +2943,7 @@ mod tests {
             res_dir: HashMap::new(),
             res_canon,
             n_res: 1,
+            cross_index: HashMap::new(),
         }
     }
 
@@ -2133,15 +3012,16 @@ mod tests {
     fn retencion_se_acumula_en_el_tramo_vetado() {
         let blk = |from: u32, to: u32, sb: usize| Block {
             origin: false, from, to, sb, last: false, dest: to, arr_idx: 1, x_enter: 0.0,
-            res: 0, res_single: 0, stat_single: false, cap_double: 1, plat_tracks: 1,
+            res: 0, res_single: 0, stat_single: false, cap_double: 1, plat_tracks: 1, cross_id: u32::MAX,
         };
-        let mut t = Train {
-            id: "T1".into(), line: "R2".into(), regional: false, veh: vehicle_for_line("R2"),
-            pts: Vec::new(), cum_l: Vec::new(), canton_zones: Vec::new(), speed_p0: 0.0,
-            speed_z: Vec::new(), dwell_min: Vec::new(), seq: vec![blk(0, 1, 0), blk(1, 2, 0)],
-            phase: Phase::Running, station_idx: 0, canton_idx: 0, target_stop: 1, arrived_at: 0.0,
-            s: 0.0, v: 0.0, cb: 0, delay_s: 0.0, waiting: true, held_since: 100.0, was_waiting: false,
-        };
+        let mut t = tren_prueba(Phase::Running, vec![blk(0, 1, 0), blk(1, 2, 0)], Vec::new());
+        t.id = "T1".into();
+        t.line = "R2".into();
+        t.regional = false;
+        t.veh = vehicle_for_line("R2");
+        t.target_stop = 1;
+        t.waiting = true;
+        t.held_since = 100.0;
         let mut h = HashMap::new();
         acumular_retencion(&mut h, &t, 102.0, 2.0); // 1er paso retenido: nueva retención
         t.was_waiting = true;
@@ -2161,12 +3041,17 @@ mod tests {
             dwell_min: Vec::new(), seq, phase, station_idx: 0, canton_idx: 0, target_stop: 0,
             arrived_at: 0.0, s: 0.0, v: 0.0, cb: 0, delay_s: 0.0, waiting: false,
             held_since: f64::NAN, was_waiting: false,
+            len_m: 0.0, freight: false, prev_unit: None, t_done: f64::NAN, asfa_cb: usize::MAX,
+            react_until: f64::NAN, onboard: 0.0, pool: Vec::new(), alight_p: Vec::new(), capacity: 0.0,
+            doors: 1.0, door_factor: 1.0, base_mass: 0.0, cross_id: u32::MAX, cross_app_res: u32::MAX,
+            siding: Vec::new(), in_siding: false, siding_since: f64::NAN, yield_target: usize::MAX,
+            stop_log: Vec::new(),
         }
     }
     fn bloque(from: u32, to: u32, arr_idx: usize, single: bool, res: u32) -> Block {
         Block {
             origin: false, from, to, sb: 0, last: true, dest: to, arr_idx, x_enter: 0.0,
-            res, res_single: res, stat_single: single, cap_double: 1, plat_tracks: 1,
+            res, res_single: res, stat_single: single, cap_double: 1, plat_tracks: 1, cross_id: u32::MAX,
         }
     }
 
@@ -2209,5 +3094,95 @@ mod tests {
             Pt { id: "B".into(), a: 120.0, d: 120.0, lat: 0.0, lon: 0.0, pass: false },
         ];
         assert_eq!(next_real_stop(&pts, 0), 2); // salta el punto de paso P
+    }
+
+    // ---- Realismo (realism.rs) -------------------------------------------------------------
+
+    #[test]
+    fn huecos_de_velocidad_se_rellenan_con_el_vecino_mas_lento() {
+        let z = vec![
+            SpeedZone { from: 0.0, to: 400.0, vmax: 30.0 },
+            SpeedZone { from: 440.0, to: 800.0, vmax: 30.0 }, // hueco corto (muestreo): se alarga
+            SpeedZone { from: 1500.0, to: 1800.0, vmax: 20.0 }, // hueco largo: menor de los vecinos
+        ];
+        let f = fill_zone_gaps(z, 2000.0, 27.0);
+        // Cubre todo el tramo sin dejar ningún punto a ∞.
+        for x in [0.0, 420.0, 900.0, 1600.0, 1999.0] {
+            assert!(physics::infra_limit(&f, x).is_finite(), "x={x}");
+        }
+        assert_eq!(physics::infra_limit(&f, 420.0), 30.0);
+        assert_eq!(physics::infra_limit(&f, 1000.0), 20.0);
+        // Sin ningún dato: Vmax por defecto en todo el tramo.
+        let d = fill_zone_gaps(Vec::new(), 500.0, 27.0);
+        assert_eq!(physics::infra_limit(&d, 250.0), 27.0);
+    }
+
+    #[test]
+    fn la_unidad_tiene_que_llegar_y_cambiar_de_cabina() {
+        let rc = RealismCfg::default();
+        let pt = |d: f64| Pt { id: "A".into(), a: d, d, lat: 0.0, lon: 0.0, pass: false };
+        let prev = tren_prueba(Phase::Running, vec![], vec![pt(0.0), pt(1000.0)]);
+        let mut next = tren_prueba(Phase::Dwell, vec![], vec![pt(1200.0), pt(2000.0)]);
+        next.prev_unit = Some(0);
+        let mut trains = vec![prev, next];
+        assert!(!unidad_lista(&trains, 1, 1300.0, &rc), "la unidad aún circula");
+        trains[0].phase = Phase::Done;
+        trains[0].t_done = 1250.0; // llega tarde a cabecera
+        assert!(!unidad_lista(&trains, 1, 1300.0, &rc), "faltan los 3 min de cambio de cabina");
+        assert!(unidad_lista(&trains, 1, 1250.0 + rc.turnaround_min_s, &rc));
+        // Si la unidad no llega nunca, sale una de reserva.
+        trains[0].phase = Phase::Running;
+        assert!(unidad_lista(&trains, 1, 1200.0 + rc.reserve_unit_after_min * 60.0, &rc));
+    }
+
+    #[test]
+    fn mas_tiempo_desde_el_tren_anterior_da_parada_mas_larga() {
+        let mut rc = RealismCfg::default();
+        rc.extra_dwell_prob = 0.0;
+        rc.demand_noise = 0.0;
+        let mut per_band = [0.0; demand::BANDS];
+        for b in per_band.iter_mut().skip(14).take(6) {
+            *b = 600.0; // 600 viajeros/30 min entre las 7 y las 10
+        }
+        let mk_rt = || RealismRt {
+            cfg: rc.clone(),
+            cum: vec![demand::cumulative(&per_band)],
+            pools: vec![Pool { station: 0, share: 1.0, last_t: 7.5 * 3600.0, carry: 0.0 }],
+            rng: StdRng::seed_from_u64(1),
+            cross_until: Vec::new(),
+            claim_eta: Vec::new(),
+            claim_touched: Vec::new(),
+            pax_boarded: 0.0,
+            pax_left_behind: 0.0,
+        };
+        let mk_t = || {
+            let mut t = tren_prueba(Phase::Dwell, vec![], vec![]);
+            t.pool = vec![0, 0];
+            t.alight_p = vec![0.0, 0.0];
+            t.capacity = 2000.0;
+            t.doors = 9.0;
+            t.base_mass = 160_000.0;
+            t
+        };
+        // Tren puntual: 5 min después del anterior. Tren con retraso: 12 min después.
+        let (mut rt1, mut t1) = (mk_rt(), mk_t());
+        let d_puntual = intercambio_viajeros(&mut t1, 0, 7.5 * 3600.0 + 300.0, &mut rt1, true);
+        let (mut rt2, mut t2) = (mk_rt(), mk_t());
+        let d_tarde = intercambio_viajeros(&mut t2, 0, 7.5 * 3600.0 + 720.0, &mut rt2, true);
+        assert!(t2.onboard > t1.onboard * 2.0, "con más intervalo sube más gente");
+        assert!(d_tarde > d_puntual, "parada {d_tarde} > {d_puntual}");
+        assert!(d_puntual >= rc.dwell_min_s);
+        // La masa del tren sube con los viajeros.
+        assert!(t2.veh.mass_kg > t2.base_mass);
+    }
+
+    #[test]
+    fn davis_frena_mas_a_mas_velocidad() {
+        let mut v = vehicle_for_line("R4");
+        apply_davis(&mut v, 1.6, 4.0);
+        assert!(v.resist_accel(30.0) > v.resist_accel(10.0));
+        // ~4 N/kN a 100 km/h ≈ 0,04 m/s² (orden de magnitud de un cercanías).
+        let a100 = v.resist_accel(100.0 / 3.6);
+        assert!(a100 > 0.02 && a100 < 0.06, "{a100}");
     }
 }

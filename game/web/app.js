@@ -91,8 +91,10 @@ function lineImg(line, cls) {
 }
 
 // ---- Estado -------------------------------------------------------------------------------
+// Color de los trenes de mercancías en el mapa (marrón: no es ninguna línea de Rodalies).
+const FREIGHT_COLOR = "#8a5a2b";
 const S = {
-  net: null, trains: [], stationById: new Map(), edgeLines: new Map(),
+  net: null, trains: [], freight: [], stationById: new Map(), edgeLines: new Map(),
   edgeZones: new Map(),    // key(a,b) -> [{a,b,v,ltv}…] perfil de Vmax por zonas del cantón
   edgeGeom: new Map(),     // key(a,b) -> {pts:[[lat,lon]…], cum:[…]} trazado REAL de vía (OSM), ambos sentidos
   vmaxView: false,         // ¿mapa coloreado por Vmax en vez de por línea?
@@ -789,6 +791,13 @@ async function cargarTrace(seed, selQ) {
   if (!tr || !tr.trains) throw new Error("trace vacío");
   tr.byId = new Map();
   for (const t of tr.trains) tr.byId.set(t.id, t);
+  // Mercancías del escenario elegido: no están en el horario de viajeros, se añaden como trenes
+  // propios del trace (solo para dibujarlos y ocupar sus cantones en el reproductor).
+  S.freight = (tr.freight || []).map((f) => ({
+    id: f.id, line: "MERC", freight: true, color: FREIGHT_COLOR, corridor: f.corridor || "",
+    pts: f.stops.map((id) => S.stationById.get(id)).filter(Boolean).map((s) => ({ id: s.id, lat: s.lat, lon: s.lon })),
+    esperando: false, esperaDesde: null, esperaHacia: null, esperaMotivo: null,
+  })).filter((f) => f.pts.length >= 2);
   S.trace = tr; S.repro = true; S.simT = tr.start;
   construirTimelineRetraso(tr);
   // Rótulo de la jornada: el motor DERIVA el inicio de la 1ª salida por horario (no un 05:00 fijo),
@@ -931,7 +940,7 @@ function pasoRepro(dtGame) {
   S.occ.clear();
   const platPark = new Map();   // recurso del andén → trenes parados (estaciones con varias vías por acceso)
   let activos = 0, liveDelay = 0;
-  for (const t of S.trains) {
+  for (const lista of [S.trains, S.freight]) for (const t of lista) {
     t.reproActive = false; t.repro = null; t.reproHeld = false; t.reproDelay = 0;
     const rt = tr.byId.get(t.id); if (!rt) continue;
     const idx = (S.simT - rt.t0) / tr.dt;
@@ -948,8 +957,7 @@ function pasoRepro(dtGame) {
     // retenidos). Alimenta el KPI de pax·min, el panel de estación y el tooltip por tren.
     const dly = rt.d ? (rt.d[i0] + (rt.d[i1] - rt.d[i0]) * fr) : 0;
     t.reproDelay = dly;
-    liveDelay += dly / 60;
-    activos++;
+    if (!t.freight) { liveDelay += dly / 60; activos++; }
     // El andén (vía doble) es una EXTENSIÓN del tramo de aproximación: un tren parado ahí SIGUE
     // ocupando ese tramo → la señal de entrada queda en ROJO mientras está en la estación. Solo en
     // VÍA ÚNICA el andén es apartadero y libera el testigo (para el cruce en sentido contrario).
@@ -984,7 +992,7 @@ function pasoRepro(dtGame) {
 // ---- Render de trenes ---------------------------------------------------------------------
 function render() {
   const vivos = new Set();
-  for (const t of S.trains) {
+  for (const lista of [S.trains, S.freight]) for (const t of lista) {
     // Posición/orientación/estado del tren, desde el REPRODUCTOR (trace del motor Rust unificado).
     // El motor visual es ÚNICO: el frontend solo LEE y dibuja el trace; no calcula física.
     let pos, bearingDeg, late, hold, tip;
@@ -999,13 +1007,14 @@ function render() {
     const dlyMin = Math.round((t.reproDelay || 0) / 60);
     late = dlyMin >= 2 && !hold;   // en marcha pero ≥2 min por detrás de su horario
     const kmh = Math.round(r.v);
-    tip = `${t.line} · tren ${t.id}<br>Destino: ${nombre(t.pts[t.pts.length - 1].id)}<br>` +
+    tip = (t.freight ? `Mercancías · ${t.id}${t.corridor ? "<br>" + t.corridor : ""}` : `${t.line} · tren ${t.id}`) +
+      `<br>Destino: ${nombre(t.pts[t.pts.length - 1].id)}<br>` +
       (hold ? `<b>${ICON_PAUSE} Detenido ante señal</b> en ${nombre(r.a)}` : `Velocidad: <b>${kmh} km/h</b>`) +
       (dlyMin > 0 ? `<br>Retraso: <b>+${dlyMin}′</b>` : ``);
     vivos.add(t.id);
     let m = trainMarkers.get(t.id);
     if (!m) {
-      m = L.marker(pos, { icon: L.divIcon({ className: "trn-ic", html: '<span class="trn-tri"></span>', iconSize: [18, 18], iconAnchor: [9, 9] }), keyboard: false });
+      m = L.marker(pos, { icon: L.divIcon({ className: "trn-ic" + (t.freight ? " frt" : ""), html: '<span class="trn-tri"></span>', iconSize: [18, 18], iconAnchor: [9, 9] }), keyboard: false });
       m._line = t.line; m.bindTooltip(""); m.addTo(trainLayer); trainMarkers.set(t.id, m);
     } else m.setLatLng(pos);
     const elm = m.getElement();
@@ -1806,6 +1815,32 @@ function guardarVvar() {
   $("preVvar").addEventListener("input", () => { pintarVvar(); guardarVvar(); });
 })();
 
+// ── Escenario de mercancías de la run (`&frt=<id>`): lista de /api/freight/scenarios, recordado por
+// visor. "Lanzar incidencia ahora" re-simula con el mismo escenario (viaja en la selección).
+const FRT_KEY = "rod-frt-visual";
+function frtQuery() { const v = $("preFrt").value; return v && v !== "none" ? "&frt=" + encodeURIComponent(v) : ""; }
+(async function iniciarMercancias() {
+  const selEl = $("preFrt"); if (!selEl) return;
+  let guardado = null;
+  try { guardado = localStorage.getItem(FRT_KEY); } catch (e) { /* sin storage */ }
+  try {
+    const scs = await (await fetch("/api/freight/scenarios")).json();
+    for (const sc of scs) {
+      const o = document.createElement("option");
+      o.value = sc.id;
+      o.textContent = sc.name + (sc.kind === "fixed" ? ` (${sc.trains.length} trenes fijos)` : " (generado)");
+      selEl.appendChild(o);
+    }
+    // Por defecto, el primer escenario generado (semirrealista); si el visor eligió otro, ese.
+    const def = (scs.find((x) => x.kind !== "fixed") || {}).id || "none";
+    // "Ver en simulador" desde /numeros manda el escenario de esa tanda.
+    const q = new URLSearchParams(location.search);
+    if (q.get("from") === "numeros" && q.get("frt")) guardado = q.get("frt");
+    selEl.value = guardado && [...selEl.options].some((o) => o.value === guardado) ? guardado : def;
+  } catch (e) { /* sin servidor de escenarios: sin mercancías */ }
+  selEl.addEventListener("change", () => { try { localStorage.setItem(FRT_KEY, selEl.value); } catch (e) { /* sin storage */ } });
+})();
+
 function horaInicioSeg() {
   const [h, m] = ($("preStart").value || "05:00").split(":").map(Number);
   return (h || 0) * 3600 + (m || 0) * 60;
@@ -1841,7 +1876,7 @@ $("preConfirm").addEventListener("click", async () => {
     // La variabilidad de velocidad, el horario cadenciado y el modo sin horarios viajan con la
     // selección: "lanzar incidencia ahora" re-simula exactamente el mismo día.
     const extra = (S.cadId ? "&cad=" + S.cadId : "") + (mode === "free" ? "&free=1" : "");
-    const ok = await generarDia(seed, (S.tplSelQuery ? S.tplSelQuery() : "") + vvarQuery() + extra, horaInicioSeg());
+    const ok = await generarDia(seed, (S.tplSelQuery ? S.tplSelQuery() : "") + vvarQuery() + frtQuery() + extra, horaInicioSeg());
     if (ok && cad && cad.warnings.length) console.warn("Horario cadenciado:", cad.warnings.join(" "));
     if (!ok) { st.textContent = "No se pudo generar la jornada (ver Estado de la red)."; return; }
     $("preDay").classList.add("hidden");

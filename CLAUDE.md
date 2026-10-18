@@ -28,8 +28,11 @@ $env:Path = "$env:USERPROFILE\.cargo\bin;$env:Path"; & cargo <cmd>
   (use for CI/tests). `run.bat` is the double-click launcher.
 - Optimize timetables: `cargo run --release -- optimize [R1 R4 …]` runs simulated annealing
   and writes `report/optimized/R*_optimized.csv` + a console comparison. No line args = top-4.
-- Tests: `cargo test` · single test: `cargo test dwell_grows_with_delay`
-  (unit tests live in `#[cfg(test)]` modules inside `src/passenger_model.rs`)
+- Compare with Renfe: `cargo run --release -- compare [seed]` runs a day "before" (realism off)
+  and "now" (saved realism) and compares per line with the GTFS and with REAL data from the
+  GTFS-RT (`processed/gtfsrt/observed.json`) → console + `report/compare.json`.
+- Tests: `cargo test` · single test: `cargo test mas_tiempo_desde_el_tren_anterior`
+  (unit tests live in `#[cfg(test)]` modules inside each `src/*.rs`)
 - Manual server check: run with `--no-open`, then `curl http://127.0.0.1:8080/api/render?block=12&delay=8`
 
 ## Data prerequisite
@@ -46,6 +49,18 @@ Optional but recommended: `python scripts/fetch_osm_track.py` (re)builds
 the OSM rail graph with a turn-angle constraint (`src/track_geometry.rs`). Without it the engine
 measures cantons in a straight line (e.g. França→Passeig de Gràcia 1,9 km instead of 4,9 km).
 Re-run it after a GTFS update that adds new station pairs.
+
+Realism data (all optional; the engine falls back to estimates if missing):
+- `python scripts/fetch_renfe_demand.py` → `raw/renfe/barcelona_viajeros_por_franja.csv`: REAL
+  boardings/alightings per station and 30-min band (Renfe 2018, stop_id = GTFS). Feeds `demand.rs`.
+- Page `/datos` (menu «Datos reales de Renfe»): one button installs a Windows Task Scheduler task
+  (`scripts/gtfsrt_autostart.ps1`, at logon + daily 04:30, pythonw, no admin) that runs
+  `scripts/collect_gtfsrt.py` → Renfe GTFS-RT (positions, delays, cancellations, skipped stops,
+  incident notices of Rodalies every ~20 s) into `raw/gtfsrt/*.jsonl` (~17 MB/day). The collector is
+  single-instance with a control port 127.0.0.1:47231 (`ping`/`stop`). Manual: `collect_gtfsrt.bat`.
+  `python scripts/analyze_gtfsrt.py` → `processed/gtfsrt/observed.json` (real segment/dwell
+  times, delay distribution per line) used by `compare`.
+- LTV: `/configuracion` → "Buscar y actualizar LTV" runs `scripts/fetch_adif_ltv.py` and reloads.
 
 UI languages (es/ca/en): `game/web/i18n.js` translates the rendered DOM using
 `game/web/i18n_dict.js` (Spanish source text → [ca, en], numbers as `{n}`). New UI text = add an
@@ -144,6 +159,25 @@ runtime — there is no hardcoded map. Data flows in one direction: GTFS → `Ne
   The web `OPT_SCRIPT` polls status, draws the descending V(H) curve on a canvas, and on finish
   shows the metrics + a per-line download table.
 
+- **`realism.rs`** — `RealismCfg`: EVERY tunable realism parameter with its reasonable default
+  (`report/realism.json`, page `/configuracion`, `#[serde(default)]` so new fields never break a
+  saved file) + `assumptions()` (page `/supuestos`). Rule: if you simplify physics, declare it there.
+- **`demand.rs`** — real Renfe demand as CUMULATIVE curves per station (`cum_at`); loaded once
+  (`demand::global()`).
+- **`engine.rs` realism layer** (`Engine::with_schedule_ext(…, &RealismCfg, &[FreightTrain])`):
+  passenger dwell (`intercambio_viajeros`: pools per station·line·direction, more headway ⇒ more
+  people ⇒ longer dwell, capacity/left-behind, mass), rotation inferred from the timetable
+  (`asignar_rotaciones`, `unidad_lista`: 3 min cab change, late in ⇒ late out, reserve unit),
+  terminal departure crossing (`cross_id`, `salida_cruce_libre`), ASFA caution aspect
+  (`actualizar_asfa`), service braking + anticipating speed zones (`limites_por_delante`),
+  driver reaction (`reaccion_pendiente`), Davis resistance, train length (tail keeps the previous
+  block), track speed gaps filled (`fill_zone_gaps`), tunnel margin. Freight: no priority
+  (`claim_eta` at junctions, single-track priority), pulls into sidings for the passenger train
+  behind (`decidir_apartado`/`pasajero_detras`), excluded from passenger metrics.
+- **`freight.rs`** — freight scenarios (`report/freight.json`, page `/mercancias`): corridors
+  generated per seed (`plan`) or fixed lists; routed on the atomic GTFS graph
+  (`game::AtomicRouter`), so they share cantons/signals with Rodalies. Run param `frt=<id>`.
+- **`compare.rs`** — the `compare` command (before/now/real per line, too-fast segments).
 - **`main.rs`** — `#[tokio::main]`. Checks `./data/gtfs`, loads (timed in ms), builds the
   default `*View`s via `scenario`, prints them, writes the static dashboard, then either
   exits (`--static`) or serves the interactive UI. This is why `rayon`, `rand` and `tokio`

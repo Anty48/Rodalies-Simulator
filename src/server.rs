@@ -221,6 +221,41 @@ async fn handle(mut stream: TcpStream, state: Arc<ServerState>) -> std::io::Resu
         "/api/line" => ("200 OK", "application/json", line_json(&state, query).into_bytes()),
         "/api/ltv/status" => ("200 OK", "application/json", ltv_status(&state).into_bytes()),
         "/api/ltv/reload" => ("200 OK", "application/json", ltv_reload(&state).into_bytes()),
+        // Descarga las LTV vigentes de ADIF (scripts/fetch_adif_ltv.py) y las recarga.
+        "/api/ltv/fetch" => ("200 OK", "application/json", ltv_fetch(&state).into_bytes()),
+        // Parámetros de realismo (página /configuracion) y supuestos del modelo (/supuestos).
+        "/configuracion" | "/config" => ("200 OK", "text/html", report::render_config_page().into_bytes()),
+        "/supuestos" | "/assumptions" => ("200 OK", "text/html", report::render_assumptions_page().into_bytes()),
+        "/mercancias" | "/freight" => ("200 OK", "text/html", report::render_freight_page().into_bytes()),
+        "/api/realism" if is_post => ("200 OK", "application/json", realism_save(&body).into_bytes()),
+        "/api/realism" => ("200 OK", "application/json", realism_json().into_bytes()),
+        "/api/realism/reset" => ("200 OK", "application/json", realism_reset().into_bytes()),
+        "/api/assumptions" => (
+            "200 OK",
+            "application/json",
+            serde_json::to_vec(&crate::realism::assumptions()).unwrap_or_default(),
+        ),
+        // Escenarios de mercancías (lista completa, como las plantillas de incidencia).
+        "/api/freight/scenarios" if is_post => ("200 OK", "application/json", freight_save(&body).into_bytes()),
+        "/api/freight/scenarios" => (
+            "200 OK",
+            "application/json",
+            serde_json::to_vec(&crate::freight::load_scenarios()).unwrap_or_default(),
+        ),
+        // Datos reales de Renfe (GTFS-RT): página, estado, recogida automática, análisis y comparación.
+        "/datos" | "/data" => ("200 OK", "text/html", report::render_data_page().into_bytes()),
+        "/api/gtfsrt/status" => ("200 OK", "application/json", gtfsrt_status().into_bytes()),
+        "/api/gtfsrt/autostart" => ("200 OK", "application/json", gtfsrt_autostart("status").into_bytes()),
+        "/api/gtfsrt/install" if is_post => ("200 OK", "application/json", gtfsrt_autostart("install").into_bytes()),
+        "/api/gtfsrt/uninstall" if is_post => ("200 OK", "application/json", gtfsrt_autostart("uninstall").into_bytes()),
+        "/api/gtfsrt/start" if is_post => ("200 OK", "application/json", gtfsrt_start().into_bytes()),
+        "/api/gtfsrt/stop" if is_post => ("200 OK", "application/json", gtfsrt_stop().into_bytes()),
+        "/api/gtfsrt/analyze" if is_post => ("200 OK", "application/json", gtfsrt_analyze().into_bytes()),
+        "/api/compare" => ("200 OK", "application/json", compare_json(&state, query).into_bytes()),
+        "/api/freight/preview" => ("200 OK", "application/json", freight_preview(&state, query).into_bytes()),
+        "/api/freight/materialize" if is_post => {
+            ("200 OK", "application/json", freight_materialize(&state, query).into_bytes())
+        }
         "/api/optimize/start" => {
             ("200 OK", "application/json", start_optimization(&state, query).into_bytes())
         }
@@ -531,7 +566,8 @@ fn cadence_param(
     }))
 }
 
-/// Construye el motor de una run: horario GTFS o malla cadenciada (`cad=`), según la query.
+/// Construye el motor de una run: horario GTFS o malla cadenciada (`cad=`), según la query, con los
+/// parámetros de realismo guardados y el escenario de mercancías elegido (`frt=<id>`, `none` = sin).
 fn engine_for(
     state: &ServerState,
     net: &Network,
@@ -539,14 +575,67 @@ fn engine_for(
     cfg: crate::engine::EngineCfg,
     ltv: Option<&crate::calculator::ltv::LtvSet>,
     templates: &[crate::engine::IncidentTemplate],
-) -> Result<crate::engine::Engine, String> {
-    match cadence_param(state, q) {
-        Some(Ok(trains)) => {
-            Ok(crate::engine::Engine::with_schedule(net, cfg, state.adif.as_ref(), ltv, templates, None, &trains))
+) -> Result<(crate::engine::Engine, FreightInfo), String> {
+    let rc = crate::realism::RealismCfg::load();
+    let gtfs;
+    let trains: &[crate::game::GameTrain] = match cadence_param(state, q) {
+        Some(Ok(t)) => {
+            gtfs = t;
+            &gtfs
         }
-        Some(Err(e)) => Err(e),
-        None => Ok(crate::engine::Engine::new(net, cfg, state.adif.as_ref(), ltv, templates, None, None)),
-    }
+        Some(Err(e)) => return Err(e),
+        None => {
+            gtfs = Arc::new(crate::game::build_schedule(net, false, None));
+            &gtfs
+        }
+    };
+    let (freight, errors) = freight_for(net, q, cfg.seed, trains);
+    let eng = crate::engine::Engine::with_schedule_ext(
+        net,
+        cfg,
+        state.adif.as_ref(),
+        ltv,
+        templates,
+        None,
+        trains,
+        &rc,
+        &freight,
+    );
+    let list = freight
+        .iter()
+        .map(|f| {
+            serde_json::json!({
+                "id": f.gt.train,
+                "corridor": f.corridor,
+                "from": f.gt.from,
+                "to": f.gt.to,
+                "dep": f.gt.stops.first().map(|s| s.d).unwrap_or(0),
+                "stops": f.gt.stops.iter().filter(|s| net.node(&s.s).is_some()).map(|s| s.s.clone()).collect::<Vec<_>>(),
+            })
+        })
+        .collect();
+    Ok((eng, FreightInfo { list, errors }))
+}
+
+/// Mercancías de una run, para devolverlos al frontend (visor y /numeros).
+struct FreightInfo {
+    list: Vec<serde_json::Value>,
+    errors: Vec<String>,
+}
+
+/// Mercancías de la run según `frt=<id>` (escenario guardado). La ventana de generación empieza en
+/// la primera salida de viajeros (antes el motor aún no corre) y acaba a medianoche.
+fn freight_for(
+    net: &Network,
+    q: &HashMap<String, String>,
+    seed: u64,
+    trains: &[crate::game::GameTrain],
+) -> (Vec<crate::freight::FreightTrain>, Vec<String>) {
+    let id = q.get("frt").map(String::as_str).unwrap_or("none");
+    let Some(sc) = crate::freight::scenario_by_id(id) else { return (Vec::new(), Vec::new()) };
+    let start = trains.iter().filter_map(|t| t.stops.first().map(|s| s.d)).min().unwrap_or(5 * 3600) as f64;
+    let plan = crate::freight::plan(&sc, seed, start + 300.0, 24.0 * 3600.0);
+    crate::freight::build_trains(net, &plan)
 }
 
 /// Guarda la lista COMPLETA de plantillas (el frontend envía todo el conjunto al añadir/borrar/toggle).
@@ -575,7 +664,7 @@ fn simulate_json(state: &ServerState, query: &str) -> String {
     let mut cfg = crate::engine::EngineCfg::day();
     cfg.seed = seed;
     cfg.speed_var = speed_var_param(&q);
-    let mut eng = match engine_for(state, &net_guard, &q, cfg, ltv_guard.as_deref(), &templates) {
+    let (mut eng, frt) = match engine_for(state, &net_guard, &q, cfg, ltv_guard.as_deref(), &templates) {
         Ok(e) => e,
         Err(e) => return serde_json::json!({ "error": e }).to_string(),
     };
@@ -618,6 +707,9 @@ fn simulate_json(state: &ServerState, query: &str) -> String {
         "incidents": incidents,
         "track": track,
         "analysis": analysis,
+        "realism": eng.realism_stats(),
+        "freight": frt.list.len(),
+        "freight_errors": frt.errors,
     })
     .to_string()
 }
@@ -668,7 +760,7 @@ fn trace_json(state: &ServerState, query: &str) -> String {
     cfg.seed = seed;
     cfg.speed_var = speed_var_param(&q);
     cfg.free_run = free_run_param(&q);
-    let mut eng = match engine_for(state, &net_guard, &q, cfg, ltv_guard.as_deref(), &templates) {
+    let (mut eng, frt) = match engine_for(state, &net_guard, &q, cfg, ltv_guard.as_deref(), &templates) {
         Ok(e) => e,
         Err(e) => return serde_json::json!({ "error": e }).to_string(),
     };
@@ -731,6 +823,9 @@ fn trace_json(state: &ServerState, query: &str) -> String {
         obj.insert("incidents".into(), serde_json::json!(incidents));
         obj.insert("track".into(), track);
         obj.insert("analysis".into(), analysis);
+        obj.insert("realism".into(), serde_json::json!(eng.realism_stats()));
+        obj.insert("freight".into(), serde_json::json!(frt.list));
+        obj.insert("freight_errors".into(), serde_json::json!(frt.errors));
     }
     v.to_string()
 }
@@ -957,6 +1052,290 @@ fn ltv_reload(state: &ServerState) -> String {
         c.clear(); // los análisis cacheados pueden depender de LTV
     }
     out
+}
+
+/// Ejecuta `scripts/fetch_adif_ltv.py` (descarga oficial ADIF del día) y recarga las LTV. Bloquea
+/// la petición mientras descarga (uso local de un solo usuario).
+fn ltv_fetch(state: &ServerState) -> String {
+    let script = "scripts/fetch_adif_ltv.py";
+    let mut last_err = String::new();
+    for py in ["python", "py", "python3"] {
+        match std::process::Command::new(py).arg(script).output() {
+            Ok(out) if out.status.success() => {
+                let log = String::from_utf8_lossy(&out.stdout).lines().last().unwrap_or("").to_string();
+                let reload: serde_json::Value = serde_json::from_str(&ltv_reload(state)).unwrap_or_default();
+                return serde_json::json!({ "ok": true, "log": log, "reload": reload }).to_string();
+            }
+            Ok(out) => {
+                last_err = String::from_utf8_lossy(&out.stderr).lines().last().unwrap_or("error").to_string();
+            }
+            Err(e) => last_err = e.to_string(),
+        }
+    }
+    serde_json::json!({ "ok": false, "error": format!("No se pudieron descargar las LTV: {last_err}") }).to_string()
+}
+
+fn realism_json() -> String {
+    serde_json::json!({
+        "current": crate::realism::RealismCfg::load(),
+        "defaults": crate::realism::RealismCfg::default(),
+    })
+    .to_string()
+}
+
+fn realism_save(body: &[u8]) -> String {
+    match serde_json::from_slice::<crate::realism::RealismCfg>(body) {
+        Ok(c) => {
+            let c = c.sanitized();
+            let ok = c.save();
+            serde_json::json!({ "ok": ok, "current": c }).to_string()
+        }
+        Err(e) => serde_json::json!({ "ok": false, "error": e.to_string() }).to_string(),
+    }
+}
+
+fn realism_reset() -> String {
+    let c = crate::realism::RealismCfg::default();
+    let ok = c.save();
+    serde_json::json!({ "ok": ok, "current": c }).to_string()
+}
+
+/// Guarda la lista COMPLETA de escenarios de mercancías (ids estables; se generan si faltan).
+fn freight_save(body: &[u8]) -> String {
+    match serde_json::from_slice::<Vec<crate::freight::FreightScenario>>(body) {
+        Ok(mut v) => {
+            let stamp: String = now_utc_string().chars().filter(|c| c.is_ascii_digit()).collect();
+            for (i, sc) in v.iter_mut().enumerate() {
+                if sc.id.trim().is_empty() || sc.id == "none" {
+                    sc.id = format!("esc{}_{}", i + 1, stamp);
+                }
+                for (k, c) in sc.corridors.iter_mut().enumerate() {
+                    if c.id.trim().is_empty() {
+                        c.id = format!("c{}", k + 1);
+                    }
+                }
+            }
+            let ok = crate::freight::save_scenarios(&v);
+            serde_json::json!({ "ok": ok, "scenarios": v }).to_string()
+        }
+        Err(e) => serde_json::json!({ "ok": false, "error": e.to_string() }).to_string(),
+    }
+}
+
+/// Trenes de mercancías que tendría una run (`frt=<id>&seed=N`), con nombre de estaciones y si se
+/// han podido enrutar: lo que se ve antes de lanzar.
+fn freight_preview(state: &ServerState, query: &str) -> String {
+    let q = parse_query(query);
+    let seed: u64 = q.get("seed").and_then(|s| s.parse().ok()).unwrap_or(1);
+    let net_guard = state.net.read().unwrap();
+    let net: &Network = &net_guard;
+    let gtfs = crate::game::build_schedule(net, false, None);
+    let (trains, errors) = freight_for(net, &q, seed, &gtfs);
+    let list: Vec<_> = trains
+        .iter()
+        .map(|f| {
+            serde_json::json!({
+                "id": f.gt.train,
+                "corridor": f.corridor,
+                "from": net.stop_name(&f.gt.from),
+                "to": net.stop_name(&f.gt.to),
+                "dep": crate::freight::hhmm(f.gt.stops.first().map(|s| s.d).unwrap_or(0) as f64),
+                "length_m": f.stock.length_m,
+                "vmax_kmh": f.stock.vmax_kmh,
+            })
+        })
+        .collect();
+    serde_json::json!({ "seed": seed, "trains": list, "errors": errors }).to_string()
+}
+
+/// Convierte el día generado de un escenario (`frt`, `seed`) en un escenario FIJO guardado (los
+/// mismos trenes a la misma hora en todas las runs). `name` = nombre del nuevo escenario.
+fn freight_materialize(state: &ServerState, query: &str) -> String {
+    let q = parse_query(query);
+    let seed: u64 = q.get("seed").and_then(|s| s.parse().ok()).unwrap_or(1);
+    let id = q.get("frt").cloned().unwrap_or_default();
+    let Some(sc) = crate::freight::scenario_by_id(&id) else {
+        return serde_json::json!({ "ok": false, "error": "Escenario desconocido" }).to_string();
+    };
+    let net_guard = state.net.read().unwrap();
+    let gtfs = crate::game::build_schedule(&net_guard, false, None);
+    let start = gtfs.iter().filter_map(|t| t.stops.first().map(|s| s.d)).min().unwrap_or(5 * 3600) as f64;
+    let trains = crate::freight::plan(&sc, seed, start + 300.0, 24.0 * 3600.0);
+    let name = q
+        .get("name")
+        .cloned()
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| format!("{} · semilla {seed}", sc.name));
+    let mut all = crate::freight::load_scenarios();
+    let new_id = format!("fijo_{}_{}", id, seed);
+    all.retain(|s| s.id != new_id);
+    all.push(crate::freight::FreightScenario {
+        id: new_id.clone(),
+        name,
+        kind: "fixed".into(),
+        corridors: Vec::new(),
+        trains,
+        avoid_peak: sc.avoid_peak,
+        note: format!("Día generado de «{}» con la semilla {seed}.", sc.name),
+    });
+    let ok = crate::freight::save_scenarios(&all);
+    serde_json::json!({ "ok": ok, "id": new_id, "scenarios": all }).to_string()
+}
+
+// ---- Datos reales de Renfe (GTFS-RT): recolector, recogida automática, análisis y comparación ----
+
+/// Puerto de control del recolector (`scripts/collect_gtfsrt.py`): instancia única + ping/stop.
+const GTFSRT_CTRL: &str = "127.0.0.1:47231";
+const GTFSRT_DIR: &str = "raw/gtfsrt";
+
+/// Pregunta al recolector en marcha por su estado. `None` = no hay ninguno escuchando.
+fn gtfsrt_ctrl(cmd: &str) -> Option<String> {
+    use std::io::{Read, Write};
+    let addr: std::net::SocketAddr = GTFSRT_CTRL.parse().ok()?;
+    let mut s = std::net::TcpStream::connect_timeout(&addr, std::time::Duration::from_millis(400)).ok()?;
+    s.set_read_timeout(Some(std::time::Duration::from_millis(800))).ok();
+    s.write_all(cmd.as_bytes()).ok()?;
+    let mut out = String::new();
+    s.read_to_string(&mut out).ok();
+    Some(out.trim().to_string())
+}
+
+/// Estado de la recogida: si hay recolector grabando, ficheros por día (sondeos y tamaño), avisos
+/// y el último análisis (`processed/gtfsrt/observed.json`).
+fn gtfsrt_status() -> String {
+    let running: Option<serde_json::Value> = gtfsrt_ctrl("ping").and_then(|s| serde_json::from_str(&s).ok());
+    let mut days = Vec::new();
+    let mut alerts = 0usize;
+    if let Ok(rd) = std::fs::read_dir(GTFSRT_DIR) {
+        let mut files: Vec<_> = rd.flatten().map(|e| e.path()).collect();
+        files.sort();
+        for p in files {
+            let name = p.file_name().and_then(|n| n.to_str()).unwrap_or("").to_string();
+            let Ok(meta) = std::fs::metadata(&p) else { continue };
+            if let Some(day) = name.strip_suffix(".jsonl") {
+                let lines = count_lines_cached(&p, meta.len());
+                if day.starts_with("alerts_") {
+                    alerts += lines;
+                } else {
+                    days.push(serde_json::json!({ "day": day, "polls": lines, "mb": meta.len() as f64 / 1e6 }));
+                }
+            }
+        }
+    }
+    let observed: serde_json::Value = std::fs::read_to_string(crate::compare::OBSERVED_PATH)
+        .ok()
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or(serde_json::Value::Null);
+    serde_json::json!({
+        "running": running,
+        "days": days,
+        "alerts": alerts,
+        "observed": {
+            "days": observed["days"],
+            "polls": observed["polls"],
+            "trips": observed["trips"],
+            "segments": observed["segments"].as_object().map(|m| m.len()).unwrap_or(0),
+            "delays_by_line": observed["delays_by_line"],
+            "canceled_by_line": observed["canceled_by_line"],
+            "alerts_last": observed["alerts_last"],
+        },
+    })
+    .to_string()
+}
+
+/// Líneas (= sondeos) de un fichero que solo crece: se cachea (tamaño, líneas) y solo se leen los
+/// bytes nuevos desde la última vez (el del día pesa ~20 MB; la página pregunta a menudo).
+fn count_lines_cached(p: &std::path::Path, len: u64) -> usize {
+    use std::io::{Read, Seek, SeekFrom};
+    static CACHE: std::sync::OnceLock<Mutex<HashMap<std::path::PathBuf, (u64, usize)>>> = std::sync::OnceLock::new();
+    let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut c = cache.lock().unwrap();
+    let (mut seen, mut lines) = c.get(p).copied().unwrap_or((0, 0));
+    if len < seen {
+        (seen, lines) = (0, 0); // fichero rehecho: contar de nuevo
+    }
+    if len > seen {
+        if let Ok(mut f) = std::fs::File::open(p) {
+            if f.seek(SeekFrom::Start(seen)).is_ok() {
+                let mut buf = Vec::with_capacity((len - seen) as usize);
+                if f.take(len - seen).read_to_end(&mut buf).is_ok() {
+                    lines += buf.iter().filter(|&&b| b == b'\n').count();
+                    seen += buf.len() as u64;
+                }
+            }
+        }
+        c.insert(p.to_path_buf(), (seen, lines));
+    }
+    lines
+}
+
+/// Ejecuta `scripts/gtfsrt_autostart.ps1 -Action <a>` (tarea programada de Windows) → su JSON.
+fn gtfsrt_autostart(action: &str) -> String {
+    let out = std::process::Command::new("powershell")
+        .args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "scripts/gtfsrt_autostart.ps1", "-Action", action])
+        .output();
+    match out {
+        Ok(o) => {
+            let s = String::from_utf8_lossy(&o.stdout).trim().to_string();
+            if s.starts_with('{') {
+                s
+            } else {
+                serde_json::json!({ "ok": false, "error": format!("{s} {}", String::from_utf8_lossy(&o.stderr).trim()) }).to_string()
+            }
+        }
+        Err(e) => serde_json::json!({ "ok": false, "error": format!("No se pudo ejecutar PowerShell: {e}") }).to_string(),
+    }
+}
+
+/// Arranca el recolector ahora (sin consola, independiente del servidor). Si ya hay uno, no hace nada.
+fn gtfsrt_start() -> String {
+    if gtfsrt_ctrl("ping").is_some() {
+        return serde_json::json!({ "ok": true, "already": true }).to_string();
+    }
+    let script = "scripts/collect_gtfsrt.py";
+    for py in ["pythonw", "python", "py"] {
+        if std::process::Command::new(py)
+            .args([script, "--every", "20"])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .is_ok()
+        {
+            return serde_json::json!({ "ok": true, "python": py }).to_string();
+        }
+    }
+    serde_json::json!({ "ok": false, "error": "No se encuentra Python para arrancar el recolector." }).to_string()
+}
+
+fn gtfsrt_stop() -> String {
+    match gtfsrt_ctrl("stop") {
+        Some(_) => serde_json::json!({ "ok": true }).to_string(),
+        None => serde_json::json!({ "ok": true, "was_running": false }).to_string(),
+    }
+}
+
+/// Ejecuta `scripts/analyze_gtfsrt.py` (tiempos de tramo/parada, retrasos y cancelaciones reales).
+fn gtfsrt_analyze() -> String {
+    for py in ["python", "py", "python3"] {
+        if let Ok(o) = std::process::Command::new(py).args(["scripts/analyze_gtfsrt.py", "--min-n", "2"]).output() {
+            if o.status.success() {
+                let log = String::from_utf8_lossy(&o.stdout).to_string();
+                return serde_json::json!({ "ok": true, "log": log }).to_string();
+            }
+        }
+    }
+    serde_json::json!({ "ok": false, "error": "No se pudo ejecutar scripts/analyze_gtfsrt.py" }).to_string()
+}
+
+/// Comparación simulador (antes / ahora) frente a Renfe (horario y datos reales), como `compare`.
+fn compare_json(state: &ServerState, query: &str) -> String {
+    let q = parse_query(query);
+    let seed: u64 = q.get("seed").and_then(|s| s.parse().ok()).unwrap_or(1);
+    let net_guard = state.net.read().unwrap();
+    let ltv_guard = state.ltv.read().unwrap();
+    let rep = crate::compare::compare(&net_guard, state.adif.as_ref(), ltv_guard.as_deref(), seed);
+    serde_json::to_string(&rep).unwrap_or_else(|_| "{}".into())
 }
 
 fn render_fragment(state: &ServerState, query: &str) -> String {

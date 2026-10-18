@@ -319,6 +319,83 @@ fn build_atomic_graph(net: &Network) -> AtomicGraph {
     AtomicGraph { adj, atomic, coords }
 }
 
+/// Enrutador sobre el grafo ATÓMICO (solo tramos que recorre algún tren de Rodalies): camino más
+/// corto POR DISTANCIA entre dos paradas. Lo usan los mercancías, que no están en el GTFS: así
+/// circulan por la misma vía física (mismos cantones y señales) que los trenes de viajeros.
+pub struct AtomicRouter {
+    g: AtomicGraph,
+}
+
+impl AtomicRouter {
+    pub fn new(net: &Network) -> Self {
+        AtomicRouter { g: build_atomic_graph(net) }
+    }
+
+    /// Dijkstra por distancia geográfica entre paradas consecutivas. `None` si no hay camino.
+    pub fn route(&self, a: &str, b: &str) -> Option<Vec<String>> {
+        use std::cmp::Ordering;
+        use std::collections::BinaryHeap;
+        #[derive(PartialEq)]
+        struct St(f64, String);
+        impl Eq for St {}
+        impl PartialOrd for St {
+            fn partial_cmp(&self, o: &Self) -> Option<Ordering> {
+                Some(self.cmp(o))
+            }
+        }
+        impl Ord for St {
+            fn cmp(&self, o: &Self) -> Ordering {
+                o.0.total_cmp(&self.0).then_with(|| o.1.cmp(&self.1))
+            }
+        }
+        if a == b {
+            return Some(vec![a.to_string()]);
+        }
+        let mut dist: HashMap<String, f64> = HashMap::new();
+        let mut prev: HashMap<String, String> = HashMap::new();
+        let mut heap = BinaryHeap::new();
+        dist.insert(a.to_string(), 0.0);
+        heap.push(St(0.0, a.to_string()));
+        while let Some(St(d, u)) = heap.pop() {
+            if u == b {
+                break;
+            }
+            if d > *dist.get(&u).unwrap_or(&f64::INFINITY) {
+                continue;
+            }
+            let Some(nbrs) = self.g.adj.get(&u) else { continue };
+            let pu = self.g.coords.get(&u).copied();
+            for v in nbrs {
+                let w = match (pu, self.g.coords.get(v)) {
+                    (Some(p), Some(&q)) => haversine_m(p, q),
+                    _ => 1000.0,
+                };
+                let nd = d + w;
+                if nd < *dist.get(v).unwrap_or(&f64::INFINITY) {
+                    dist.insert(v.clone(), nd);
+                    prev.insert(v.clone(), u.clone());
+                    heap.push(St(nd, v.clone()));
+                }
+            }
+        }
+        if !dist.contains_key(b) {
+            return None;
+        }
+        let mut path = vec![b.to_string()];
+        let mut cur = b.to_string();
+        while let Some(p) = prev.get(&cur) {
+            path.push(p.clone());
+            cur = p.clone();
+        }
+        path.reverse();
+        (path.first().map(|s| s.as_str()) == Some(a)).then_some(path)
+    }
+
+    pub fn coord(&self, id: &str) -> Option<(f64, f64)> {
+        self.g.coords.get(id).copied()
+    }
+}
+
 /// Color estable de reserva cuando el feed no trae `route_color` (mismo criterio que el
 /// mapa de la red): tono derivado del nombre, luminosidad moderada para fondo claro.
 use crate::topology::display_line;
@@ -721,7 +798,7 @@ pub fn schedule_json(net: &Network, optimized: bool, line_filter: Option<&str>) 
 /// Inserta los nodos de BIFURCACIÓN (trazado real de vía) entre cada par de paradas consecutivas:
 /// el tren pasa (sin parar) por la aguja a la hora interpolada por la distancia de vía recorrida.
 /// Así el tramo común estación→bifurcación es el MISMO cantón para todos los ramales que lo usan.
-fn insert_junctions(stops: Vec<GameStop>) -> Vec<GameStop> {
+pub(crate) fn insert_junctions(stops: Vec<GameStop>) -> Vec<GameStop> {
     let Some(g) = crate::track_geometry::global() else { return stops };
     let mut out = Vec::with_capacity(stops.len() + 4);
     for (i, st) in stops.iter().enumerate() {

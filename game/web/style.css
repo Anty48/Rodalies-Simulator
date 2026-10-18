@@ -564,6 +564,8 @@ body.ctc {
   filter: drop-shadow(0 1px 1.5px rgba(0,0,0,0.75));
   transition: filter .15s;
 }
+/* Mercancías: rectángulo marrón (tren largo), no el triángulo de los de viajeros. */
+.trn-ic.frt .trn-tri { width: 7px; height: 18px; border: 0; border-radius: 2px; background: var(--c, #8a5a2b); box-shadow: 0 0 0 1.5px #f3e6d6, 0 1px 3px rgba(0,0,0,.8); }
 .trn-ic.late .trn-tri { filter: drop-shadow(0 0 4px var(--naranja)) drop-shadow(0 0 1px #000); }
 .trn-ic.hold .trn-tri { filter: drop-shadow(0 0 5px var(--rojo)) drop-shadow(0 0 2px var(--rojo)); }
 /* Semáforos de tramo: triángulo verde/rojo según el aspecto. */

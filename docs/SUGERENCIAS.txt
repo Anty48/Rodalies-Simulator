@@ -1,0 +1,161 @@
+SUGERENCIAS · Rod4lia 2.0 como laboratorio hiperrealista de horarios y organización de líneas
+Fecha: 2026-10-16 (rama andana-incidencias-export, tras commit 16a496f)
+Estado: SOLO PROPUESTAS — nada aplicado todavía. Marcar [x] al completar.
+
+======================================================================================
+DIAGNÓSTICO
+======================================================================================
+La física de VÍA está muy avanzada: vía real de OSM, Vmax, LTV, bloques, vía única con testigo,
+material por línea y cinemática. Lo que falta es casi todo lo que NO es la vía:
+  - Pasajeros: no los hay de verdad; la demanda es NOMINAL_PAX=300 multiplicado por un perfil horario.
+  - Material y personal: cada tren nace en cabecera a su hora y desaparece al final; no hay
+    rotación de unidades ni de maquinistas.
+  - Regulación: no hay un regulador del CTC que tome decisiones; los conflictos se resuelven por
+    orden de llegada (FIFO), salvo la prioridad de los regionales en vía única.
+  - Validación: nunca se ha contrastado con retrasos reales.
+
+Esto explica en buena parte la duda del margen de los horarios (sin horarios casi nadie se
+retrasa). Al borrar passenger_model.rs, la parada ya NO crece con el retraso (ahora es fija,
+20–60 s por estación). Sin ese bucle de realimentación (más retraso → más gente en el andén →
+más tiempo parado → más retraso) y sin rotación de material, el retraso no puede amplificarse
+como en la realidad.
+
+======================================================================================
+NIVEL 1 — Lo que más realismo aporta (empezar aquí)
+======================================================================================
+[ ] 1. CALIBRACIÓN CON RETRASOS REALES (GTFS-RT de Renfe).
+       Renfe publica trip updates y posiciones de Cercanías en tiempo real.
+       - Recolector que guarde semanas de datos.
+       - Página /validacion que compare la distribución de retrasos simulada con la real por
+         línea, tramo y hora: puntualidad a 3 y 5 min (métrica oficial) y percentiles 50/90/99.
+       Sin esto, «realista» es una impresión, no un dato. Resolvería directamente la duda del margen.
+
+[ ] 2. PARADA DINÁMICA SEGÚN LOS PASAJEROS.
+       Recuperar la invariante perdida («parada extra = 0 si el retraso es 0») en el motor nuevo.
+       La parada depende de los que suben y bajan, del nº de puertas del material
+       (447/450/465/470), de la ocupación y del retraso acumulado (intervalo mayor = más gente
+       esperando). Genera el efecto de trenes que se acaban juntando (bunching), uno de los
+       mecanismos de retraso más importantes de Rodalies.
+
+[ ] 3. ROTACIÓN DE MATERIAL.
+       Usar block_id del GTFS o, si falta, inferir los enlaces llegada→salida en cada cabecera con
+       un tiempo mínimo de cambio de cabina (3–5 min). Un tren que llega tarde retrasa su
+       siguiente servicio. Bonus: tamaño de flota por línea, unidades necesarias en punta y
+       pernoctación en cocheras (Cornellà, Mataró, Sant Andreu Comtal…).
+
+[ ] 4. REGULADOR DEL CTC CON POLÍTICAS CONFIGURABLES.
+       - Prioridades por categoría y por retraso.
+       - Adelantamientos en estaciones con vía de apartado.
+       - Esperar conexiones entre trenes.
+       - Acortar trayectos (dar la vuelta antes del destino).
+       - Suprimir servicios cuando el retraso supera un umbral.
+       Clave como laboratorio: la misma red da resultados muy distintos según la política.
+
+[ ] 5. QUE LAS VÍAS DE ANDÉN Y LOS ITINERARIOS DE LA ESTACIÓN LIMITEN DE VERDAD.
+       Hoy las vías por estación solo se usan en el panel visual.
+       - Asignar vía a cada tren.
+       - Conflictos de itinerario en la entrada a la estación (cruzar la vía contraria, p. ej. al
+         dar la vuelta en una cabecera).
+       - Cruces a nivel en bifurcaciones (Aragó, El Prat, Montcada, Castellbisbal…).
+       (El enclavamiento de estación ya estaba apuntado como pendiente.)
+
+======================================================================================
+NIVEL 2 — Física y señalización más finas
+======================================================================================
+[ ] 6. PENDIENTES Y DINÁMICA REAL. Altimetría con modelo de elevación (DEM del ICGC o SRTM) sobre la
+       polilínea OSM, resistencia al avance (fórmula de Davis), curvas de esfuerzo de tracción por
+       serie y masa cargada según la ocupación (hoy aceleración fija al 75%, ACCEL_FRACTION=0.75).
+       Afecta a las rampas de la R3, la R4 a Manresa y el Garraf. Bonus: consumo de energía.
+
+[ ] 7. SEÑALES REALES. Posición desde OSM (railway=signal) en vez de una cada 1,6 km. Sustituir el
+       −20% en ámbar por la lógica ASFA Digital: anuncio de parada → control de velocidad a
+       60/80 km/h, y curva de frenado hasta la señal en rojo.
+
+[ ] 8. AGUJAS Y VELOCIDAD DE DESVÍO. Ubicar agujas desde OSM (railway=switch) y limitar la velocidad
+       al pasar por vía desviada.
+
+[ ] 9. LONGITUD DEL TREN FRENTE A LA DEL ANDÉN. Composición simple o doble (UM), y bloqueo de la cola
+       hasta que el último coche libera el cantón (hoy el tren se trata como un punto).
+
+[ ] 10. TIPOS DE DÍA. Laborable, sábado y festivo a partir del calendar del GTFS, con demanda distinta
+        en cada uno; obras de fin de semana como escenarios.
+
+======================================================================================
+NIVEL 3 — Herramientas de laboratorio (diseñar y comparar)
+======================================================================================
+[ ] 11. EDITOR DE LÍNEAS Y SERVICIOS. Crear o modificar una línea: recorrido, paradas, patrones
+        semidirectos, cabeceras y frecuencia (amplía el creador de cadencias).
+        Ej.: «R2N cada 10' con semidirectos a Granollers», «partir la R4 en Sant Vicenç».
+
+[ ] 12. EDITOR DE INFRAESTRUCTURA. Desdoblar un tramo de vía única, añadir vía de apartado, andén o
+        estación, cambiar Vmax o LTV. Ej.: «¿cuánto ganaría la R3 desdoblando La Garriga–Vic?».
+
+[ ] 13. COMPROBADOR DE VIABILIDAD DEL HORARIO (antes de simular). Intervalo mínimo por cantón, márgenes
+        de regularidad por tramo (estilo UIC 451), cruces imposibles en vía única, material
+        insuficiente. Avisar sin necesidad de correr el motor.
+
+[ ] 14. CAPACIDAD SEGÚN UIC 406. Ocupación por compresión de cada corredor (tronco Sants–Clot,
+        Montcada…) en un mapa de calor por tramo y franja horaria.
+
+[ ] 15. COMPARADOR A/B CON ESTADÍSTICA. Dos escenarios × N semillas comunes, intervalos de confianza y
+        prueba de significancia: saber si una mejora es real o ruido del Monte Carlo. (El historial
+        de runs ya existe; falta el rigor estadístico.)
+
+[ ] 16. KPIs DEL PASAJERO Y DEL OPERADOR.
+        - Pasajero: tiempo de viaje puerta a puerta, espera, transbordos perdidos, retraso ponderado
+          por pasajeros reales.
+        - Operador: tren-km, unidades y maquinistas necesarios, energía.
+        Hoy todo es «minutos de retraso de los trenes».
+
+[ ] 17. OPTIMIZADOR DE DOS NIVELES (ya en ROADMAP.md): desfase por línea y luego ajuste fino por tren.
+        Más adelante: optimizar también la asignación de vías y la política de regulación, no solo
+        la fase.
+
+======================================================================================
+NIVEL 4 — Modelo de pasajeros (más esfuerzo, mucho valor)
+======================================================================================
+[ ] 18. MATRIZ ORIGEN-DESTINO construida con las afluencias publicadas de Rodalies/ATM (datos abiertos
+        de validaciones por estación), con elección de ruta y transbordos en Sants, PdG, Clot, Arc de
+        Triomf y Montcada. La necesitan el punto 2 (parada), el 16 (KPIs) y el 4 (esperar conexiones).
+
+[ ] 19. OCUPACIÓN POR TREN y pasajeros que no caben y se quedan en el andén cuando el tren va lleno.
+
+======================================================================================
+NIVEL 5 — Incidencias más ricas
+======================================================================================
+[ ] 20. TAXONOMÍA CON EFECTOS FÍSICOS DISTINTOS:
+        - avería de puertas: más tiempo parado;
+        - unidad averiada: Vmax reducida, remolque o retirada, pérdida de material para la rotación;
+        - catenaria: corte, vía única temporal;
+        - arrollamiento: corte total más tiempo de restablecimiento;
+        - ocupación de vía y maquinista no disponible.
+        Probabilidades calibradas con el histórico (avisos de @rodalies o incidencias publicadas).
+
+[ ] 21. PROTOCOLOS DE RESTABLECIMIENTO conectados al regulador (punto 4): servicios degradados y bus de
+        sustitución.
+
+======================================================================================
+INFRAESTRUCTURA TÉCNICA (lo que permite todo lo anterior)
+======================================================================================
+[ ] 22. REUTILIZAR INFRA/ZONAS ENTRE RUNS. Plantilla inmutable preparada una vez + instancia barata por
+        run. Hoy se reconstruye el perfil ADIF en cada run (~1,4 s); optimizador 414 s → ~120 s.
+        Imprescindible para el Monte Carlo masivo de los puntos 15 y 17.
+
+[ ] 23. TRACE MÁS LIGERO (submuestreo adaptativo; hoy ~12 MB por jornada).
+
+[ ] 24. TEST DE REGRESIÓN DE REFERENCIA (golden run): jornada sintética pequeña con métricas fijadas,
+        para que ningún cambio de física altere resultados sin darnos cuenta.
+
+[ ] 25. ESCENARIOS COMO FICHEROS VERSIONABLES (JSON/TOML con horario + infra + política + incidencias +
+        semillas): experimentos reproducibles y compartibles.
+
+======================================================================================
+ORDEN RECOMENDADO
+======================================================================================
+1 → 2 → 3 → 22 → 4 → 5 → 15/16 → 11/12 → el resto.
+
+  - Primero MEDIR (1): si no, no sabemos si lo que añadimos acerca a la realidad.
+  - Después los dos bucles que amplifican el retraso (2 y 3), que probablemente resuelven la duda
+    del margen.
+  - Luego rendimiento (22), para poder hacer barridos.
+  - Por último el regulador y las herramientas de laboratorio.
