@@ -9,6 +9,7 @@
 
 mod cadence;
 mod calculator;
+mod cloud;
 mod compare;
 mod demand;
 mod engine;

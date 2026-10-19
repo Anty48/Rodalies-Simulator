@@ -58,8 +58,40 @@ Realism data (all optional; the engine falls back to estimates if missing):
   `scripts/collect_gtfsrt.py` → Renfe GTFS-RT (positions, delays, cancellations, skipped stops,
   incident notices of Rodalies every ~20 s) into `raw/gtfsrt/*.jsonl` (~17 MB/day). The collector is
   single-instance with a control port 127.0.0.1:47231 (`ping`/`stop`). Manual: `collect_gtfsrt.bat`.
+  **Cloud** (same page, `src/cloud.rs`): the collector 24/7 on **Cloudflare Workers FREE plan** (no card
+  ⇒ cannot be billed). `scripts/cloudflare/` = a Durable Object (SQLite) with an alarm every 20 s, ONE
+  poll per alarm (free plan = 10 ms CPU per invocation; the feed is chunked and only Rodalies
+  entities are parsed, ~2 ms), gzip rows, 45-day retention (<1 GB DO storage), cron every 10 min re-arms
+  the alarm; API with a Bearer token (`/status`, `/data?since=`, `/alerts`, `/incidents?since=`, `/start`, `/stop`). The
+  simulator deploys it with `npx wrangler@4` (login via browser, `deploy`, `secret put TOKEN`) from a
+  work copy in `report/cloudflare-worker/`; config/token in `report/cloudflare.json` (gitignored); HTTP via
+  `curl`. Test locally without an account: copy `scripts/cloudflare` somewhere, `.dev.vars` with
+  `TOKEN=…`, `npx wrangler@4 dev --test-scheduled`. Data syncs incrementally to `raw/gtfsrt/cloud/`;
+  `analyze_gtfsrt.py` merges PC + cloud, `.jsonl` and `.jsonl.gz`, deduplicating polls by timestamp.
+  **Only one collector records at a time:** the PC collector checks the cloud's `/status` every 2 min
+  and stays on STANDBY while the cloud is enabled and alive (`alive_at` < 150 s); otherwise it records
+  (automatic failover); deploy/start/stop from the simulator send `recheck` to its control port so the
+  switch is immediate. The server auto-syncs the cloud data at startup and every 15 min
+  (`start_cloud_autosync`), and `/datos` also syncs on open; `cloud::sync` is single-flight
+  (Mutex) and only appends polls newer than the last line of each day file (no duplicates).
   `python scripts/analyze_gtfsrt.py` → `processed/gtfsrt/observed.json` (real segment/dwell
-  times, delay distribution per line) used by `compare`.
+  times, delay distribution per line) used by `compare`; `--day D` → `observed_<D>.json` (cached while
+  the day's files don't change), used by «Realidad por línea» (`POST /api/gtfsrt/analyze?day=D`).
+- `/datos` → «Días grabados»: `scripts/gtfsrt_days.py` (PC + nube, dedupe por `t`, caché por fichero) →
+  `processed/gtfsrt/days.json`: cobertura del horario 05–24 h (hora de Madrid sin tzdata), puntualidad,
+  ≥15 min, cancelaciones, avisos y valoración normal/alterado/excepcional/incompleto (umbrales fijos +
+  mediana/MAD de tus días con ≥5 completos). Ruta `/api/gtfsrt/days`.
+- `/datos` order: PC collector + «¿Qué datos da Renfe?» → cloud → «Días grabados» → «Incidencias del día»
+  → «Realidad por línea» (day selectors coloured by the day's verdict). The compare UI was removed for
+  now (`/api/compare` and the CLI remain).
+- Incidencias: `scripts/incidents.py` (`capture` / `list --day D`) → `raw/incidents/<día de publicación>.jsonl`,
+  key = sha1("source|pub|text")[:16] (same in the Worker, so PC/cloud/button never duplicate). Sources:
+  Gencat RSS `incidencies_rodalies_rss_ca_ES.xml` (publication time, lines, text; ONLY current ones →
+  capture often: Worker every 15th alarm ≈5 min, PC collector every 5 min while it records, button
+  `POST /api/incidents/capture`) + Renfe GTFS-RT alerts. `list` also merges the Renfe alerts recorded
+  that day (`before_day` = carried over; Renfe leaves stale alerts, e.g. 6-7/10/2026, active for weeks).
+  X/Twitter and WhatsApp are NOT readable for free (X API is paid; the public syndication endpoint
+  returns random old tweets; WhatsApp channels have no API). `cloud::sync` pulls `/incidents` (`last_inc`).
 - LTV: `/configuracion` → "Buscar y actualizar LTV" runs `scripts/fetch_adif_ltv.py` and reloads.
 
 UI languages (es/ca/en): `game/web/i18n.js` translates the rendered DOM using

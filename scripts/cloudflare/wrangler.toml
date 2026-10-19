@@ -1,0 +1,18 @@
+# Recolector GTFS-RT de Rodalies en Cloudflare Workers (plan gratuito). Lo despliega el simulador
+# desde /datos → «En la nube» (npx wrangler deploy). No hace falta tocar nada aquí.
+name = "rod4lia-gtfsrt"
+main = "src/index.js"
+compatibility_date = "2025-09-01"
+workers_dev = true
+
+[triggers]
+crons = ["*/10 * * * *"]
+
+[[durable_objects.bindings]]
+name = "COLLECTOR"
+class_name = "Collector"
+
+# El plan gratuito solo admite Durable Objects con SQLite.
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["Collector"]

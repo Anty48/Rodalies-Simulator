@@ -13,7 +13,8 @@ y guarda SOLO lo de Rodalies en raw/gtfsrt/:
   collector.log            arranques, errores y un resumen cada ~10 min
 
 Una sola instancia: el recolector escucha en 127.0.0.1:47231 (si ya hay uno, el segundo sale). Por
-ese puerto el simulador le pregunta el estado («ping») o le pide que pare («stop»).
+ese puerto el simulador le pregunta el estado («ping»), le pide que pare («stop») o que vuelva a mirar
+YA si la nube graba («recheck»). Mientras la nube (Cloudflare) graba, este se queda EN ESPERA.
 
 De esa serie se deducen después (scripts/analyze_gtfsrt.py) los tiempos REALES de cada tramo y de cada
 parada: la transición STOPPED_AT(A) → IN_TRANSIT/INCOMING(B) marca la salida de A y la llegada a B.
@@ -43,7 +44,38 @@ RODALIES_ROUTE = re.compile(r"^5\dT")
 STATUS = {"STOPPED_AT": "S", "IN_TRANSIT_TO": "T", "INCOMING_AT": "I"}
 PLATF = re.compile(r"PLATF\.\((\d+)\)")
 
-state = {"polls": 0, "last": 0, "stop": False, "started": time.time(), "errors": 0}
+# saved_at = hora local (epoch) del último sondeo GUARDADO; next_at = cuándo se hará el siguiente.
+state = {"polls": 0, "last": 0, "stop": False, "started": time.time(), "errors": 0, "saved_at": 0.0, "next_at": 0.0,
+         "standby": False}
+
+# ---- Solo UN recolector a la vez: si la nube (Cloudflare, ver src/cloud.rs) está grabando, este se
+# queda EN ESPERA y solo comprueba de vez en cuando. Si la nube deja de dar señales de vida (o se
+# para), toma el relevo él. Así siempre graba exactamente uno.
+CLOUD_CFG = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "report", "cloudflare.json")
+CLOUD_CHECK_S = 120     # cada cuánto se pregunta a la nube
+CLOUD_ALIVE_S = 150     # la nube cuenta como viva si su última alarma fue hace menos de esto
+
+
+def cloud_recording():
+    """True si la nube está desplegada, activada y con señal de vida reciente; False si no;
+    None si no se puede saber (sin red): entonces se mantiene lo que se estaba haciendo."""
+    try:
+        with open(CLOUD_CFG, encoding="utf-8") as f:
+            cfg = json.load(f)
+    except (OSError, ValueError):
+        return False
+    if not cfg.get("deployed") or not cfg.get("url") or not cfg.get("token"):
+        return False
+    try:
+        req = urllib.request.Request(cfg["url"].rstrip("/") + "/status",
+                                     headers={"Authorization": "Bearer " + cfg["token"], "User-Agent": "rod4lia-sim/1.0"})
+        with urllib.request.urlopen(req, timeout=15) as r:
+            st = json.loads(r.read().decode("utf-8"))
+    except Exception:
+        return None
+    run = st.get("running") or {}
+    alive = run.get("alive_at") or run.get("saved_at") or 0
+    return bool(st.get("enabled")) and (st.get("now", time.time()) - alive) < CLOUD_ALIVE_S
 
 
 def log(msg):
@@ -159,9 +191,15 @@ def control_server(sock):
             if cmd == "stop":
                 state["stop"] = True
                 conn.sendall(b"stopping\n")
+            elif cmd == "recheck":
+                # El simulador acaba de desplegar/arrancar/parar la nube: comprobarla YA (no esperar 2 min).
+                state["recheck"] = True
+                conn.sendall(b"ok\n")
             else:
                 info = {"pid": os.getpid(), "polls": state["polls"], "last": state["last"],
-                        "started": int(state["started"]), "errors": state["errors"]}
+                        "started": int(state["started"]), "errors": state["errors"],
+                        "saved_at": state["saved_at"], "next_at": state["next_at"], "now": time.time(),
+                        "standby": state["standby"]}
                 conn.sendall((json.dumps(info) + "\n").encode())
 
 
@@ -186,8 +224,22 @@ def main():
     last_ts = None
     seen_alerts = set()
     next_alerts = 0.0
+    next_inc = 0.0
+    next_cloud = 0.0
     while time.time() < t_end and not state["stop"]:
         t0 = time.time()
+        if t0 >= next_cloud or state.pop("recheck", False):
+            next_cloud = t0 + CLOUD_CHECK_S
+            cloud = cloud_recording()
+            if cloud is not None and cloud != state["standby"]:
+                state["standby"] = cloud
+                log("la nube está grabando: el recolector del PC queda EN ESPERA" if cloud
+                    else "la nube no está grabando: el recolector del PC toma el relevo")
+        if state["standby"]:
+            state["next_at"] = 0.0
+            while not state["stop"] and not state.get("recheck") and time.time() - t0 < 10:
+                time.sleep(0.5)
+            continue
         try:
             ts, rec = poll()
             if ts != last_ts:  # el feed no siempre se refresca entre sondeos: no duplicar
@@ -197,6 +249,7 @@ def main():
                     f.write(json.dumps(rec, separators=(",", ":")) + "\n")
                 state["polls"] += 1
                 state["last"] = ts
+                state["saved_at"] = time.time()
                 if state["polls"] % 30 == 1:
                     log(f"sondeo {state['polls']}: {len(rec['v'])} trens Rodalies, {len(rec['c'])} cancel·lats")
             if t0 >= next_alerts:
@@ -204,12 +257,23 @@ def main():
                 n = poll_alerts(seen_alerts)
                 if n:
                     log(f"{n} avisos nous")
+            if t0 >= next_inc:
+                # Incidencias del RSS de la Generalitat (solo trae las vigentes: capturar a menudo).
+                next_inc = t0 + 300
+                try:
+                    import incidents
+                    added = incidents.store(incidents.fetch_gencat())
+                    if added:
+                        log(f"{added} incidències noves (Generalitat)")
+                except Exception as ex:
+                    log(f"incidències: {ex}")
         except Exception as ex:  # red caída: seguir intentándolo
             state["errors"] += 1
             if state["errors"] % 20 == 1:
                 log(f"error: {ex}")
         # Espera troceada: así un «stop» se atiende enseguida.
-        while not state["stop"] and time.time() - t0 < max(1.0, a.every):
+        state["next_at"] = t0 + max(1.0, a.every)
+        while not state["stop"] and not state.get("recheck") and time.time() - t0 < max(1.0, a.every):
             time.sleep(0.5)
     log("recolector aturat")
     sock.close()

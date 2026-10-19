@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Deduce los tiempos REALES de tramo y de parada de Rodalies a partir de lo grabado por
-scripts/collect_gtfsrt.py (raw/gtfsrt/*.jsonl) y escribe processed/gtfsrt/observed.json.
+scripts/collect_gtfsrt.py (raw/gtfsrt/*.jsonl[.gz] del PC y raw/gtfsrt/cloud/ descargado del
+servidor de la nube; un sondeo repetido en ambos se cuenta una vez) y escribe
+processed/gtfsrt/observed.json.
 
 Método (resolución = el refresco del feed, ~20-30 s):
   * Por viaje (tripId) se ordenan las observaciones (timestamp del vehículo, parada, estado).
@@ -14,9 +16,14 @@ Método (resolución = el refresco del feed, ~20-30 s):
     varias paradas (se cuenta en `missed_stops`).
   * Retraso: el campo `delay` de trip_updates (s) por línea → distribución real de retrasos.
 
-Uso: python scripts/analyze_gtfsrt.py [--min-n 3]
+Con --day AAAA-MM-DD analiza solo ese día y escribe processed/gtfsrt/observed_<día>.json (la página
+/datos lo usa para «Realidad por línea»; observed.json, el de todos los días, no se toca). Si el
+resultado ya existe y es más nuevo que los datos del día, no se recalcula.
+
+Uso: python scripts/analyze_gtfsrt.py [--min-n 3] [--day AAAA-MM-DD]
 """
 import argparse
+import gzip
 import sys
 import glob
 import re
@@ -28,6 +35,23 @@ from collections import defaultdict
 BASE = os.path.join(os.path.dirname(__file__), "..")
 RAW = os.path.join(BASE, "raw", "gtfsrt")
 OUT_DIR = os.path.join(BASE, "processed", "gtfsrt")
+
+
+def data_files(pattern):
+    """Ficheros de datos del PC (raw/gtfsrt) y descargados de la nube (raw/gtfsrt/cloud), sin
+    comprimir o .gz, ordenados por día. Devuelve (ruta, día)."""
+    out = []
+    for d in (RAW, os.path.join(RAW, "cloud")):
+        for ext in (".jsonl", ".jsonl.gz"):
+            for path in glob.glob(os.path.join(d, pattern + ext)):
+                name = os.path.basename(path)
+                day = name[: -len(ext)].replace("alerts_", "")
+                out.append((path, day))
+    return sorted(out, key=lambda x: (x[1], x[0]))
+
+
+def open_any(path):
+    return gzip.open(path, "rt", encoding="utf-8") if path.endswith(".gz") else open(path, encoding="utf-8")
 
 
 def pct(v, p):
@@ -54,7 +78,19 @@ def main():
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     ap = argparse.ArgumentParser()
     ap.add_argument("--min-n", type=int, default=3)
+    ap.add_argument("--day", default=None, help="analizar solo este día (AAAA-MM-DD)")
     a = ap.parse_args()
+    if a.day and not re.fullmatch(r"\d{4}-\d{2}-\d{2}", a.day):
+        sys.exit("--day debe ser AAAA-MM-DD")
+    os.makedirs(OUT_DIR, exist_ok=True)
+    dst = os.path.join(OUT_DIR, f"observed_{a.day}.json" if a.day else "observed.json")
+    sources = [p for p, _d in data_files(a.day or "*")]
+    if a.day:
+        if not sources:
+            sys.exit(f"No hay datos grabados del {a.day}")
+        if os.path.exists(dst) and os.path.getmtime(dst) >= max(os.path.getmtime(p) for p in sources):
+            print(f"OK {dst} (ya calculado)")
+            return
 
     obs = defaultdict(list)  # (día, trip) -> [(ts, stop, estado)]
     line_of = {}
@@ -62,15 +98,19 @@ def main():
     days = []
     polls = 0
     canceled = defaultdict(set)  # línea -> viajes cancelados (únicos por día)
-    for path in sorted(glob.glob(os.path.join(RAW, "[0-9]*.jsonl"))):
-        day = os.path.basename(path)[:-6]
-        days.append(day)
-        with open(path, encoding="utf-8") as f:
+    seen_t = set()  # el mismo sondeo puede venir del PC y de la nube: se cuenta una vez
+    for path, day in data_files(a.day or "[0-9]*"):
+        if day not in days:
+            days.append(day)
+        with open_any(path) as f:
             for ln in f:
                 try:
                     rec = json.loads(ln)
                 except ValueError:
                     continue
+                if rec.get("t") in seen_t:
+                    continue
+                seen_t.add(rec.get("t"))
                 polls += 1
                 for tid in rec.get("c", []):
                     m = re.search(r"\d(R[A-Z0-9]*)$", tid)
@@ -157,17 +197,20 @@ def main():
             out["delays_by_line"][line] = d
     out["canceled_by_line"] = {l: len(v) for l, v in sorted(canceled.items())}
     alerts = []
-    for path in sorted(glob.glob(os.path.join(RAW, "alerts_*.jsonl"))):
-        with open(path, encoding="utf-8") as f:
+    seen_al = set()
+    for path, _day in data_files(f"alerts_{a.day}" if a.day else "alerts_*"):
+        with open_any(path) as f:
             for ln in f:
                 try:
-                    alerts.append(json.loads(ln))
+                    a = json.loads(ln)
                 except ValueError:
-                    pass
+                    continue
+                if (a.get("id"), a.get("text")) not in seen_al:
+                    seen_al.add((a.get("id"), a.get("text")))
+                    alerts.append(a)
+    alerts.sort(key=lambda a: a.get("seen") or 0)
     out["alerts"] = len(alerts)
     out["alerts_last"] = [{"seen": a.get("seen"), "text": a.get("text", "")[:300]} for a in alerts[-20:]]
-    os.makedirs(OUT_DIR, exist_ok=True)
-    dst = os.path.join(OUT_DIR, "observed.json")
     with open(dst, "w", encoding="utf-8") as f:
         json.dump(out, f, ensure_ascii=False, indent=1)
     print(f"OK {dst}: {len(out['segments'])} tramos, {len(out['dwells'])} paradas, "

@@ -83,6 +83,7 @@ pub struct GtfsJob {
 
 pub async fn serve(state: Arc<ServerState>, port: u16) -> std::io::Result<()> {
     let listener = TcpListener::bind(("127.0.0.1", port)).await?;
+    start_cloud_autosync();
     println!("\n🌐 Servidor interactiu a  http://127.0.0.1:{port}");
     println!("   (Ctrl+C per aturar)\n");
     loop {
@@ -250,7 +251,21 @@ async fn handle(mut stream: TcpStream, state: Arc<ServerState>) -> std::io::Resu
         "/api/gtfsrt/uninstall" if is_post => ("200 OK", "application/json", gtfsrt_autostart("uninstall").into_bytes()),
         "/api/gtfsrt/start" if is_post => ("200 OK", "application/json", gtfsrt_start().into_bytes()),
         "/api/gtfsrt/stop" if is_post => ("200 OK", "application/json", gtfsrt_stop().into_bytes()),
-        "/api/gtfsrt/analyze" if is_post => ("200 OK", "application/json", gtfsrt_analyze().into_bytes()),
+        "/api/gtfsrt/days" => ("200 OK", "application/json", gtfsrt_days().into_bytes()),
+        "/api/gtfsrt/analyze" if is_post => ("200 OK", "application/json", gtfsrt_analyze(day_param(query)).into_bytes()),
+        // Incidencias publicadas (RSS de la Generalitat + avisos de Renfe) asociadas a cada día.
+        "/api/incidents" => ("200 OK", "application/json", incidents_list(day_param(query)).into_bytes()),
+        "/api/incidents/capture" if is_post => ("200 OK", "application/json", incidents_capture().into_bytes()),
+        // Recolector en la NUBE (Cloudflare Workers, plan gratuito; ver cloud.rs).
+        "/api/cloud/info" => ("200 OK", "application/json", crate::cloud::info_json().into_bytes()),
+        "/api/cloud/login" if is_post => ("200 OK", "application/json", crate::cloud::login().into_bytes()),
+        "/api/cloud/whoami" => ("200 OK", "application/json", crate::cloud::whoami().into_bytes()),
+        "/api/cloud/deploy" if is_post => ("200 OK", "application/json", cloud_then_recheck(crate::cloud::deploy()).into_bytes()),
+        "/api/cloud/status" => ("200 OK", "application/json", crate::cloud::status().into_bytes()),
+        "/api/cloud/start" if is_post => ("200 OK", "application/json", cloud_then_recheck(crate::cloud::service("start")).into_bytes()),
+        "/api/cloud/stop" if is_post => ("200 OK", "application/json", cloud_then_recheck(crate::cloud::service("stop")).into_bytes()),
+        "/api/cloud/sync" if is_post => ("200 OK", "application/json", crate::cloud::sync().into_bytes()),
+        "/api/cloud/forget" if is_post => ("200 OK", "application/json", crate::cloud::forget().into_bytes()),
         "/api/compare" => ("200 OK", "application/json", compare_json(&state, query).into_bytes()),
         "/api/freight/preview" => ("200 OK", "application/json", freight_preview(&state, query).into_bytes()),
         "/api/freight/materialize" if is_post => {
@@ -1186,7 +1201,6 @@ fn freight_materialize(state: &ServerState, query: &str) -> String {
 
 /// Puerto de control del recolector (`scripts/collect_gtfsrt.py`): instancia única + ping/stop.
 const GTFSRT_CTRL: &str = "127.0.0.1:47231";
-const GTFSRT_DIR: &str = "raw/gtfsrt";
 
 /// Pregunta al recolector en marcha por su estado. `None` = no hay ninguno escuchando.
 fn gtfsrt_ctrl(cmd: &str) -> Option<String> {
@@ -1200,73 +1214,11 @@ fn gtfsrt_ctrl(cmd: &str) -> Option<String> {
     Some(out.trim().to_string())
 }
 
-/// Estado de la recogida: si hay recolector grabando, ficheros por día (sondeos y tamaño), avisos
-/// y el último análisis (`processed/gtfsrt/observed.json`).
+/// Estado del recolector del PC (puerto de control): si graba, si está en espera de la nube, último
+/// guardado y siguiente lectura. Lo grabado por día lo da `/api/gtfsrt/days`.
 fn gtfsrt_status() -> String {
     let running: Option<serde_json::Value> = gtfsrt_ctrl("ping").and_then(|s| serde_json::from_str(&s).ok());
-    let mut days = Vec::new();
-    let mut alerts = 0usize;
-    if let Ok(rd) = std::fs::read_dir(GTFSRT_DIR) {
-        let mut files: Vec<_> = rd.flatten().map(|e| e.path()).collect();
-        files.sort();
-        for p in files {
-            let name = p.file_name().and_then(|n| n.to_str()).unwrap_or("").to_string();
-            let Ok(meta) = std::fs::metadata(&p) else { continue };
-            if let Some(day) = name.strip_suffix(".jsonl") {
-                let lines = count_lines_cached(&p, meta.len());
-                if day.starts_with("alerts_") {
-                    alerts += lines;
-                } else {
-                    days.push(serde_json::json!({ "day": day, "polls": lines, "mb": meta.len() as f64 / 1e6 }));
-                }
-            }
-        }
-    }
-    let observed: serde_json::Value = std::fs::read_to_string(crate::compare::OBSERVED_PATH)
-        .ok()
-        .and_then(|s| serde_json::from_str(&s).ok())
-        .unwrap_or(serde_json::Value::Null);
-    serde_json::json!({
-        "running": running,
-        "days": days,
-        "alerts": alerts,
-        "observed": {
-            "days": observed["days"],
-            "polls": observed["polls"],
-            "trips": observed["trips"],
-            "segments": observed["segments"].as_object().map(|m| m.len()).unwrap_or(0),
-            "delays_by_line": observed["delays_by_line"],
-            "canceled_by_line": observed["canceled_by_line"],
-            "alerts_last": observed["alerts_last"],
-        },
-    })
-    .to_string()
-}
-
-/// Líneas (= sondeos) de un fichero que solo crece: se cachea (tamaño, líneas) y solo se leen los
-/// bytes nuevos desde la última vez (el del día pesa ~20 MB; la página pregunta a menudo).
-fn count_lines_cached(p: &std::path::Path, len: u64) -> usize {
-    use std::io::{Read, Seek, SeekFrom};
-    static CACHE: std::sync::OnceLock<Mutex<HashMap<std::path::PathBuf, (u64, usize)>>> = std::sync::OnceLock::new();
-    let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
-    let mut c = cache.lock().unwrap();
-    let (mut seen, mut lines) = c.get(p).copied().unwrap_or((0, 0));
-    if len < seen {
-        (seen, lines) = (0, 0); // fichero rehecho: contar de nuevo
-    }
-    if len > seen {
-        if let Ok(mut f) = std::fs::File::open(p) {
-            if f.seek(SeekFrom::Start(seen)).is_ok() {
-                let mut buf = Vec::with_capacity((len - seen) as usize);
-                if f.take(len - seen).read_to_end(&mut buf).is_ok() {
-                    lines += buf.iter().filter(|&&b| b == b'\n').count();
-                    seen += buf.len() as u64;
-                }
-            }
-        }
-        c.insert(p.to_path_buf(), (seen, lines));
-    }
-    lines
+    serde_json::json!({ "running": running }).to_string()
 }
 
 /// Ejecuta `scripts/gtfsrt_autostart.ps1 -Action <a>` (tarea programada de Windows) → su JSON.
@@ -1315,17 +1267,112 @@ fn gtfsrt_stop() -> String {
     }
 }
 
-/// Ejecuta `scripts/analyze_gtfsrt.py` (tiempos de tramo/parada, retrasos y cancelaciones reales).
-fn gtfsrt_analyze() -> String {
+/// Ejecuta un script de `scripts/` con el Python que haya → su salida estándar, o la última línea
+/// de error.
+fn py_script(args: &[&str]) -> Result<String, String> {
+    let mut last_err = String::from("no se encuentra Python");
     for py in ["python", "py", "python3"] {
-        if let Ok(o) = std::process::Command::new(py).args(["scripts/analyze_gtfsrt.py", "--min-n", "2"]).output() {
-            if o.status.success() {
-                let log = String::from_utf8_lossy(&o.stdout).to_string();
-                return serde_json::json!({ "ok": true, "log": log }).to_string();
-            }
+        match std::process::Command::new(py).args(args).output() {
+            Ok(o) if o.status.success() => return Ok(String::from_utf8_lossy(&o.stdout).trim().to_string()),
+            Ok(o) => last_err = String::from_utf8_lossy(&o.stderr).trim().lines().last().unwrap_or("").to_string(),
+            Err(e) => last_err = e.to_string(),
         }
     }
-    serde_json::json!({ "ok": false, "error": "No se pudo ejecutar scripts/analyze_gtfsrt.py" }).to_string()
+    Err(last_err)
+}
+
+/// `day=AAAA-MM-DD` validado (se pasa a scripts y nombres de fichero: nada de rutas).
+fn day_param(query: &str) -> Option<String> {
+    parse_query(query).get("day").filter(|d| {
+        d.len() == 10 && d.bytes().enumerate().all(|(i, b)| if i == 4 || i == 7 { b == b'-' } else { b.is_ascii_digit() })
+    }).cloned()
+}
+
+/// Incidencias de un día (`scripts/incidents.py list`): las publicadas ese día con su hora + los avisos
+/// de Renfe grabados ese día. Sin día = hoy.
+fn incidents_list(day: Option<String>) -> String {
+    let mut args = vec!["scripts/incidents.py", "list"];
+    if let Some(d) = day.as_deref() {
+        args.extend(["--day", d]);
+    }
+    py_script(&args).unwrap_or_else(|e| serde_json::json!({ "items": [], "error": format!("No se pudieron leer las incidencias: {e}") }).to_string())
+}
+
+/// Captura AHORA las incidencias publicadas en los canales oficiales y las asocia a su día.
+fn incidents_capture() -> String {
+    match py_script(&["scripts/incidents.py", "capture"]) {
+        Ok(s) => serde_json::from_str::<serde_json::Value>(&s)
+            .map(|v| serde_json::json!({ "ok": true, "result": v }).to_string())
+            .unwrap_or_else(|_| serde_json::json!({ "ok": false, "error": s }).to_string()),
+        Err(e) => serde_json::json!({ "ok": false, "error": e }).to_string(),
+    }
+}
+
+/// Resumen por día de los datos grabados (PC + nube): cobertura, puntualidad y valoración
+/// (`scripts/gtfsrt_days.py`, con caché: solo recalcula los días nuevos o cambiados).
+fn gtfsrt_days() -> String {
+    match py_script(&["scripts/gtfsrt_days.py"]) {
+        Ok(_) => std::fs::read_to_string("processed/gtfsrt/days.json")
+            .unwrap_or_else(|_| serde_json::json!({ "days": [] }).to_string()),
+        Err(e) => serde_json::json!({ "days": [], "error": format!("No se pudo resumir los días: {e}") }).to_string(),
+    }
+}
+
+/// Ejecuta `scripts/analyze_gtfsrt.py` (tiempos de tramo/parada, retrasos y cancelaciones reales)
+/// de un día (`observed_<día>.json`, cacheado) o de todos (`observed.json`, el que usa `compare`), y
+/// devuelve el resumen por línea.
+fn gtfsrt_analyze(day: Option<String>) -> String {
+    let mut args = vec!["scripts/analyze_gtfsrt.py", "--min-n", "2"];
+    if let Some(d) = day.as_deref() {
+        args.extend(["--day", d]);
+    }
+    if let Err(e) = py_script(&args) {
+        return serde_json::json!({ "ok": false, "error": e }).to_string();
+    }
+    let path = match day.as_deref() {
+        Some(d) => format!("processed/gtfsrt/observed_{d}.json"),
+        None => crate::compare::OBSERVED_PATH.to_string(),
+    };
+    let o: serde_json::Value =
+        std::fs::read_to_string(&path).ok().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default();
+    serde_json::json!({
+        "ok": true,
+        "observed": {
+            "days": o["days"],
+            "polls": o["polls"],
+            "trips": o["trips"],
+            "segments": o["segments"].as_object().map(|m| m.len()).unwrap_or(0),
+            "delays_by_line": o["delays_by_line"],
+            "canceled_by_line": o["canceled_by_line"],
+        },
+    })
+    .to_string()
+}
+
+/// Tras desplegar, arrancar o parar la nube, el recolector del PC lo comprueba YA (no a los 2 min)
+/// para que nunca graben los dos a la vez. Se repite a los 8 s: al arrancar, la nube tarda ~1 s en
+/// dar su primera señal de vida.
+fn cloud_then_recheck(result: String) -> String {
+    gtfsrt_ctrl("recheck");
+    std::thread::spawn(|| {
+        std::thread::sleep(std::time::Duration::from_secs(8));
+        gtfsrt_ctrl("recheck");
+    });
+    result
+}
+
+/// Al abrir el simulador, y cada 15 min mientras esté abierto, descarga los datos nuevos de la nube
+/// (en segundo plano; `cloud::sync` no duplica ni hace dos descargas a la vez).
+fn start_cloud_autosync() {
+    std::thread::spawn(|| loop {
+        if crate::cloud::CloudCfg::load().deployed {
+            let r: serde_json::Value = serde_json::from_str(&crate::cloud::sync()).unwrap_or_default();
+            if let Some(n) = r["downloaded"].as_u64().filter(|&n| n > 0) {
+                println!("☁ Dades noves del núvol: {n} sondeigs, {} avisos", r["alerts"].as_u64().unwrap_or(0));
+            }
+        }
+        std::thread::sleep(std::time::Duration::from_secs(15 * 60));
+    });
 }
 
 /// Comparación simulador (antes / ahora) frente a Renfe (horario y datos reales), como `compare`.

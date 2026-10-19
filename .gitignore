@@ -39,3 +39,7 @@ raw/ltv/*
 
 # Ajustes locales de Claude Code (permisos por máquina, no compartir)
 .claude/settings.local.json
+
+# Cloudflare: estado local de wrangler y secretos de prueba
+scripts/cloudflare/.wrangler/
+scripts/cloudflare/.dev.vars

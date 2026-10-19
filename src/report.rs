@@ -2227,8 +2227,8 @@ pub fn render_freight_page() -> String {
 }
 
 /// Página `/datos`: datos REALES de Renfe (GTFS-RT). Explica qué da Renfe, gestiona el recolector
-/// (ahora / automático con el Programador de tareas de Windows), lista lo grabado, lo analiza y lo
-/// compara con el simulador (`compare`).
+/// (PC: ahora / automático con el Programador de tareas; nube: Cloudflare), lista los días grabados
+/// con su valoración, las incidencias publicadas de cada día y la realidad por línea del día elegido.
 pub fn render_data_page() -> String {
     let head = format!("<title>Rodalies Simulator · Datos reales</title>\n{STYLE}\n{REALISM_CSS}");
     let body = r##"<style>
@@ -2242,6 +2242,34 @@ pub fn render_data_page() -> String {
 .dr-out{margin-top:12px;font-size:.84rem}
 .dr-alert{border-left:3px solid var(--accent);padding:4px 8px;margin:6px 0;font-size:.82rem;background:var(--panel2);border-radius:4px}
 .num{text-align:right;font-variant-numeric:tabular-nums}
+.cl-steps{display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:16px;margin-top:10px}
+.cl-step h3{margin:0 0 6px;font-size:.95rem}
+.cl-guide ol{margin:4px 0;padding-left:18px;font-size:.84rem;line-height:1.5}
+.cl-log{max-height:220px;overflow:auto;background:var(--panel2);border:1px solid var(--border);border-radius:7px;padding:8px;font:12px ui-monospace,Consolas,monospace;white-space:pre-wrap;margin-top:8px}
+.dy-bar{position:relative;height:10px;width:110px;background:var(--panel2);border:1px solid var(--border);border-radius:5px;overflow:hidden;display:inline-block;vertical-align:middle;margin-right:6px}
+.dy-bar i{position:absolute;inset:0 auto 0 0;background:#1f9d55}
+.dy-bar.low i{background:#d97706}
+.dy-badge{display:inline-block;font-size:.72rem;font-weight:700;padding:2px 8px;border-radius:999px;white-space:nowrap;cursor:help}
+.dy-badge.normal{background:#1f9d5522;color:#1f9d55}
+.dy-badge.alterado{background:#d9770622;color:#d97706}
+.dy-badge.excepcional{background:#dc262622;color:#dc2626}
+.dy-badge.incompleto{background:#6b728022;color:#6b7280}
+.dr-tick{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin:10px 0 0;padding:8px 12px;background:var(--panel2);border:1px solid var(--border);border-radius:8px;font-size:.88rem;font-variant-numeric:tabular-nums}
+.dr-tick[hidden]{display:none}
+.dr-ok{display:inline-flex;align-items:center;justify-content:center;width:20px;height:20px;border-radius:50%;background:#1f9d55;color:#fff;font-size:.8rem;font-weight:700}
+.dr-ok.pop{animation:drpop .6s ease-out}
+.dr-head{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap}
+.dr-sel{padding:6px 10px;border-radius:8px;border:2px solid var(--border);background:var(--panel);color:var(--text);font:inherit;font-size:.88rem;max-width:100%;cursor:pointer}
+.dr-sel.normal{border-color:#1f9d55}.dr-sel.alterado{border-color:#d97706}.dr-sel.excepcional{border-color:#dc2626}.dr-sel.incompleto{border-color:#9ca3af}
+.inc{display:grid;grid-template-columns:auto 1fr;gap:2px 10px;border-left:3px solid var(--accent);padding:6px 10px;margin:6px 0;font-size:.84rem;background:var(--panel2);border-radius:4px}
+.inc.renfe{border-left-color:#7c3aed}
+.inc-t{font-weight:700;font-variant-numeric:tabular-nums;white-space:nowrap}
+.inc-meta{display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-bottom:2px}
+.inc-ln{display:inline-block;font-size:.72rem;font-weight:700;padding:1px 7px;border-radius:999px;background:var(--text);color:var(--panel)}
+.inc-src{font-size:.72rem;color:var(--muted)}
+.inc-old summary{cursor:pointer;font-size:.85rem;margin-top:10px;color:var(--muted)}
+.ana-inc{cursor:help;text-decoration:underline dotted}
+@keyframes drpop{0%{transform:scale(.4);opacity:.3}60%{transform:scale(1.35)}100%{transform:scale(1);opacity:1}}
 </style>
 <div class="menu-wrap fr-wide">
   <div class="panel-bar"><a class="back-link" href="/">← Menú</a></div>
@@ -2255,6 +2283,10 @@ pub fn render_data_page() -> String {
       <h2 style="margin:0 0 4px">Recogida de datos</h2>
       <div class="dr-state"><span class="dr-dot" id="dot"></span><span id="stTxt">Comprobando…</span></div>
       <div class="hlp" id="stInfo"></div>
+      <div class="dr-tick" id="tick" hidden>
+        <span>Último dato guardado a las <b id="tickAt">–</b></span><span class="dr-ok" id="tickOk">✓</span>
+        <span>Siguiente dato en <b id="tickNext">–</b></span>
+      </div>
       <div class="dr-btns">
         <button class="btn" id="startBtn">Empezar a grabar ahora</button>
         <button class="btn ghost" id="stopBtn">Parar</button>
@@ -2281,28 +2313,84 @@ pub fn render_data_page() -> String {
       </ul>
       <p class="hlp">De ahí se deducen los tiempos reales de cada tramo y de cada parada y la puntualidad por línea. No incluye trenes de mercancías, ocupación de los trenes ni el motivo exacto de cada retraso. Las paradas más cortas que el refresco no se ven como «parado».</p>
     </section>
-
-    <section class="card">
-      <h2 style="margin:0 0 4px">Datos guardados</h2>
-      <div id="days" class="dr-out hlp">Cargando…</div>
-    </section>
   </div>
 
-  <section class="card" style="margin-top:16px">
-    <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap">
-      <h2 style="margin:0">Realidad por línea</h2>
-      <button class="btn" id="anaBtn">Analizar los datos grabados</button>
+  <section class="card" style="margin-top:16px" id="cloudCard">
+    <h2 style="margin:0 0 4px">En la nube (Cloudflare, gratis)</h2>
+    <p class="hlp" style="margin:0">El mismo recolector, funcionando día y noche en Cloudflare: no hace falta tener el ordenador encendido ni ningún servidor. Usa el plan gratuito de Cloudflare Workers <b>sin tarjeta</b>, así que no te pueden cobrar nada: si algún día se pasara de los límites gratuitos, simplemente dejaría de grabar. Lee los datos de Renfe cada 20 s, guarda solo lo de Rodalies comprimido y conserva 45 días; los descargas aquí cuando quieras.</p>
+
+    <div id="clSetup" hidden>
+      <div class="cl-steps">
+        <div class="cl-step cl-guide">
+          <h3>1 · Crea una cuenta gratuita</h3>
+          <ol>
+            <li>Regístrate en <a href="https://dash.cloudflare.com/sign-up" target="_blank" rel="noopener">dash.cloudflare.com/sign-up</a> con tu email (no pide tarjeta) y confirma el correo.</li>
+            <li>En el panel, abre <b>Workers &amp; Pages</b> una vez: así se crea tu subdominio gratuito <i>…workers.dev</i>.</li>
+            <li><b>No añadas ningún método de pago</b>: sin él, la cuenta se queda en el plan gratuito.</li>
+          </ol>
+        </div>
+        <div class="cl-step">
+          <h3>2 · Conecta el simulador</h3>
+          <p class="hlp" style="margin:0 0 6px">Se abrirá el navegador para que autorices al simulador en tu cuenta (herramienta oficial de Cloudflare). La primera vez tarda un poco en descargarla.</p>
+          <div class="dr-state" style="font-size:.92rem"><span class="dr-dot" id="clWhoDot"></span><span id="clWho">Sin conectar</span></div>
+          <div class="dr-btns"><button class="btn" id="clLogin">Conectar con Cloudflare</button><button class="btn ghost" id="clCheck">Comprobar</button></div>
+        </div>
+        <div class="cl-step">
+          <h3>3 · Despliega el recolector</h3>
+          <p class="hlp" style="margin:0 0 6px">Sube el programa a tu cuenta, le pone una clave secreta y empieza a grabar.</p>
+          <div class="dr-btns"><button class="btn" id="clDeploy">Desplegar en Cloudflare</button></div>
+          <div class="hlp" id="clInstMsg"></div>
+          <div class="cl-log" id="clLog" hidden></div>
+        </div>
+      </div>
     </div>
-    <div id="ana" class="dr-out hlp">Pulsa «Analizar» para calcular retrasos, puntualidad y cancelaciones reales.</div>
+
+    <div id="clRun" hidden>
+      <div class="dr-state"><span class="dr-dot" id="clDot"></span><span id="clTxt">Comprobando…</span></div>
+      <div class="hlp" id="clInfo"></div>
+      <div class="dr-tick" id="clTick" hidden>
+        <span>Último dato guardado a las <b id="clTickAt">–</b></span><span class="dr-ok" id="clTickOk">✓</span>
+        <span>Siguiente dato en <b id="clTickNext">–</b></span>
+      </div>
+      <div class="dr-btns">
+        <button class="btn" id="clStart">Arrancar en la nube</button>
+        <button class="btn ghost" id="clStop">Parar</button>
+        <button class="btn" id="clSync">Descargar los datos a este ordenador</button>
+        <button class="btn ghost" id="clRedeploy">Volver a desplegar</button>
+        <button class="btn ghost" id="clForget">Olvidar en este ordenador</button>
+      </div>
+      <div class="hlp" id="clMsg"></div>
+    </div>
   </section>
 
-  <section class="card" style="margin-top:16px">
+  <section class="card" style="margin-top:16px" id="daysCard">
     <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap">
-      <h2 style="margin:0">Simulador frente a realidad</h2>
-      <button class="btn" id="cmpBtn">Comparar con el simulador</button>
+      <h2 style="margin:0">Días grabados</h2><span class="hlp" id="daysNote"></span>
     </div>
-    <p class="hlp" style="margin:6px 0 0">Jornada sin incidencias: <b>antes</b> = motor sin el realismo nuevo, <b>ahora</b> = con la configuración guardada. Los tramos son los que también se han observado en los datos reales (marcha entre paradas, suma en minutos).</p>
-    <div id="cmp" class="dr-out"></div>
+    <p class="hlp" style="margin:6px 0 0">Todo lo grabado (PC y nube juntos, sin contar dos veces la misma lectura). <b>Cobertura</b> = parte del horario de servicio (05:00–24:00) con datos. La <b>valoración</b> dice si el día sirve como día normal para comparar o fue un día raro («dato feo»); pasa el ratón por encima para ver el motivo.</p>
+    <div id="daysTbl" class="dr-out">Cargando…</div>
+  </section>
+
+  <section class="card" style="margin-top:16px" id="incCard">
+    <div class="dr-head">
+      <h2 style="margin:0">Incidencias del día</h2>
+      <div class="dr-btns" style="margin:0;align-items:center">
+        <select class="dr-sel" id="incDay" aria-label="Día" data-no-i18n></select>
+        <button class="btn" id="incCap">Capturar las incidencias de hoy</button>
+      </div>
+    </div>
+    <p class="hlp" style="margin:6px 0 0">Cada incidencia con la <b>hora a la que se publicó</b>, sus líneas y el texto oficial, guardada en su día para saber después qué causó los retrasos. Fuentes: el <b>RSS de incidencias de la Generalitat</b> (Rodalies) y los <b>avisos de Renfe</b>. La nube las recoge sola cada 5 minutos, también con el ordenador apagado; el botón lo hace al momento. Ojo: las fuentes solo muestran las incidencias vigentes, así que lo que no se captura mientras está publicado ya no se puede recuperar. Twitter/X y el canal de WhatsApp no se pueden leer automáticamente gratis (X cobra su API y WhatsApp no tiene acceso público).</p>
+    <div class="hlp" id="incMsg"></div>
+    <div id="incList" class="dr-out hlp">Cargando…</div>
+  </section>
+
+  <section class="card" style="margin-top:16px" id="anaCard">
+    <div class="dr-head">
+      <h2 style="margin:0">Realidad por línea</h2>
+      <select class="dr-sel" id="anaDay" aria-label="Día" data-no-i18n></select>
+    </div>
+    <p class="hlp" style="margin:6px 0 0">Retrasos, puntualidad y cancelaciones reales del día elegido, con las incidencias publicadas para cada línea ese día (pasa el ratón por encima para leerlas; «+N» = avisos que ya venían de días anteriores). El color del día es su valoración.</p>
+    <div id="ana" class="dr-out hlp">Cargando…</div>
   </section>
 </div>
 <script>
@@ -2314,32 +2402,58 @@ pub fn render_data_page() -> String {
   const pc=v=>v==null||!isFinite(v)?"–":Math.round(v*100)+" %";
   const hm=ts=>ts?new Date(ts*1000).toLocaleString(L(),{dateStyle:"short",timeStyle:"medium"}):"–";
   const post=u=>fetch(u,{method:"POST"}).then(r=>r.json());
+  const T=x=>window.I18N?I18N.t(x):x;
+  // Último guardado (✓ que «salta» al guardarse uno nuevo) y cuenta atrás hasta el siguiente sondeo.
+  // Los instantes vienen del reloj del recolector; se corrige el desfase con el del navegador.
+  let TICK=null, lastSaved=0;
+  function paintTick(){
+    const box=$("tick");
+    if(!TICK||!TICK.saved_at){ box.hidden=true; return; }
+    box.hidden=false;
+    const now=Date.now()/1000+TICK.skew;
+    $("tickAt").textContent=new Date(TICK.saved_at*1000).toLocaleTimeString(L());
+    const left=Math.max(0,Math.ceil(TICK.next_at-now));
+    $("tickNext").textContent=left>0?left+" s":"ahora…";
+  }
+  async function pingTick(){
+    try{
+      const j=await (await fetch("/api/gtfsrt/status")).json();
+      const r=j.running;
+      if(!!(r&&r.standby)!==LOCAL_STANDBY) status();   // ha cambiado nube ↔ PC: repintar ya
+      if(!r||r.standby){ TICK=null; paintTick(); return; }   // en espera: graba la nube
+      TICK={saved_at:r.saved_at,next_at:r.next_at,skew:(r.now||Date.now()/1000)-Date.now()/1000};
+      if(r.saved_at&&r.saved_at!==lastSaved){
+        if(lastSaved){ const ok=$("tickOk"); ok.classList.remove("pop"); void ok.offsetWidth; ok.classList.add("pop"); }
+        lastSaved=r.saved_at;
+      }
+      paintTick();
+    }catch(e){}
+  }
   async function status(){
     const j=await (await fetch("/api/gtfsrt/status")).json();
     const r=j.running;
-    $("dot").classList.toggle("on",!!r);
-    $("stTxt").textContent=r?"Grabando":"Parado";
-    $("stInfo").textContent=r?`${n(r.polls)} sondeos en esta sesión · último: ${hm(r.last)} · en marcha desde ${hm(r.started)}`:"No hay ningún recolector en marcha.";
+    // Con la nube grabando, el del PC está APAGADO a efectos prácticos: no lee ni guarda nada, solo
+    // vigila para encenderse si la nube falla. Se muestra así (gris, sin botones que confundan).
+    const standby=!!(r&&r.standby);
+    LOCAL_STANDBY=standby;
+    $("dot").classList.toggle("on",!!r&&!standby);
+    $("stTxt").textContent=standby?"Apagado: graba la nube":(r?"Grabando en este PC":"Apagado");
+    $("stInfo").textContent=standby?"Este PC no graba nada mientras la nube esté grabando. Solo se encenderá solo si la nube deja de grabar (y el ordenador está encendido).":(r?`${n(r.polls)} sondeos en esta sesión · en marcha desde ${hm(r.started)}`:"No hay ningún recolector en marcha.");
+    $("startBtn").hidden=standby; $("stopBtn").hidden=standby;
     $("startBtn").disabled=!!r; $("stopBtn").disabled=!r;
-    const tot=j.days.reduce((a,d)=>a+d.polls,0), mb=j.days.reduce((a,d)=>a+d.mb,0);
-    $("days").innerHTML=j.days.length?`<table class="tbl"><thead><tr><th>Día</th><th class="num">Sondeos</th><th class="num">MB</th></tr></thead><tbody>${j.days.slice().reverse().map(d=>`<tr><td>${esc(d.day)}</td><td class="num">${n(d.polls)}</td><td class="num">${n(d.mb,1)}</td></tr>`).join("")}</tbody></table><p>Total: ${n(tot)} sondeos · ${n(mb,1)} MB · ${n(j.alerts)} avisos de incidencia</p>`:"Aún no hay datos grabados.";
-    paintAnalysis(j.observed);
+    paintAutoTxt();
+  }
+  let LOCAL_STANDBY=false, AUTO_INSTALLED=null;
+  function paintAutoTxt(){
+    if(AUTO_INSTALLED===null) return;
+    $("autoDot").classList.toggle("on",AUTO_INSTALLED&&!LOCAL_STANDBY);
+    $("autoTxt").textContent=!AUTO_INSTALLED?"Desactivada":(LOCAL_STANDBY?"De reserva: solo graba si la nube falla (tarea de Windows)":"Activada (tarea de Windows)");
   }
   async function autostart(){
     const j=await (await fetch("/api/gtfsrt/autostart")).json();
-    $("autoDot").classList.toggle("on",!!j.installed);
-    $("autoTxt").textContent=j.installed?"Activada (tarea de Windows)":"Desactivada";
+    AUTO_INSTALLED=!!j.installed;
+    paintAutoTxt();
     $("installBtn").disabled=!!j.installed; $("uninstallBtn").disabled=!j.installed;
-  }
-  function paintAnalysis(o){
-    if(!o||!o.delays_by_line) return;
-    const lines=Object.keys(o.delays_by_line).sort((a,b)=>a.localeCompare(b,undefined,{numeric:true}));
-    const can=o.canceled_by_line||{};
-    $("ana").innerHTML=`<p>Días analizados: <b>${esc((o.days||[]).join(", "))}</b> · ${n(o.polls)} sondeos · ${n(o.trips)} viajes · ${n(o.segments)} tramos con tiempo real.</p>
-      <div class="tbl-wrap"><table class="tbl"><thead><tr><th>Línea</th><th class="num">Retraso mediano (min)</th><th class="num">p90 (min)</th><th class="num">Puntual &lt; 5 min</th><th class="num">≥ 15 min</th><th class="num">Viajes cancelados</th></tr></thead><tbody>
-      ${lines.map(l=>{const d=o.delays_by_line[l]; return `<tr><td><b>${esc(l)}</b></td><td class="num">${n(d.median_s/60,1)}</td><td class="num">${n(d.p90_s/60,1)}</td><td class="num">${pc(d.punct_5min)}</td><td class="num">${pc(d.over_15min)}</td><td class="num">${n(can[l]||0)}</td></tr>`;}).join("")}
-      </tbody></table></div>`+
-      ((o.alerts_last||[]).length?`<h3>Últimos avisos de incidencia</h3>${o.alerts_last.slice().reverse().map(a=>`<div class="dr-alert"><b>${hm(a.seen)}</b> · ${esc(a.text)}</div>`).join("")}`:"");
   }
   $("startBtn").onclick=async()=>{ await post("/api/gtfsrt/start"); setTimeout(status,1500); };
   $("stopBtn").onclick=async()=>{ await post("/api/gtfsrt/stop"); setTimeout(status,1500); };
@@ -2354,22 +2468,232 @@ pub fn render_data_page() -> String {
     $("autoMsg").textContent=j.ok?"Recogida automática desactivada (el recolector actual sigue hasta que lo pares).":("Error: "+(j.error||""));
     autostart();
   };
-  $("anaBtn").onclick=async()=>{
-    $("anaBtn").disabled=true; $("ana").textContent="Analizando…";
-    const j=await post("/api/gtfsrt/analyze");
-    if(!j.ok) $("ana").textContent=j.error||"Error";
-    await status(); $("anaBtn").disabled=false;
+  // ── En la nube (Cloudflare): configuración (cuenta → conectar → desplegar) o control ──
+  let CL=null, clSaved=0, clBusy=false;
+  async function cloudInfo(){
+    const j=await (await fetch("/api/cloud/info")).json();
+    if(j.deployed){ $("clSetup").hidden=true; $("clRun").hidden=false; cloudStatus(); }
+    else { $("clSetup").hidden=false; $("clRun").hidden=true; }
+    return j;
+  }
+  async function cloudWho(){
+    $("clWho").textContent="Comprobando…";
+    const j=await (await fetch("/api/cloud/whoami")).json();
+    $("clWhoDot").classList.toggle("on",!!j.logged_in);
+    $("clWho").textContent=j.logged_in?("Conectado"+(j.email?" como "+j.email:"")):(j.error||"Sin conectar");
+    return j;
+  }
+  function paintCloudTick(){
+    const box=$("clTick");
+    const r=CL&&CL.running;
+    if(!r||!r.saved_at){ box.hidden=true; return; }
+    box.hidden=false;
+    const now=Date.now()/1000+CL.skew;
+    $("clTickAt").textContent=new Date(r.saved_at*1000).toLocaleTimeString(L());
+    // La nube lee cada 20 s; entre consultas (cada 20 s, para gastar pocas peticiones gratuitas) la
+    // cuenta atrás sigue el mismo ciclo en vez de quedarse en «ahora».
+    let left=r.next_at-now;
+    if(left<=0) left=20-((-left)%20);
+    $("clTickNext").textContent=Math.ceil(left)+" s";
+  }
+  async function cloudStatus(){
+    if($("clRun").hidden||clBusy) return;
+    clBusy=true;
+    try{
+      const j=await (await fetch("/api/cloud/status")).json();
+      if(!j.ok){ $("clDot").classList.remove("on"); $("clTxt").textContent="Sin conexión con la nube"; $("clInfo").textContent=j.error||""; CL=null; paintCloudTick(); return; }
+      CL={...j, skew:(j.now||Date.now()/1000)-Date.now()/1000};
+      const r=j.running;
+      const alive=r?(r.alive_at||r.saved_at||0):0;
+      const dead=r&&alive&&(j.now-alive)>120;   // la nube ejecuta cada 20 s: 2 min sin señal = problema
+      $("clDot").classList.toggle("on",!!r&&!dead);
+      $("clTxt").textContent=!r?"Parado en la nube":(dead?`La nube no da señales desde las ${new Date(alive*1000).toLocaleTimeString(L())} (el PC toma el relevo)`:"Grabando en la nube");
+      const polls=(j.days||[]).reduce((a,d)=>a+d.polls,0);
+      $("clInfo").textContent=`${(j.days||[]).length} días guardados · ${n(polls)} sondeos · ${n(j.alerts)} avisos · ${n(j.db_mb,1)} MB de 1.000 gratuitos`+(r&&r.errors?` · ${n(r.errors)} lecturas fallidas`:"");
+      $("clStart").disabled=!!r; $("clStop").disabled=!r;
+      if(r&&r.saved_at&&r.saved_at!==clSaved){
+        if(clSaved){ const ok=$("clTickOk"); ok.classList.remove("pop"); void ok.offsetWidth; ok.classList.add("pop"); }
+        clSaved=r.saved_at;
+      }
+      paintCloudTick();
+    }catch(e){}
+    finally{ clBusy=false; }
+  }
+  $("clLogin").onclick=async()=>{
+    $("clWho").textContent="Abriendo el navegador… autoriza y vuelve aquí";
+    const j=await post("/api/cloud/login");
+    if(!j.ok){ $("clWho").textContent=j.error; return; }
+    // Comprobar unas cuantas veces mientras autorizas en el navegador.
+    for(let i=0;i<20;i++){ await new Promise(r=>setTimeout(r,6000)); const w=await cloudWho(); if(w.logged_in) break; }
   };
-  $("cmpBtn").onclick=async()=>{
-    $("cmpBtn").disabled=true; $("cmp").textContent="Simulando dos jornadas…";
-    const r=await (await fetch("/api/compare")).json();
-    $("cmp").innerHTML=`<p>Retraso acumulado de la red: antes <b>${n(r.total_delay_before_train_min)}</b> → ahora <b>${n(r.total_delay_now_train_min)}</b> tren·min · datos reales: ${n(r.observed_polls)} sondeos (${esc((r.observed_days||[]).join(", "))}).</p>
-      <div class="tbl-wrap"><table class="tbl"><thead><tr><th>Línea</th><th class="num">Tramos</th><th class="num">GTFS</th><th class="num">Antes</th><th class="num">Ahora</th><th class="num">Real</th><th class="num">Parada ahora (s)</th><th class="num">Parada real (s)</th><th class="num">≥15 min ahora</th><th class="num">≥15 min real</th></tr></thead><tbody>
-      ${r.lines.map(l=>`<tr><td><b>${esc(l.line)}</b></td><td class="num">${n(l.seg_covered)}</td><td class="num">${l.seg_covered?n(l.seg_gtfs_min):"–"}</td><td class="num">${l.seg_covered?n(l.seg_before_min):"–"}</td><td class="num">${l.seg_covered?n(l.seg_now_min):"–"}</td><td class="num">${l.seg_covered?n(l.seg_observed_min):"–"}</td><td class="num">${n(l.dwell_now_s)}</td><td class="num">${n(l.dwell_observed_s)}</td><td class="num">${pc(l.over15_now)}</td><td class="num">${pc(l.over15_real)}</td></tr>`).join("")}
+  $("clCheck").onclick=cloudWho;
+  async function doDeploy(msgEl){
+    msgEl.textContent="Desplegando en Cloudflare (1-2 minutos)…"; $("clLog").hidden=true;
+    const j=await post("/api/cloud/deploy");
+    if(j.log){ $("clLog").hidden=false; $("clLog").textContent=j.log; }
+    if(j.ok){ msgEl.textContent=j.started?"Desplegado: ya graba en la nube.":"Desplegado. Pulsa «Arrancar en la nube» en unos segundos."; await cloudInfo(); }
+    else msgEl.textContent="Error: "+(j.error||"");
+    return j;
+  }
+  $("clDeploy").onclick=async()=>{ $("clDeploy").disabled=true; await doDeploy($("clInstMsg")); $("clDeploy").disabled=false; };
+  $("clRedeploy").onclick=async()=>{ $("clRedeploy").disabled=true; await doDeploy($("clMsg")); $("clRedeploy").disabled=false; };
+  $("clStart").onclick=async()=>{ $("clMsg").textContent="Arrancando…"; const j=await post("/api/cloud/start"); $("clMsg").textContent=j.ok?"":"Error: "+j.error; setTimeout(cloudStatus,2500); };
+  $("clStop").onclick=async()=>{ $("clMsg").textContent="Parando…"; const j=await post("/api/cloud/stop"); $("clMsg").textContent=j.ok?"":"Error: "+j.error; setTimeout(cloudStatus,1500); };
+  $("clSync").onclick=async()=>{
+    $("clSync").disabled=true; $("clMsg").textContent="Descargando los datos de la nube…";
+    const j=await post("/api/cloud/sync");
+    $("clMsg").textContent=j.ok?(j.downloaded||j.alerts||j.incidents?`${n(j.downloaded)} sondeos, ${n(j.alerts)} avisos y ${n(j.incidents||0)} incidencias descargados (${n(j.mb,1)} MB).`:"Ya tenías todos los datos de la nube."):"Error: "+j.error;
+    afterNewData();
+    $("clSync").disabled=false;
+  };
+  $("clForget").onclick=async()=>{
+    if(!confirm("¿Olvidar la nube en este ordenador? (el recolector sigue en Cloudflare hasta que lo pares o lo borres desde su panel)")) return;
+    await post("/api/cloud/forget"); cloudInfo();
+  };
+  // ── Días grabados: cobertura, puntualidad y valoración de cada día ──
+  const VERD={normal:"Normal",alterado:"Alterado",excepcional:"Excepcional (dato feo)",incompleto:"Incompleto"};
+  // Color de la valoración en los selectores de día (fondo suave + texto oscuro: se lee en los dos temas).
+  // Un día incompleto se pinta con lo que «pinta» lo grabado, para ver de un vistazo los días interesantes.
+  const VCOL={normal:["#d1fae5","#065f46"],alterado:["#fef3c7","#92400e"],excepcional:["#fee2e2","#991b1b"],incompleto:["#e5e7eb","#374151"]};
+  const verdLabel=s=>s.verdict==="incompleto"&&s.lean?`Incompleto · pinta ${s.lean}`:VERD[s.verdict]||s.verdict;
+  const verdColor=s=>s.verdict==="incompleto"&&s.lean?s.lean:s.verdict;
+  const fmtDay=d=>new Date(d+"T12:00:00").toLocaleDateString(L(),{day:"2-digit",month:"2-digit",year:"numeric"});
+  const fmtDayW=d=>new Date(d+"T12:00:00").toLocaleDateString(L(),{weekday:"short",day:"2-digit",month:"2-digit",year:"numeric"});
+  const todayStr=()=>{ const d=new Date(); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`; };
+  let DAYS={}, INC_DAYS=[];   // día → resumen grabado · días con incidencias guardadas
+  async function loadDays(){
+    let j; try{ j=await (await fetch("/api/gtfsrt/days")).json(); }catch(e){ fillDaySelects(); return; }
+    DAYS={}; (j.days||[]).forEach(s=>DAYS[s.day]=s);
+    fillDaySelects();
+    const ds=(j.days||[]).slice().reverse();
+    if(!ds.length){ $("daysTbl").textContent=j.error||"Aún no hay días grabados."; return; }
+    $("daysTbl").innerHTML=`<div class="tbl-wrap"><table class="tbl"><thead><tr><th>Día</th><th>Cobertura</th><th>Valoración</th><th class="num">Puntual &lt; 5 min</th><th class="num">≥ 15 min</th><th class="num">Retraso medio</th><th class="num">Cancelados</th><th class="num">Avisos</th><th>Sondeos</th></tr></thead><tbody>
+      ${ds.map(s=>`<tr><td><b>${fmtDay(s.day)}</b> <span class="hlp">${esc(s.dow)}</span></td>
+          <td style="white-space:nowrap"><span class="dy-bar ${s.coverage<50?"low":""}"><i style="width:${Math.min(100,s.coverage)}%"></i></span>${n(s.coverage,0)} %</td>
+          <td><span class="dy-badge ${s.verdict}" title="${esc(s.why||"")}">${esc(verdLabel(s))}</span></td>
+          <td class="num">${s.punct5==null?"–":n(s.punct5,0)+" %"}</td><td class="num">${s.over15==null?"–":n(s.over15,0)+" %"}</td>
+          <td class="num">${s.mean_min==null?"–":n(s.mean_min,1)+" min"}</td><td class="num">${n(s.canceled)}</td><td class="num">${n(s.alerts)}</td>
+          <td class="hlp" style="white-space:nowrap">${n(s.polls)} · ${esc((s.sources||[]).join(" + "))}</td></tr>`).join("")}
       </tbody></table></div>`;
-    $("cmpBtn").disabled=false;
+    $("daysNote").textContent=j.relative?"Valoración comparada también con tus días habituales":"Con 5 días completos, la valoración también se comparará con tus días habituales";
+  }
+  // Selector de día con la valoración en cada opción (y el borde del selector del color del elegido).
+  function paintSel(sel){ const o=sel.selectedOptions[0]; sel.className="dr-sel "+((o&&o.dataset.v)||""); }
+  function fillSel(sel,days,withAll){
+    const cur=sel.value;
+    sel.innerHTML=days.map(d=>{
+      const s=DAYS[d], v=s?verdColor(s):"", c=v?VCOL[v]:null;
+      const txt=s?`${T(verdLabel(s))} · ${n(s.coverage,0)} % ${T("grabado")}`:T("sin grabación");
+      return `<option value="${d}" data-v="${v}"${c?` style="background:${c[0]};color:${c[1]}"`:""}>${esc(fmtDayW(d))} — ${esc(txt)}</option>`;
+    }).join("")+(withAll&&days.length>1?`<option value="all">${esc(T("Todos los días grabados"))}</option>`:"");
+    if(cur&&[...sel.options].some(o=>o.value===cur)) sel.value=cur;
+    paintSel(sel);
+  }
+  function fillDaySelects(){
+    const rec=Object.keys(DAYS).sort().reverse();
+    const incDays=[...new Set([...rec,...INC_DAYS,todayStr()])].sort().reverse();
+    const firstI=!$("incDay").options.length, firstA=!$("anaDay").options.length;
+    fillSel($("incDay"),incDays,false);
+    fillSel($("anaDay"),rec,true);
+    if(firstI){ $("incDay").value=todayStr(); paintSel($("incDay")); loadIncidents(); }
+    if(firstA){
+      if(!rec.length){ $("ana").textContent="Aún no hay días grabados."; return; }
+      // Por defecto el día más reciente con el día entero grabado (hoy aún está a medias).
+      $("anaDay").value=rec.find(d=>DAYS[d].coverage>=50)||rec[0]; paintSel($("anaDay")); analyze();
+    }
+  }
+  // ── Incidencias del día: publicadas ese día (con su hora) + avisos que venían de antes ──
+  const SRC={gencat:"Generalitat (RSS)",renfe:"Renfe (avisos)"};
+  const hmOnly=t=>new Date(t*1000).toLocaleTimeString(L(),{hour:"2-digit",minute:"2-digit"});
+  const dayTime=t=>new Date(t*1000).toLocaleString(L(),{day:"2-digit",month:"2-digit",hour:"2-digit",minute:"2-digit"});
+  let INC_SEQ=0;
+  async function loadIncidents(){
+    const day=$("incDay").value||todayStr(), seq=++INC_SEQ;
+    let j; try{ j=await (await fetch("/api/incidents?day="+day)).json(); }catch(e){ return; }
+    if(seq!==INC_SEQ) return;   // se cambió de día mientras tanto
+    if(j.days&&j.days.join()!==INC_DAYS.join()){ INC_DAYS=j.days; fillDaySelects(); }
+    const items=j.items||[];
+    const card=(it,old)=>`<div class="inc ${esc(it.source)}"><span class="inc-t">${old?dayTime(it.pub):hmOnly(it.pub)}</span><div><div class="inc-meta">${(it.lines||[]).map(l=>`<span class="inc-ln">${esc(l)}</span>`).join("")}<span class="inc-src">${SRC[it.source]||esc(it.source)}</span></div><div data-no-i18n>${esc(it.text)}</div></div></div>`;
+    const fresh=items.filter(i=>!i.before_day), old=items.filter(i=>i.before_day);
+    $("incList").innerHTML=(j.error?`<p>${esc(j.error)}</p>`:"")+
+      (fresh.length?fresh.map(i=>card(i,false)).join(""):`<p>${day===todayStr()?"Aún no se ha capturado ninguna incidencia publicada hoy.":"No hay incidencias guardadas publicadas este día."}</p>`)+
+      (old.length?`<details class="inc-old"><summary>Avisos de Renfe vigentes este día que venían de días anteriores (${old.length})</summary>${old.map(i=>card(i,true)).join("")}</details>`:"");
+  }
+  $("incDay").onchange=()=>{ paintSel($("incDay")); loadIncidents(); };
+  $("incCap").onclick=async()=>{
+    $("incCap").disabled=true; $("incMsg").textContent="Consultando los canales oficiales…";
+    try{
+      const j=await post("/api/incidents/capture");
+      if(j.ok){
+        const r=j.result, v=x=>typeof x==="number"?n(x):T("sin respuesta");
+        $("incMsg").textContent=`${n(r.added)} incidencias nuevas guardadas · vigentes ahora: Generalitat ${v(r.gencat)} · Renfe ${v(r.renfe)}`;
+      } else $("incMsg").textContent="Error: "+(j.error||"");
+    }catch(e){ $("incMsg").textContent="Error: "+e; }
+    $("incDay").value=todayStr(); paintSel($("incDay"));
+    await loadIncidents();
+    if($("anaDay").value===todayStr()) analyze();
+    $("incCap").disabled=false;
   };
-  status(); autostart(); setInterval(status,15000);
+  // ── Realidad por línea del día elegido (con las incidencias de cada línea ese día) ──
+  // Las líneas del RSS vienen como «R2 Nord», las de Renfe como «R2N»: se igualan para cruzarlas.
+  const normLine=l=>String(l).replace(/\s*Nord$/i,"N").replace(/\s*Sud$/i,"S").replace(/\s+/g,"").toUpperCase();
+  let ANA_SEQ=0;
+  async function analyze(){
+    const day=$("anaDay").value; if(!day) return;
+    const seq=++ANA_SEQ, all=day==="all";
+    $("ana").textContent=all?"Analizando todos los días grabados…":"Analizando el día…";
+    const [a,inc]=await Promise.all([
+      post("/api/gtfsrt/analyze"+(all?"":"?day="+day)).catch(e=>({ok:false,error:String(e)})),
+      all?null:fetch("/api/incidents?day="+day).then(r=>r.json()).catch(()=>null)]);
+    if(seq!==ANA_SEQ) return;
+    if(!a.ok){ $("ana").textContent=a.error||"Error"; return; }
+    paintAnalysis(a.observed,inc&&inc.items,all);
+  }
+  function paintAnalysis(o,items,all){
+    if(!o||!o.delays_by_line||!Object.keys(o.delays_by_line).length){ $("ana").textContent="No hay retrasos grabados ese día."; return; }
+    const lines=Object.keys(o.delays_by_line).sort((a,b)=>a.localeCompare(b,undefined,{numeric:true}));
+    const can=o.canceled_by_line||{};
+    const byLine={};
+    (items||[]).forEach(it=>(it.lines||[]).forEach(l=>(byLine[normLine(l)]=byLine[normLine(l)]||[]).push(it)));
+    const incCell=l=>{
+      // Publicadas ese día = las que pueden explicar sus retrasos; las que venían de antes (Renfe deja
+      // avisos viejos activos semanas) se cuentan aparte, en gris.
+      const xs=byLine[normLine(l)]||[], fresh=xs.filter(i=>!i.before_day), old=xs.length-fresh.length;
+      if(!xs.length) return `<td class="num">–</td>`;
+      const tip=xs.map(i=>`${i.before_day?dayTime(i.pub):hmOnly(i.pub)} · ${i.text}`).join("\n\n");
+      return `<td class="num" data-no-i18n><span class="ana-inc" title="${esc(tip)}">${fresh.length?n(fresh.length):"–"}${old?` <span class="hlp">+${n(old)}</span>`:""}</span></td>`;
+    };
+    $("ana").innerHTML=`<p>${all?`Días analizados: <b>${esc((o.days||[]).map(fmtDay).join(", "))}</b> · `:""}${n(o.polls)} sondeos · ${n(o.trips)} viajes · ${n(o.segments)} tramos con tiempo real.</p>
+      <div class="tbl-wrap"><table class="tbl"><thead><tr><th>Línea</th><th class="num">Retraso mediano (min)</th><th class="num">p90 (min)</th><th class="num">Puntual &lt; 5 min</th><th class="num">≥ 15 min</th><th class="num">Viajes cancelados</th>${all?"":`<th class="num">Incidencias</th>`}</tr></thead><tbody>
+      ${lines.map(l=>{const d=o.delays_by_line[l]; return `<tr><td><b>${esc(l)}</b></td><td class="num">${n(d.median_s/60,1)}</td><td class="num">${n(d.p90_s/60,1)}</td><td class="num">${pc(d.punct_5min)}</td><td class="num">${pc(d.over_15min)}</td><td class="num">${n(can[l]||0)}</td>${all?"":incCell(l)}</tr>`;}).join("")}
+      </tbody></table></div>`;
+  }
+  $("anaDay").onchange=()=>{ paintSel($("anaDay")); analyze(); };
+  // Datos nuevos (descarga de la nube): días, incidencias y, si se mira hoy, su análisis.
+  function afterNewData(){
+    loadDays(); loadIncidents();
+    if($("anaDay").value===todayStr()||$("anaDay").value==="all") analyze();
+  }
+  async function autoSync(){
+    if($("clRun").hidden) return;
+    const j=await post("/api/cloud/sync");
+    if(j.ok&&!j.busy&&(j.downloaded||j.alerts||j.incidents)){
+      $("clMsg").textContent=`Datos nuevos descargados automáticamente: ${n(j.downloaded)} sondeos, ${n(j.alerts)} avisos y ${n(j.incidents||0)} incidencias.`;
+      status(); afterNewData();
+    } else if(!j.ok) $("clMsg").textContent="No se pudieron descargar los datos nuevos: "+j.error;
+  }
+  loadDays();
+  setInterval(loadDays,5*60*1000);   // los días crecen mientras se graba (la cobertura de hoy sube)
+  setInterval(()=>{ if($("incDay").value===todayStr()) loadIncidents(); },5*60*1000);   // la nube captura cada 5 min
+  cloudInfo().then(j=>{ if(!j.deployed) cloudWho(); else autoSync(); });
+  setInterval(autoSync,15*60*1000);
+  setInterval(cloudStatus,20000);   // cada consulta cuenta como petición (100.000/día gratis): cada 20 s
+  setInterval(paintCloudTick,250);
+
+  status(); autostart(); pingTick();
+  setInterval(status,15000);   // estado completo del recolector: poco a poco
+  setInterval(pingTick,2000);  // estado del recolector: barato (solo el puerto de control)
+  setInterval(paintTick,250);  // cuenta atrás fluida
 })();
 </script>"##;
     document(&head, body)

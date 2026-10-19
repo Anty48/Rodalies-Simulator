@@ -1,6 +1,7 @@
 SUGERENCIAS · Rod4lia 2.0 como laboratorio hiperrealista de horarios y organización de líneas
 Fecha: 2026-10-16 (rama andana-incidencias-export, tras commit 16a496f)
-Estado: SOLO PROPUESTAS — nada aplicado todavía. Marcar [x] al completar.
+Estado (actualizado 2026-10-19): [x] = hecho · [~] = hecho en parte (se indica qué falta) · [ ] = pendiente.
+Hechos en el commit 5969d76 (2026-10-18, «Realismo del modo GTFS») y en el de los datos reales en la nube.
 
 ======================================================================================
 DIAGNÓSTICO
@@ -23,25 +24,34 @@ como en la realidad.
 ======================================================================================
 NIVEL 1 — Lo que más realismo aporta (empezar aquí)
 ======================================================================================
-[ ] 1. CALIBRACIÓN CON RETRASOS REALES (GTFS-RT de Renfe).
+[~] 1. CALIBRACIÓN CON RETRASOS REALES (GTFS-RT de Renfe).
        Renfe publica trip updates y posiciones de Cercanías en tiempo real.
        - Recolector que guarde semanas de datos.
        - Página /validacion que compare la distribución de retrasos simulada con la real por
          línea, tramo y hora: puntualidad a 3 y 5 min (métrica oficial) y percentiles 50/90/99.
        Sin esto, «realista» es una impresión, no un dato. Resolvería directamente la duda del margen.
+       → HECHO: recolector GTFS-RT (PC + nube Cloudflare 24/7, sin duplicados), página /datos con días
+         grabados y su valoración, incidencias publicadas por día y realidad por línea (puntualidad a 5 min,
+         p50/p90, ≥15 min, cancelaciones); comando `compare` (simulador antes/ahora frente a lo real).
+         FALTA: la página de validación sim frente a real (por tramo y hora, puntualidad a 3 min, p99) y
+         calibrar con varios laborables normales.
 
-[ ] 2. PARADA DINÁMICA SEGÚN LOS PASAJEROS.
+[x] 2. PARADA DINÁMICA SEGÚN LOS PASAJEROS.
        Recuperar la invariante perdida («parada extra = 0 si el retraso es 0») en el motor nuevo.
        La parada depende de los que suben y bajan, del nº de puertas del material
        (447/450/465/470), de la ocupación y del retraso acumulado (intervalo mayor = más gente
        esperando). Genera el efecto de trenes que se acaban juntando (bunching), uno de los
        mecanismos de retraso más importantes de Rodalies.
+       → HECHO: viajeros reales de Renfe por estación y franja, parada = fija + viajeros/puertas por serie,
+         más intervalo ⇒ más gente ⇒ más parada, penalización con el tren lleno.
 
-[ ] 3. ROTACIÓN DE MATERIAL.
+[x] 3. ROTACIÓN DE MATERIAL.
        Usar block_id del GTFS o, si falta, inferir los enlaces llegada→salida en cada cabecera con
        un tiempo mínimo de cambio de cabina (3–5 min). Un tren que llega tarde retrasa su
        siguiente servicio. Bonus: tamaño de flota por línea, unidades necesarias en punta y
        pernoctación en cocheras (Cornellà, Mataró, Sant Andreu Comtal…).
+       → HECHO: rotación inferida en cada cabecera (el GTFS no trae block_id útil), 3 min de cambio de cabina,
+         llega tarde ⇒ sale tarde, unidad de reserva. FALTA el bonus (flota por línea, cocheras).
 
 [ ] 4. REGULADOR DEL CTC CON POLÍTICAS CONFIGURABLES.
        - Prioridades por categoría y por retraso.
@@ -51,31 +61,38 @@ NIVEL 1 — Lo que más realismo aporta (empezar aquí)
        - Suprimir servicios cuando el retraso supera un umbral.
        Clave como laboratorio: la misma red da resultados muy distintos según la política.
 
-[ ] 5. QUE LAS VÍAS DE ANDÉN Y LOS ITINERARIOS DE LA ESTACIÓN LIMITEN DE VERDAD.
+[~] 5. QUE LAS VÍAS DE ANDÉN Y LOS ITINERARIOS DE LA ESTACIÓN LIMITEN DE VERDAD.
        Hoy las vías por estación solo se usan en el panel visual.
        - Asignar vía a cada tren.
        - Conflictos de itinerario en la entrada a la estación (cruzar la vía contraria, p. ej. al
          dar la vuelta en una cabecera).
        - Cruces a nivel en bifurcaciones (Aragó, El Prat, Montcada, Castellbisbal…).
        (El enclavamiento de estación ya estaba apuntado como pendiente.)
+       → HECHO en parte: al salir de la vía de estacionamiento en cabecera el tren cruza la vía contraria
+         (ambas señales en rojo). FALTA asignar vía a cada tren y los cruces en bifurcaciones.
 
 ======================================================================================
 NIVEL 2 — Física y señalización más finas
 ======================================================================================
-[ ] 6. PENDIENTES Y DINÁMICA REAL. Altimetría con modelo de elevación (DEM del ICGC o SRTM) sobre la
+[~] 6. PENDIENTES Y DINÁMICA REAL. Altimetría con modelo de elevación (DEM del ICGC o SRTM) sobre la
        polilínea OSM, resistencia al avance (fórmula de Davis), curvas de esfuerzo de tracción por
        serie y masa cargada según la ocupación (hoy aceleración fija al 75%, ACCEL_FRACTION=0.75).
        Afecta a las rampas de la R3, la R4 a Manresa y el Garraf. Bonus: consumo de energía.
+       → HECHO en parte: resistencia Davis (estimada), tracción a potencia constante y masa con los viajeros
+         a bordo. FALTAN las pendientes (altimetría) y la energía.
 
-[ ] 7. SEÑALES REALES. Posición desde OSM (railway=signal) en vez de una cada 1,6 km. Sustituir el
+[~] 7. SEÑALES REALES. Posición desde OSM (railway=signal) en vez de una cada 1,6 km. Sustituir el
        −20% en ámbar por la lógica ASFA Digital: anuncio de parada → control de velocidad a
        60/80 km/h, y curva de frenado hasta la señal en rojo.
+       → HECHO en parte: lógica ASFA (anuncio de parada ⇒ velocidad de anuncio hasta la señal siguiente),
+         frenado de servicio anticipando, reacción del maquinista. FALTA la posición real de las señales (OSM).
 
 [ ] 8. AGUJAS Y VELOCIDAD DE DESVÍO. Ubicar agujas desde OSM (railway=switch) y limitar la velocidad
        al pasar por vía desviada.
 
-[ ] 9. LONGITUD DEL TREN FRENTE A LA DEL ANDÉN. Composición simple o doble (UM), y bloqueo de la cola
+[x] 9. LONGITUD DEL TREN FRENTE A LA DEL ANDÉN. Composición simple o doble (UM), y bloqueo de la cola
        hasta que el último coche libera el cantón (hoy el tren se trata como un punto).
+       → HECHO: longitud por serie, doble composición en punta (447 y 465), la cola ocupa el cantón anterior.
 
 [ ] 10. TIPOS DE DÍA. Laborable, sábado y festivo a partir del calendar del GTFS, con demanda distinta
         en cada uno; obras de fin de semana como escenarios.
@@ -118,7 +135,8 @@ NIVEL 4 — Modelo de pasajeros (más esfuerzo, mucho valor)
         de validaciones por estación), con elección de ruta y transbordos en Sants, PdG, Clot, Arc de
         Triomf y Montcada. La necesitan el punto 2 (parada), el 16 (KPIs) y el 4 (esperar conexiones).
 
-[ ] 19. OCUPACIÓN POR TREN y pasajeros que no caben y se quedan en el andén cuando el tren va lleno.
+[x] 19. OCUPACIÓN POR TREN y pasajeros que no caben y se quedan en el andén cuando el tren va lleno.
+        → HECHO (sin matriz origen-destino: bajan según las bajadas reales de cada estación).
 
 ======================================================================================
 NIVEL 5 — Incidencias más ricas
