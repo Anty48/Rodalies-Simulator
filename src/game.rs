@@ -319,16 +319,48 @@ fn build_atomic_graph(net: &Network) -> AtomicGraph {
     AtomicGraph { adj, atomic, coords }
 }
 
-/// Enrutador sobre el grafo ATÓMICO (solo tramos que recorre algún tren de Rodalies): camino más
-/// corto POR DISTANCIA entre dos paradas. Lo usan los mercancías, que no están en el GTFS: así
-/// circulan por la misma vía física (mismos cantones y señales) que los trenes de viajeros.
+/// Enrutador sobre el grafo ATÓMICO (tramos que recorre algún tren de Rodalies, más la vía solo de
+/// mercancías de `topology::FREIGHT_ONLY_TRACK`): camino más corto POR DISTANCIA entre dos paradas.
+/// Lo usan los mercancías, que no están en el GTFS: así circulan por la misma vía física (mismos
+/// cantones y señales) que los trenes de viajeros.
+///
+/// La adyacencia es NO dirigida: la vía se recorre en los dos sentidos aunque el horario solo dé el
+/// tramo atómico en uno (p. ej. Sant Vicenç → Torredembarra solo existe como Torredembarra → Sant
+/// Vicenç; dirigido, los mercancías Castellbisbal → Tarragona daban la vuelta por Valls y Reus).
 pub struct AtomicRouter {
-    g: AtomicGraph,
+    adj: HashMap<String, Vec<String>>,
+    coords: HashMap<String, (f64, f64)>,
 }
 
 impl AtomicRouter {
     pub fn new(net: &Network) -> Self {
-        AtomicRouter { g: build_atomic_graph(net) }
+        let g = build_atomic_graph(net);
+        let mut adj: HashMap<String, Vec<String>> = HashMap::new();
+        let mut coords = g.coords;
+        let mut link = |a: &str, b: &str| {
+            for (x, y) in [(a, b), (b, a)] {
+                let v = adj.entry(x.to_string()).or_default();
+                if !v.iter().any(|n| n == y) {
+                    v.push(y.to_string());
+                }
+            }
+        };
+        for (a, b) in &g.atomic {
+            link(a, b);
+        }
+        for (a, b, _) in topology::freight_only_links() {
+            link(a, b);
+            for id in [a, b] {
+                if let Some(c) = net.coord(id) {
+                    coords.entry(id.to_string()).or_insert(c);
+                }
+            }
+        }
+        // Orden estable de vecinos: rutas deterministas entre procesos (HashSet de origen).
+        for v in adj.values_mut() {
+            v.sort();
+        }
+        AtomicRouter { adj, coords }
     }
 
     /// Dijkstra por distancia geográfica entre paradas consecutivas. `None` si no hay camino.
@@ -363,10 +395,10 @@ impl AtomicRouter {
             if d > *dist.get(&u).unwrap_or(&f64::INFINITY) {
                 continue;
             }
-            let Some(nbrs) = self.g.adj.get(&u) else { continue };
-            let pu = self.g.coords.get(&u).copied();
+            let Some(nbrs) = self.adj.get(&u) else { continue };
+            let pu = self.coords.get(&u).copied();
             for v in nbrs {
-                let w = match (pu, self.g.coords.get(v)) {
+                let w = match (pu, self.coords.get(v)) {
                     (Some(p), Some(&q)) => haversine_m(p, q),
                     _ => 1000.0,
                 };
@@ -392,7 +424,7 @@ impl AtomicRouter {
     }
 
     pub fn coord(&self, id: &str) -> Option<(f64, f64)> {
-        self.g.coords.get(id).copied()
+        self.coords.get(id).copied()
     }
 }
 
@@ -484,6 +516,18 @@ pub fn network_json(
                         entry.push(dl);
                     }
                 }
+            }
+        }
+    }
+
+    // Vía solo de mercancías (sin trenes de viajeros en el GTFS vigente): sus estaciones también
+    // existen en el mapa, para dibujar la vía y situar a los mercancías que la recorren.
+    for (a, b, _) in topology::freight_only_links() {
+        for id in [a, b] {
+            let Some(n) = net.node(id) else { continue };
+            let node = &net.graph[n];
+            if let (Some(lat), Some(lon)) = (node.lat, node.lon) {
+                st_meta.entry(id.to_string()).or_insert_with(|| (node.stop_name.clone(), lat, lon));
             }
         }
     }
@@ -618,6 +662,13 @@ pub fn network_json(
             }
         }
     }
+    // Vía solo de mercancías: se dibuja (gris, «MERC») salvo que ya la recorra algún tren de viajeros.
+    for (a, b, _) in topology::freight_only_links() {
+        let (a, b) = (a.to_string(), b.to_string());
+        if coord(&a) && coord(&b) && !kept.contains_key(&(a.clone(), b.clone())) && !kept.contains_key(&(b.clone(), a.clone())) {
+            kept.entry((a, b)).or_default().insert(crate::freight::FREIGHT_LINE.to_string());
+        }
+    }
     // Bifurcaciones fuera de estación: cada cantón A→B que pasa por agujas del trazado real se parte
     // en A→J…→B; el tramo común A→J lo comparten (y lo pintan) todos los ramales que lo usan.
     let geom_g = crate::track_geometry::global();
@@ -680,17 +731,11 @@ pub fn network_json(
         })
         .collect();
 
-    // Tramos de vía única (de topology), traducidos a pares de stop_id.
-    // (Partidos también en sus bifurcaciones, igual que en el motor.)
-    let single_track: Vec<[String; 2]> = topology::single_track_pairs(net)
-        .into_iter()
-        .map(|(a, b)| [net.graph[a].stop_id.clone(), net.graph[b].stop_id.clone()])
-        .filter(|[a, b]| coord(a) && coord(b))
-        .flat_map(|[a, b]| {
-            let nodes = if geom_g.is_some_and(|g| !g.via(&a, &b).is_empty()) { chain(&a, &b) } else { chain(&b, &a) };
-            nodes.windows(2).map(|w| [w[0].clone(), w[1].clone()]).collect::<Vec<_>>()
-        })
-        .collect();
+    // Tramos de vía única: los MISMOS trozos de vía física que usa el motor (partidos en sus
+    // bifurcaciones; un trozo común con una línea de vía doble no es vía única).
+    let mut single_track: Vec<[String; 2]> =
+        topology::single_track_pieces(net).into_iter().map(|(a, b)| [a, b]).collect();
+    single_track.sort();
 
     // Cizallamientos (de topology), traducidos a pares de cantones por stop_id.
     let shears: Vec<[[String; 2]; 2]> = topology::shear_conflicts(net)
@@ -804,14 +849,19 @@ pub(crate) fn insert_junctions(stops: Vec<GameStop>) -> Vec<GameStop> {
     for (i, st) in stops.iter().enumerate() {
         if i > 0 {
             let prev = &stops[i - 1];
-            let via = g.via(&prev.s, &st.s);
-            if !via.is_empty() {
-                let len = g.len_m(&prev.s, &st.s).unwrap_or(1.0).max(1.0);
-                let span = st.a.saturating_sub(prev.d) as f64;
-                for (j, d) in via {
-                    let t = prev.d + (span * (d / len).clamp(0.0, 1.0)).round() as u32;
-                    out.push(GameStop { s: j.clone(), a: t, d: t, pass: true });
-                }
+            let len = g.len_m(&prev.s, &st.s).unwrap_or(1.0).max(1.0);
+            // Agujas en orden de paso con su distancia desde `prev`; si el trazado solo existe en el
+            // sentido contrario (tramo que el horario recorre en un solo sentido), se invierte.
+            let fwd = g.via(&prev.s, &st.s);
+            let via: Vec<(&String, f64)> = if !fwd.is_empty() {
+                fwd.iter().map(|(j, d)| (j, *d)).collect()
+            } else {
+                g.via(&st.s, &prev.s).iter().rev().map(|(j, d)| (j, len - d)).collect()
+            };
+            let span = st.a.saturating_sub(prev.d) as f64;
+            for (j, d) in via {
+                let t = prev.d + (span * (d / len).clamp(0.0, 1.0)).round() as u32;
+                out.push(GameStop { s: j.clone(), a: t, d: t, pass: true });
             }
         }
         out.push(st.clone());

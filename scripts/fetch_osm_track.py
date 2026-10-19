@@ -101,6 +101,14 @@ def turn_ok(p, n, q):
     return c >= math.cos(math.radians(MAX_TURN_DEG))
 
 
+# Vía sin trenes de viajeros en el GTFS vigente (autobús por obras) que usan los MERCANCÍAS: se traza
+# igual que un cantón. COPIA de `FREIGHT_ONLY_TRACK` en src/topology.rs (si cambias una, cambia la otra).
+FREIGHT_ONLY_TRACK = [
+    # La Plana-Picamoixons – Les Borges Blanques por Montblanc (Lleida → Valls → Sant Vicenç).
+    ["73100", "73010", "73009", "73008", "73007", "73006", "73005", "73004", "73003"],
+]
+
+
 def load_stops_and_cantons():
     stops = {}
     with open(os.path.join(GTFS, "stops.txt"), encoding="utf-8-sig") as f:
@@ -135,6 +143,11 @@ def load_stops_and_cantons():
             if a != b and a in stops and b in stops:
                 pairs.add((a, b))
                 lines.setdefault((a, b), set()).add(trip_line.get(t, ""))
+    for chain in FREIGHT_ONLY_TRACK:
+        for a, b in zip(chain, chain[1:]):
+            if a in stops and b in stops:
+                pairs.add((a, b))
+                pairs.add((b, a))
     return stops, sorted(pairs), lines
 
 

@@ -139,8 +139,11 @@ pub fn default_scenarios() -> Vec<FreightScenario> {
             c("port", "Castellbisbal ↔ L'Hospitalet (Port de Barcelona)", "72210", "72305", &["72211", "72300"], 3.0),
             // Automóviles de SEAT Martorell hacia el puerto.
             c("seat", "Martorell (SEAT) ↔ L'Hospitalet (Port)", "72209", "72305", &["72211", "72300"], 2.0),
-            // Químicos del Camp de Tarragona hacia Lleida.
-            c("quim", "Tarragona ↔ Lleida (químicos, por Reus)", "71500", "78400", &["71400"], 2.0),
+            // Lleida (Aragón) ↔ Castellbisbal: TODO lo que viene de Lleida baja por Montblanc y Valls a
+            // Sant Vicenç de Calders y sube por el corredor del Penedès (nunca por Manresa–Terrassa–
+            // Sabadell). El tramo Picamoixons–Les Borges no tiene trenes de viajeros en el GTFS:
+            // ver `topology::FREIGHT_ONLY_TRACK`.
+            c("lle", "Lleida ↔ Castellbisbal (por Montblanc y Sant Vicenç)", "78400", "72210", &["73008", "71600", "72204"], 2.0),
         ],
         trains: Vec::new(),
         avoid_peak: true,

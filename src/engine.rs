@@ -824,23 +824,10 @@ impl Engine {
         let coord = |id: &str| net.coord(id); // estaciones y bifurcaciones
 
         // Vía única (canónica por stop_id) — necesaria para sub-bloques y para el testigo.
-        let mut single_track_str: HashSet<String> = HashSet::new();
-        for (a, b) in topology::single_track_pairs(net) {
-            let (sa, sb) = (&net.graph[a].stop_id, &net.graph[b].stop_id);
-            single_track_str.insert(canon(sa, sb));
-            // Si el cantón pasa por bifurcaciones, sus trozos A→J…→B heredan la vía única.
-            if let Some(g) = track_geometry::global() {
-                let (from, to, v) = if g.via(sa, sb).is_empty() { (sb, sa, g.via(sb, sa)) } else { (sa, sb, g.via(sa, sb)) };
-                if !v.is_empty() {
-                    let mut prev = from.as_str();
-                    for (j, _) in v {
-                        single_track_str.insert(canon(prev, j));
-                        prev = j;
-                    }
-                    single_track_str.insert(canon(prev, to));
-                }
-            }
-        }
+        // Por trozos de vía física (partidos en las bifurcaciones): un trozo común con una línea de
+        // vía doble NO es vía única (ver `topology::single_track_pieces`).
+        let single_track_str: HashSet<String> =
+            topology::single_track_pieces(net).into_iter().map(|(a, b)| canon(&a, &b)).collect();
 
         // Estaciones subterráneas (margen del maquinista en túnel): por NOMBRE, como la config.
         let tunnel: HashSet<&str> = rc.tunnel_stations.iter().map(|s| s.as_str()).collect();
@@ -2135,12 +2122,12 @@ fn anden_lleno(occupants: &[usize], trains: &[Train], except: Option<usize>, tra
     parados >= tracks
 }
 
-/// MODO SIN HORARIOS: recursos de vía única que un tren debe reservar AL ENTRAR en el bloque
+/// MODO SIN HORARIOS: recursos de vía única que un tren debe reservar mientras recorre el bloque
 /// `seq[k]`, además del propio: si su siguiente estación es un PUNTO DE PASO (no para) y el cantón
 /// que sigue también es vía única, cruzará sin detenerse, así que necesita toda la cadena de vía
 /// única hasta su próxima parada real. Sin esto, dos exprés en sentidos opuestos se encuentran en un
 /// apartadero donde ninguno para y cada uno retiene el tramo que pide el otro (interbloqueo real del
-/// R15 en Riudecanyes-Botarell). Con horario no hace falta: los cruces los ordena el horario.
+/// R15 en Riudecanyes-Botarell). Con horario basta la comprobación de entrada `cadena_sin_frente`.
 fn cadena_unica(t: &Train, dynp: &Dyn, k: usize, out: &mut Vec<u32>) {
     out.clear();
     let Some(b) = t.seq.get(k) else { return };
@@ -2157,6 +2144,61 @@ fn cadena_unica(t: &Train, dynp: &Dyn, k: usize, out: &mut Vec<u32>) {
         }
         out.push(nb.res_single);
     }
+}
+
+/// ¿Puede el tren `idx` entrar en el bloque `seq[k]` sin arriesgar un ENCUENTRO DE FRENTE en vía
+/// única? Si `seq[k]` es vía única y el tren cruzará sin parar los puntos siguientes (exprés,
+/// mercancías, bifurcaciones), recorre la cadena de vía única hasta su próxima parada real: no puede
+/// haber en ella un tren en sentido CONTRARIO que tampoco vaya a parar antes de encontrarlo. Dos
+/// trenes así se quedarían cara a cara en un apartadero (o una aguja) donde ninguno para, cada uno
+/// reteniendo el tramo que pide el otro, para siempre (R13 ↔ mercancías en Puigverd de Lleida).
+/// Es la regla del CTC: no se da paso a una vía única si el cruce no tiene dónde hacerse.
+/// - Seguir a un tren en el MISMO sentido sí está permitido (bloque a bloque, como siempre).
+/// - Un tren de frente que PARA en una estación de la cadena antes de llegar no bloquea: el cruce se
+///   hace allí (él espera en la vía de apartado).
+/// - MODO SIN HORARIOS: cualquier ocupante de la cadena bloquea (además se reserva, `cadena_unica`).
+fn cadena_sin_frente(trains: &[Train], occ: &[Vec<usize>], dynp: &Dyn, idx: usize, k: usize, free_run: bool) -> bool {
+    let t = &trains[idx];
+    let Some(b) = t.seq.get(k) else { return true };
+    if b.origin || !dynp.block_single(b) {
+        return true;
+    }
+    for i in k + 1..t.seq.len() {
+        let nb = &t.seq[i];
+        if nb.sb != 0 {
+            continue; // sub-bloques interiores del mismo cantón (vía única = un solo recurso)
+        }
+        // `nb` empieza en `pts[arr_idx-1]`: si el tren para allí (o se aparta), ahí acaba la cadena.
+        let p = nb.arr_idx - 1;
+        if !t.pts[p].pass || p == t.yield_target || !dynp.block_single(nb) {
+            break;
+        }
+        for &o in &occ[nb.res_single as usize] {
+            if o == idx {
+                continue;
+            }
+            if free_run {
+                return false;
+            }
+            let ot = &trains[o];
+            let ob = &ot.seq[ot.cb];
+            // Solo cuenta la CABEZA de un tren que viene de frente por este mismo cantón (una cola, o
+            // un tren que va en nuestro sentido, se aleja de nosotros).
+            if !(ob.from == nb.to && ob.to == nb.from) {
+                continue;
+            }
+            // ¿Para antes de llegar a nosotros? Su próxima parada es una de las estaciones de la
+            // cadena entre él y nosotros (inicio de cada cantón desde `seq[k+1]` hasta este).
+            let su_parada = ot.pts.get(ot.target_stop).map(|x| x.id.as_str());
+            let para_antes = t.seq[k + 1..=i]
+                .iter()
+                .any(|x| x.sb == 0 && Some(t.pts[x.arr_idx - 1].id.as_str()) == su_parada);
+            if !para_antes {
+                return false;
+            }
+        }
+    }
+    true
 }
 
 /// ¿Va a entrar pronto (según su horario + retraso) en el cantón de vía única `rk` un tren con
@@ -2176,6 +2218,13 @@ fn prioritario_entrando_pronto(
             continue;
         }
         if trains[k].phase == Phase::Done {
+            continue;
+        }
+        // Un tren RETENIDO ante una señal no puede entrar pronto: no reclama la prioridad. Si no,
+        // el que cede puede estar cediendo al tren que tiene detrás atascado por él mismo: la hora
+        // estimada de éste (horario + retraso) se desplaza con su retraso y la cesión no acaba
+        // nunca (interbloqueo real: mercancías parado en Vila-seca → Bif. Tarragona con un R15 detrás).
+        if trains[k].waiting {
             continue;
         }
         let entrada = trains[k].pts[j].d + trains[k].delay_s;
@@ -2216,14 +2265,8 @@ fn bloque_entrada(
     {
         return false;
     }
-    if free_run && nb.sb == 0 {
-        // Toda la cadena de vía única que cruzará sin parar ha de estar libre (ver `cadena_unica`).
-        let k = trains[idx].cb + 1;
-        let mut chain = Vec::new();
-        cadena_unica(&trains[idx], dynp, k, &mut chain);
-        if chain.iter().any(|&r| occ[r as usize].iter().any(|&x| x != idx)) {
-            return false;
-        }
+    if nb.sb == 0 && !cadena_sin_frente(trains, occ, dynp, idx, trains[idx].cb + 1, free_run) {
+        return false;
     }
     // Prioridad en vía única: se anticipa con su HORARIO; sin horarios no hay reserva. Los
     // regionales tienen prioridad sobre el resto de viajeros; los mercancías ceden a todos.
@@ -3066,6 +3109,37 @@ mod tests {
         assert!(anden_lleno(&[0, 1], &trains, None, 2)); // las dos vías del acceso ocupadas
         assert!(!anden_lleno(&[0, 1], &trains, Some(1), 2)); // el propio tren no cuenta
         assert!(anden_lleno(&[2], &trains, None, 2)); // un tren circulando por la aproximación
+    }
+
+    #[test]
+    fn via_unica_sin_encuentro_de_frente_donde_nadie_para() {
+        let pt = |id: &str, pass: bool| Pt { id: id.into(), a: 0.0, d: 0.0, lat: 0.0, lon: 0.0, pass };
+        let mut origin = bloque(0, 0, 0, false, 0);
+        origin.origin = true;
+        // Tren 0: A (para) →(único, rec 10) B (no para) →(único, rec 11) C (para). Quiere entrar en A→B.
+        let a = tren_prueba(Phase::Dwell, vec![origin.clone(), bloque(0, 1, 1, true, 10), bloque(1, 2, 2, true, 11)],
+            vec![pt("A", false), pt("B", true), pt("C", false)]);
+        // Tren 1: de frente por C→B (rec 11), hacia A.
+        let mut o = tren_prueba(Phase::Running, vec![origin.clone(), bloque(2, 1, 1, true, 11), bloque(1, 0, 2, true, 10)],
+            vec![pt("C", false), pt("B", true), pt("A", false)]);
+        o.cb = 1;
+        o.target_stop = 2; // tampoco para en B
+        let mut occ = vec![Vec::new(); 12];
+        occ[11].push(1);
+        let (red, single) = (HashSet::new(), HashSet::new());
+        let dynp = Dyn { red: &red, single: &single };
+        let mut trains = vec![a, o];
+        // Ninguno para en B: se quedarían cara a cara → no se le da paso.
+        assert!(!cadena_sin_frente(&trains, &occ, &dynp, 0, 1, false));
+        // Si el de frente para en B, el cruce se hace allí → sí puede entrar.
+        trains[1].target_stop = 1;
+        assert!(cadena_sin_frente(&trains, &occ, &dynp, 0, 1, false));
+        // Un tren que va en NUESTRO sentido por B→C no bloquea (se le sigue bloque a bloque)…
+        trains[1].target_stop = 2;
+        trains[1].seq[1] = bloque(1, 2, 2, true, 11);
+        assert!(cadena_sin_frente(&trains, &occ, &dynp, 0, 1, false));
+        // …salvo sin horarios, donde la cadena entera ha de estar libre.
+        assert!(!cadena_sin_frente(&trains, &occ, &dynp, 0, 1, true));
     }
 
     #[test]

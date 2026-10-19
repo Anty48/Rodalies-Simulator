@@ -140,6 +140,9 @@ pub struct Network {
     pub services: Vec<TrainService>,
     /// Viajes reetiquetados por `topology::fix_feed` (errores de línea del feed de Renfe).
     pub feed_fixes: usize,
+    /// Viajes descartados por recorrer solo paradas DESCONECTADAS de la red principal (ver
+    /// `main_component`), p. ej. un trozo «R15» Tardienta → Villanueva de Gállego del feed nacional.
+    pub isolated_trips: usize,
 }
 
 impl Network {
@@ -278,6 +281,48 @@ fn reader(path: &Path) -> Result<csv::Reader<std::fs::File>, Box<dyn Error>> {
     Ok(rdr)
 }
 
+/// Paradas de la componente conexa MÁS GRANDE del grafo de recorridos (paradas consecutivas de
+/// cualquier viaje, sin sentido; autobuses incluidos: un autobús de sustitución sí enlaza su tramo
+/// con la red). Rodalies es una sola red conexa: lo que queda fuera son trozos de otras redes que
+/// el filtrado por `route_short_name` no puede distinguir.
+fn main_component(sched: &HashMap<String, Vec<ScheduledStop>>) -> std::collections::HashSet<String> {
+    // Union-find sobre índices de parada.
+    let mut idx: HashMap<&str, usize> = HashMap::new();
+    let mut parent: Vec<usize> = Vec::new();
+    fn find(p: &mut [usize], mut x: usize) -> usize {
+        while p[x] != x {
+            p[x] = p[p[x]];
+            x = p[x];
+        }
+        x
+    }
+    for stops in sched.values() {
+        let mut prev: Option<usize> = None;
+        for s in stops {
+            let n = idx.len();
+            let i = *idx.entry(s.stop_id.as_str()).or_insert_with(|| {
+                parent.push(n);
+                n
+            });
+            if let Some(j) = prev {
+                let (ri, rj) = (find(&mut parent, i), find(&mut parent, j));
+                if ri != rj {
+                    parent[ri] = rj;
+                }
+            }
+            prev = Some(i);
+        }
+    }
+    let mut size: HashMap<usize, usize> = HashMap::new();
+    for i in 0..parent.len() {
+        *size.entry(find(&mut parent, i)).or_default() += 1;
+    }
+    let Some(big) = size.into_iter().max_by_key(|&(r, n)| (n, std::cmp::Reverse(r))).map(|(r, _)| r) else {
+        return std::collections::HashSet::new();
+    };
+    idx.into_iter().filter(|&(_, i)| find(&mut parent, i) == big).map(|(s, _)| s.to_string()).collect()
+}
+
 /// Carga la red completa desde una carpeta GTFS.
 pub fn load(dir: &Path) -> Result<Network, Box<dyn Error>> {
     // 1. routes.txt -> route_id -> short_name (+ route_type para distinguir autobuses)
@@ -394,6 +439,26 @@ pub fn load(dir: &Path) -> Result<Network, Box<dyn Error>> {
         }
     }
 
+    // 4b. Fuera los trozos de recorrido DESCONECTADOS de la red principal: el feed nacional cuela
+    // viajes parciales de líneas que salen de Catalunya (un «R15» de solo dos paradas Tardienta →
+    // Villanueva de Gállego, junto a Zaragoza) que no comparten ninguna vía con Rodalies. Se queda
+    // la componente conexa más grande (por paradas) y se descartan sus viajes y sus paradas.
+    let keep = main_component(&sched);
+    let minor: std::collections::HashSet<String> = sched
+        .values()
+        .flatten()
+        .filter(|s| !keep.contains(&s.stop_id))
+        .map(|s| s.stop_id.clone())
+        .collect();
+    let before = sched.len();
+    sched.retain(|_, stops| stops.iter().all(|s| keep.contains(&s.stop_id)));
+    let isolated_trips = before - sched.len();
+    if !minor.is_empty() {
+        // Fuera también sus paradas (una parada sin ningún viaje ya existía así y se conserva).
+        graph.retain_nodes(|g, n| !minor.contains(&g[n].stop_id));
+        node_of_stop = graph.node_indices().map(|n| (graph[n].stop_id.clone(), n)).collect();
+    }
+
     // 5. Ensamblar servicios y 6. construir aristas (cantones) de forma dinámica.
     let mut services: Vec<TrainService> = Vec::new();
     // Dedupe de aristas + quedarse con el menor tiempo de marcha observado.
@@ -476,6 +541,7 @@ pub fn load(dir: &Path) -> Result<Network, Box<dyn Error>> {
         rail_lines,
         services,
         feed_fixes: 0,
+        isolated_trips,
     };
     // Errores conocidos del feed (líneas mal etiquetadas, colores): se corrigen al cargar, como el
     // resto de rarezas del feed, para que TODO lo de aguas abajo vea la red ya correcta.

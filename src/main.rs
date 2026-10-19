@@ -74,7 +74,10 @@ async fn main() {
     };
     let load_ms = t0.elapsed().as_secs_f64() * 1000.0;
     println!("✓ Càrrega completada en {:.1} ms", load_ms);
-    println!("✓ Correccions del feed: {} viatges reetiquetats (R2S→R15, R2N→R11) · color R13\n", net.feed_fixes);
+    println!(
+        "✓ Correccions del feed: {} viatges reetiquetats (R2S→R15, R2N→R11) · color R13 · {} viatges fora de la xarxa descartats\n",
+        net.feed_fixes, net.isolated_trips
+    );
 
     // Modo motor unificado (Fase 1, headless): `cargo run --release -- simulate`
     if std::env::args().any(|a| a == "simulate") {

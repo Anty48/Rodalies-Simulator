@@ -398,6 +398,93 @@ pub fn single_track_pairs(net: &Network) -> HashSet<(NodeIndex, NodeIndex)> {
     set
 }
 
+/// Paradas de un cantón con las BIFURCACIONES del trazado real intercaladas (`a, J…, b`): los
+/// trozos `a→J`, `J→…`, `…→b` son la vía física que comparte con otros ramales. Si el trazado solo
+/// existe en el sentido contrario, se usa invertido (misma vía). Sin trazado: `[a, b]`.
+pub fn canton_pieces(a: &str, b: &str) -> Vec<String> {
+    let mut nodes = vec![a.to_string()];
+    if let Some(g) = crate::track_geometry::global() {
+        let fwd = g.via(a, b);
+        if !fwd.is_empty() {
+            nodes.extend(fwd.iter().map(|(j, _)| j.clone()));
+        } else {
+            nodes.extend(g.via(b, a).iter().rev().map(|(j, _)| j.clone()));
+        }
+    }
+    nodes.push(b.to_string());
+    nodes
+}
+
+/// Par NO dirigido de stop_id (orden lexicográfico) — clave de un trozo de vía física.
+fn piece_key(a: &str, b: &str) -> (String, String) {
+    if a <= b {
+        (a.to_string(), b.to_string())
+    } else {
+        (b.to_string(), a.to_string())
+    }
+}
+
+/// Trozos de vía física (pares NO dirigidos de stop_id o bifurcación, ver [`canton_pieces`]) que son
+/// de VÍA ÚNICA. Fuente única para el motor y para el visor.
+///
+/// Un cantón de vía única que pasa por una bifurcación se parte en ella, pero sus trozos SOLO son
+/// vía única si ningún cantón de vía DOBLE pasa también por ese mismo trozo: el tramo común lo es de
+/// la línea doble. Caso real: la R17 Tarragona → Salou-Port Aventura (vía única) comparte con la R15
+/// Tarragona → Vila-seca (vía doble) el tramo Tarragona → Bif. Vila-seca; heredaba la vía única, y
+/// dos trozos únicos seguidos con una aguja en medio (donde no se puede cruzar) interbloqueaban los
+/// R15. Incluye los tramos de [`FREIGHT_ONLY_TRACK`] declarados de vía única.
+pub fn single_track_pieces(net: &Network) -> HashSet<(String, String)> {
+    let single = single_track_pairs(net);
+    let mut out: HashSet<(String, String)> = HashSet::new();
+    let mut double: HashSet<(String, String)> = HashSet::new();
+    let mut seen: HashSet<(NodeIndex, NodeIndex)> = HashSet::new();
+    for svc in net.services.iter().filter(|s| !s.is_bus) {
+        for w in svc.schedule.windows(2) {
+            let (Some(na), Some(nb)) = (net.node(&w[0].stop_id), net.node(&w[1].stop_id)) else { continue };
+            if na == nb || !seen.insert((na, nb)) {
+                continue;
+            }
+            let es_unica = single.contains(&unordered(na, nb));
+            for p in canton_pieces(&w[0].stop_id, &w[1].stop_id).windows(2) {
+                let k = piece_key(&p[0], &p[1]);
+                if es_unica {
+                    out.insert(k);
+                } else {
+                    double.insert(k);
+                }
+            }
+        }
+    }
+    out.retain(|k| !double.contains(k));
+    for (a, b, unica) in freight_only_links() {
+        if unica {
+            out.insert(piece_key(a, b));
+        }
+    }
+    out
+}
+
+/// Vía que EXISTE físicamente pero por la que el GTFS vigente no lleva ningún tren de viajeros
+/// (servicio sustituido por autobús por obras, o línea sin viajeros): `(descripción, vía única,
+/// paradas en orden de vía)`. Solo la usan los MERCANCÍAS (`freight.rs`, enrutado) y el visor la
+/// dibuja; el motor la trata como cualquier otro cantón. `scripts/fetch_osm_track.py` repite esta
+/// lista (`FREIGHT_ONLY_TRACK`) para trazar también su vía real: si la cambias, cámbiala allí.
+pub const FREIGHT_ONLY_TRACK: &[(&str, bool, &[&str])] = &[
+    // Lleida – La Plana-Picamoixons por Montblanc (R13/R14 con autobús en el feed): itinerario de los
+    // mercancías de Lleida hacia el corredor (Valls – Sant Vicenç de Calders). Vía única, como el
+    // resto de la línea del interior (ver la zona R13 de `SINGLE_TRACK_ZONE_IDS`).
+    ("La Plana-Picamoixons – Les Borges Blanques (por Montblanc)", true, &[
+        "73100", "73010", "73009", "73008", "73007", "73006", "73005", "73004", "73003",
+    ]),
+];
+
+/// Pares consecutivos `(a, b, vía única)` de [`FREIGHT_ONLY_TRACK`] (un sentido; la vía es la misma).
+pub fn freight_only_links() -> impl Iterator<Item = (&'static str, &'static str, bool)> {
+    FREIGHT_ONLY_TRACK
+        .iter()
+        .flat_map(|(_, unica, ids)| ids.windows(2).map(move |w| (w[0], w[1], *unica)))
+}
+
 fn node_by_name(net: &Network, sub: &str) -> Option<NodeIndex> {
     net.find_stop_by_name(sub).and_then(|n| net.node(&n.stop_id))
 }
