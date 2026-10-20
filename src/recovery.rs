@@ -74,6 +74,31 @@ pub fn delay_track(timeline: &[(u32, f64)], active: &[u32]) -> DelayTrack {
     DelayTrack { t0, dt, mean, total, active: active.to_vec() }
 }
 
+/// Seguimiento de UNA línea (mismo eje temporal que [`DelayTrack`]): retraso medio por tren de la
+/// línea en servicio y retraso acumulado de sus trenes, por minuto. Sirve para separar qué línea
+/// carga el retraso de la red y superponerlas para ver cómo se contagian.
+#[derive(Serialize, Clone, Debug)]
+pub struct LineTrack {
+    pub line: String,
+    /// Color oficial de la línea (`route_color` del GTFS).
+    pub color: String,
+    pub mean: Vec<f64>,
+    pub total: Vec<f64>,
+    pub active: Vec<u32>,
+}
+
+/// Series de una línea a partir de su retraso acumulado (s) y sus trenes en servicio por muestra.
+pub fn line_track(line: &str, color: String, total_s: &[f32], active: &[u16]) -> LineTrack {
+    let r2 = |x: f64| (x * 100.0).round() / 100.0;
+    let total: Vec<f64> = total_s.iter().map(|&d| r2(d as f64 / 60.0)).collect();
+    let mean = total
+        .iter()
+        .zip(active)
+        .map(|(&t, &n)| if n > 0 { r2(t / n as f64) } else { 0.0 })
+        .collect();
+    LineTrack { line: line.to_string(), color, mean, total, active: active.iter().map(|&n| n as u32).collect() }
+}
+
 /// Impacto de una incidencia sobre la red: cuánto SUBE el retraso acumulado (min) desde que empieza
 /// hasta su máximo dentro de `[t0, t1 + IMPACT_TAIL_S]`. Es la medida de gravedad REAL (lo que le
 /// costó a la red), no la nominal (efecto × duración). Con incidencias solapadas ambas comparten

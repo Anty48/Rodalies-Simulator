@@ -244,7 +244,7 @@ body.ctc {
 .net-info { font-size: 12.5px; color: var(--muted); line-height: 1.5; }
 .hint { font-size: 11.5px; color: var(--muted); line-height: 1.55; margin: 0; }
 .hint.mini { font-size: 11px; color: var(--faint); }
-/* Aviso "parámetros traídos de Varias runs" en la pantalla previa (botón "Ver en simulador"). */
+/* Aviso "parámetros traídos de Simulaciones encadenadas rápidas" en la pantalla previa (botón "Ver en simulador"). */
 .pre-from { margin-top: 10px; padding: 10px 13px; border-radius: 10px; font-size: 12.5px; line-height: 1.5; color: var(--text);
   background: rgba(236,110,21,0.12); border: 1px solid rgba(236,110,21,0.45); }
 .pre-from b { color: var(--naranja-lift); }
@@ -467,6 +467,8 @@ body.ctc {
 .preday-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; padding-bottom: 18px; margin-bottom: 20px; border-bottom: 1px solid var(--stroke); }
 .preday-head .preday-kicker { justify-content: flex-start; }
 .preday-head h2 { margin: 4px 0 6px; font-family: var(--display); font-size: 26px; }
+.pre-menu { display: inline-flex; align-items: center; gap: 6px; margin-top: 10px; margin-right: 8px; padding: 6px 13px; border-radius: 999px; border: 1px solid var(--stroke); background: rgba(0,0,0,0.25); color: inherit; text-decoration: none; font-size: 12.5px; font-weight: 700; }
+.pre-menu:hover { border-color: var(--naranja); color: var(--naranja-lift); }
 .preday-head .hint { font-size: 13px; }
 .preday-renfe { height: 24px; object-fit: contain; opacity: .9; margin-top: 4px; }
 .preday-grid { display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr); gap: 20px; align-items: start; }
@@ -750,6 +752,11 @@ body.ctc {
 .sched-cads:empty { display: none; }
 .sched-opt .cad-tag, .chaos-tag { display: inline-block; font-size: 9.5px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; border-radius: 10px; padding: 1px 7px; margin-left: 4px; vertical-align: 1px; }
 .sched-opt .cad-tag { background: rgba(131,0,101,0.35); color: #f1c6e6; }
+/* Día real grabado: lo que no se puede elegir (es una reproducción) queda apagado. */
+.pre-lockable.pre-locked > :not(.card-title):not(.pre-lock-note) { opacity: .35; pointer-events: none; }
+.pre-lockable.pre-locked .pre-lock-note { color: var(--naranja-lift); }
+.sched-opt .real-tag { display: inline-block; font-size: 9.5px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; border-radius: 10px; padding: 1px 7px; margin-left: 4px; vertical-align: 1px; background: rgba(42,120,214,0.3); color: #cfe2fb; }
+.sched-opt .real-day { margin-top: 6px; max-width: 100%; padding: 5px 8px; border-radius: 7px; border: 1px solid var(--stroke); background: rgba(0,0,0,0.35); color: inherit; font: inherit; font-size: 12px; }
 .chaos-tag { background: rgba(255,95,95,0.22); color: #ff9a9a; }
 .sched-free:has(input:checked) { border-color: #ff5f5f; box-shadow: inset 0 0 0 1px #ff5f5f, 0 0 14px rgba(255,95,95,0.18); background: rgba(255,95,95,0.07); }
 .sched-make { display: inline-block; margin-top: 9px; font-size: 12px; color: var(--naranja-lift); text-decoration: none; font-weight: 600; }

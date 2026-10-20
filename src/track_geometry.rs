@@ -17,6 +17,11 @@
 //! ser A→J→B, así el tramo A→J es el MISMO cantón físico para los dos ramales (se bloquean entre
 //! sí, como en la realidad) y los trenes se ven sobre la vía común hasta la aguja.
 //!
+//! APARTADEROS DE CRUCE: en vía única, las vías de cruce sin parada de viajeros (estaciones cerradas,
+//! puestos de cruce: Chiprana, Val de Pilas…) también son nodos de paso ("A<n>", `passing_loop`). El
+//! tren no para en ellos por horario, pero el motor puede detenerlo allí para CRUZARSE con uno de
+//! frente en vez de retenerlo en la estación anterior todo el tramo (Samper → Caspe son 30 km).
+//!
 //! Datos: `processed/adif/track_geometry.json`, generado por `scripts/fetch_osm_track.py`. Si falta
 //! el fichero o un cantón, se usa la recta (comportamiento anterior) — nunca es obligatorio.
 
@@ -34,12 +39,16 @@ pub struct CantonGeom {
     pub len_m: f64,
 }
 
-/// Bifurcación fuera de estación: punto de divergencia de dos o más ramales.
+/// Nodo de paso fuera de estación: BIFURCACIÓN (punto de divergencia de dos o más ramales) o
+/// APARTADERO DE CRUCE de vía única sin parada de viajeros.
 pub struct Junction {
     pub lat: f64,
     pub lon: f64,
-    /// Nombre legible: "Bif. <estación de la que sale el tramo común>".
+    /// Nombre legible: "Bif. <estación de la que sale el tramo común>" o
+    /// "Apartadero <estación>–<estación> (km x)".
     pub name: String,
+    /// Apartadero de cruce (vía principal + vía de apartado): dos trenes se pueden cruzar en él.
+    pub passing_loop: bool,
 }
 
 pub struct TrackGeometry {
@@ -67,6 +76,13 @@ struct RawJunction {
     lat: f64,
     lon: f64,
     near: String,
+    /// Apartadero de cruce: estación del otro extremo del cantón y km desde `near`.
+    #[serde(default, rename = "loop")]
+    passing_loop: bool,
+    #[serde(default)]
+    far: String,
+    #[serde(default)]
+    km: f64,
 }
 
 impl TrackGeometry {
@@ -78,13 +94,25 @@ impl TrackGeometry {
             .into_iter()
             .map(|(id, j)| {
                 let near = stop_names.get(&j.near).cloned().unwrap_or(j.near);
-                (id, Junction { lat: j.lat, lon: j.lon, name: format!("Bif. {near}") })
+                let name = if j.passing_loop {
+                    let far = stop_names.get(&j.far).cloned().unwrap_or(j.far);
+                    format!("Apartadero {near}–{far} (km {:.1})", j.km)
+                } else {
+                    format!("Bif. {near}")
+                };
+                (id, Junction { lat: j.lat, lon: j.lon, name, passing_loop: j.passing_loop })
             })
             .collect();
         let mut cantons = HashMap::with_capacity(raw.cantons.len());
         let mut via = HashMap::new();
         let mut pieces: Vec<((String, String), Vec<(f64, f64)>)> = Vec::new();
-        for (k, c) in raw.cantons {
+        // Orden FIJO por clave: el tramo común de una bifurcación aparece una vez por ramal (con
+        // puntos de corte algo distintos) y abajo «se queda el primero». Recorriendo el `HashMap` del
+        // JSON, el primero cambiaba en cada ejecución → la longitud del tramo común variaba unos
+        // metros → la misma semilla daba jornadas distintas (un R15 llegaba a Sants con 3 o 22 min).
+        let mut raw_cantons: Vec<(String, RawCanton)> = raw.cantons.into_iter().collect();
+        raw_cantons.sort_by(|x, y| x.0.cmp(&y.0));
+        for (k, c) in raw_cantons {
             let Some((a, b)) = k.split_once('>') else { continue };
             if c.coords.len() < 2 {
                 continue;
@@ -137,8 +165,8 @@ impl TrackGeometry {
             .map(|g| g.len_m)
     }
 
-    /// Bifurcaciones por las que pasa el cantón estación→estación `a → b`, con su distancia (m)
-    /// desde `a`, en orden de paso. Vacío si va directo.
+    /// Bifurcaciones y apartaderos de cruce por los que pasa el cantón estación→estación `a → b`,
+    /// con su distancia (m) desde `a`, en orden de paso. Vacío si va directo.
     pub fn via(&self, a: &str, b: &str) -> &[(String, f64)] {
         self.via.get(&(a.to_string(), b.to_string())).map(|v| v.as_slice()).unwrap_or(&[])
     }

@@ -11,7 +11,7 @@
 // (`/api/cadence/catalog`, src/cadence.rs) y la malla se genera allí (`/api/cadence/load`): este
 // fichero solo edita la especificación y la guarda en el navegador.
 //
-// Formato guardado (lo leen también el simulador visual y Varias runs):
+// Formato guardado (lo leen también el simulador visual y Simulaciones encadenadas rápidas):
 //   localStorage "rod-cadences" = [{ id, name, updated, spec: { name,
 //     markers: [{ line, pat, min, every, alt: { pat, every } | null }],
 //     groups:  [{ name, ref, g, d, items: [pat…], mins: [min…], every }] } }]
@@ -481,7 +481,7 @@
     if (!guardarLista(l)) return;
     dirty = false;
     pintarGuardados();
-    status(T("Guardado. Ya puedes elegirlo en la pantalla previa del simulador o en Varias runs."), "ok");
+    status(T("Guardado. Ya puedes elegirlo en la pantalla previa del simulador o en Simulaciones encadenadas rápidas."), "ok");
   }
   function descartarCambios() { return !dirty || confirm(T("Hay cambios sin guardar en este horario. ¿Descartarlos?")); }
   function abrir(id) {

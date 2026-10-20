@@ -53,6 +53,10 @@ struct GameStation {
     /// lo dibuja como parada ni abre su panel.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     junction: bool,
+    /// El nodo de paso es un APARTADERO DE CRUCE de vía única (vía principal + vía de apartado, sin
+    /// viajeros): el visor lo dibuja (los trenes pueden pararse en él a cruzarse), sin panel.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    passing_loop: bool,
 }
 
 /// Índice `stop_id -> [rutas de imagen]` de `reference/trenscat/index.json`, si existe.
@@ -432,6 +436,12 @@ impl AtomicRouter {
 /// mapa de la red): tono derivado del nombre, luminosidad moderada para fondo claro.
 use crate::topology::display_line;
 
+/// Color oficial de una línea (`route_color` del GTFS, con las correcciones de `topology`) o, si el
+/// feed no lo trae, el de reserva estable. Mismo color que el mapa.
+pub fn line_color(net: &Network, line: &str) -> String {
+    net.line_colors.get(line).cloned().unwrap_or_else(|| fallback_color(line))
+}
+
 fn fallback_color(line: &str) -> String {
     let h: u32 = line
         .bytes()
@@ -606,6 +616,7 @@ pub fn network_json(
                 corridors,
                 diagrams,
                 junction: false,
+                passing_loop: false,
             }
         })
         .collect();
@@ -704,12 +715,13 @@ pub fn network_json(
                     name: j.name.clone(),
                     lat: j.lat,
                     lon: j.lon,
-                    tracks: 0,
+                    tracks: if j.passing_loop { 2 } else { 0 },
                     approach_tracks: 1,
                     lines: lns.into_iter().collect(),
                     corridors: Vec::new(),
                     diagrams: Vec::new(),
                     junction: true,
+                    passing_loop: j.passing_loop,
                 });
             }
         }

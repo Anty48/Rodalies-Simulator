@@ -22,10 +22,17 @@ Este script:
      hasta el punto de divergencia (El Prat → Aeroport / Viladecans, França → Passeig de Gràcia por
      la Bif. Aragó, Arc de Triomf → Clot por Glòries…). Dos líneas en vías PARALELAS distintas
      (4 vías, p. ej. Clot → Sant Adrià) quedan a más de `SHARE_TOL_M` y no se juntan.
-  6. Escribe `processed/adif/track_geometry.json`:
-     {"source": ..., "junctions": {"J1": {"lat", "lon", "near"}},
+  6. Detecta APARTADEROS DE CRUCE en vía única sin parada de viajeros (estaciones cerradas,
+     puestos de cruce: Chiprana y el de entre Samper y Chiprana, Val de Pilas…): una vía de apartado
+     de OSM (`service=siding`) con los DOS extremos sobre la vía del cantón, lejos de sus estaciones.
+     Sin ellos el motor veía, p. ej., Samper → Caspe como 30 km de vía única sin dónde cruzarse, y un
+     R15 esperaba 33 min en Samper a que llegara el de frente (el horario los cruza a mitad de tramo).
+     Solo en las zonas de vía única de `src/topology.rs` (se leen de allí, ver `single_track_pairs`).
+  7. Escribe `processed/adif/track_geometry.json`:
+     {"source": ..., "junctions": {"J1": {"lat", "lon", "near"},
+                                   "A1": {"lat", "lon", "near", "far", "km", "loop": true}},
       "cantons": {"<from_id>><to_id>": {"len_m": m, "coords": [[lat,lon],...], "via": [["J1", m]]}}}
-     (`via` = bifurcaciones por las que pasa el cantón y a qué distancia de su origen).
+     (`via` = bifurcaciones y apartaderos por los que pasa el cantón y a qué distancia de su origen).
 
 Si un cantón no se puede encaminar (estación lejos de la vía, hueco en OSM…) se omite y el motor
 usa la línea recta para él (el informe final lista cuántos y cuáles).
@@ -38,6 +45,7 @@ import heapq
 import json
 import math
 import os
+import re
 import sys
 import time
 import urllib.request
@@ -76,6 +84,14 @@ MIN_BRANCH_M = 200.0
 GRACE_M = 150.0
 MERGE_M = 80.0
 MIN_CONFIRMED_M = 150.0
+# Apartaderos de cruce: los dos extremos de la vía de apartado a ≤ LOOP_SNAP_M de la vía del cantón,
+# ≥ LOOP_MIN_M de largo (tiene que caber un tren: un R15 de 447/470 mide ~80-100 m, y los puestos de
+# cruce de ADIF tienen 400-750 m útiles) y a ≥ LOOP_CLEAR_M de las dos estaciones del cantón (las vías
+# de la propia estación ya son su cruce; más cerca son gargantas o vías de servicio de la estación).
+LOOP_SNAP_M = 15.0
+LOOP_MIN_M = 300.0
+LOOP_CLEAR_M = 1000.0
+TOPOLOGY_RS = os.path.join("src", "topology.rs")
 
 
 def haversine(a, b):
@@ -527,6 +543,105 @@ def find_junctions(stops, out, raw):
     return res_j, res_via
 
 
+def single_track_station_sets():
+    """Zonas de vía única (`SINGLE_TRACK_ZONE_IDS` de src/topology.rs, leídas del propio fuente para
+    no duplicarlas) + las vías solo de mercancías (todas de vía única). Un cantón es de vía única si
+    sus dos extremos están en una misma zona."""
+    sets = [set(c) for c in FREIGHT_ONLY_TRACK]
+    try:
+        with open(TOPOLOGY_RS, encoding="utf-8") as f:
+            src = f.read()
+        i = src.index("const SINGLE_TRACK_ZONE_IDS")
+        blk = src[i: src.index("\n];", i)]
+    except (OSError, ValueError):
+        print(f"   AVISO: no se pudo leer SINGLE_TRACK_ZONE_IDS de {TOPOLOGY_RS} → sin apartaderos de cruce")
+        return []
+    for m in re.finditer(r'\(\s*"[^"]+"\s*,\s*&\[(.*?)\]\s*\)', blk, re.S):
+        sets.append(set(re.findall(r'"([^"]+)"', m.group(1))))
+    return sets
+
+
+def along_poly(p, xy):
+    """(distancia del punto a la polilínea, distancia recorrida sobre ella hasta su proyección)."""
+    best, s_best, acc = math.inf, 0.0, 0.0
+    for (x1, y1), (x2, y2) in zip(xy, xy[1:]):
+        dx, dy = x2 - x1, y2 - y1
+        L2 = dx * dx + dy * dy
+        t = 0.0 if L2 == 0 else max(0.0, min(1.0, ((p[0] - x1) * dx + (p[1] - y1) * dy) / L2))
+        d = math.hypot(x1 + t * dx - p[0], y1 + t * dy - p[1])
+        if d < best:
+            best, s_best = d, acc + t * math.sqrt(L2)
+        acc += math.sqrt(L2)
+    return best, s_best
+
+
+def point_at(pts, xy, s):
+    """(lat, lon) a `s` m del origen de la polilínea."""
+    acc = 0.0
+    for k, ((x1, y1), (x2, y2)) in enumerate(zip(xy, xy[1:])):
+        L = math.hypot(x2 - x1, y2 - y1)
+        if acc + L >= s and L > 0:
+            t = (s - acc) / L
+            return (pts[k][0] + (pts[k + 1][0] - pts[k][0]) * t, pts[k][1] + (pts[k + 1][1] - pts[k][1]) * t)
+        acc += L
+    return pts[-1]
+
+
+def find_passing_loops(stops, out, raw, data):
+    """Apartaderos de cruce en cantones ATÓMICOS de vía única → (nodos, via por cantón).
+
+    Un apartadero = una o varias vías `service=siding` de OSM cuyos DOS extremos caen sobre la vía del
+    cantón (se desvían y vuelven a ella: una vía de cruce, no un ramal a una industria), de
+    ≥ LOOP_MIN_M y a ≥ LOOP_CLEAR_M de las dos estaciones. Las vías que se solapan (las dos de un
+    puesto de cruce) son el mismo apartadero; su nodo se sitúa en el centro del tramo que ocupan.
+    Se omiten los cantones con bifurcaciones (sus trozos comunes pueden ser de vía doble)."""
+    zones = single_track_station_sets()
+    if not zones:
+        return {}, {}
+    sidings = []
+    for w in data.get("elements", []):
+        g = w.get("geometry") or []
+        if w.get("type") == "way" and (w.get("tags") or {}).get("service") == "siding" and len(g) >= 2:
+            sidings.append(((g[0]["lat"], g[0]["lon"]), (g[-1]["lat"], g[-1]["lon"])))
+    atomic = atomic_pairs(out)
+    loops, via = [], {}
+    for a, b in sorted(atomic):
+        if (b, a) in atomic and b < a:
+            continue  # el sentido contrario es la misma vía: se trata una vez
+        if not any(a in z and b in z for z in zones) or out[f"{a}>{b}"].get("via") or out.get(f"{b}>{a}", {}).get("via"):
+            continue
+        pts, _ = raw_of(raw, a, b)
+        xy = to_xy(pts, pts[0])
+        L = out[f"{a}>{b}"]["len_m"]
+        spans = []
+        for e0, e1 in sidings:
+            if haversine(e0, pts[0]) > L + 2000 and haversine(e1, pts[0]) > L + 2000:
+                continue  # descarte rápido: lejos del cantón
+            d0, s0 = along_poly(to_xy([e0], pts[0])[0], xy)
+            d1, s1 = along_poly(to_xy([e1], pts[0])[0], xy)
+            lo, hi = min(s0, s1), max(s0, s1)
+            if d0 <= LOOP_SNAP_M and d1 <= LOOP_SNAP_M and hi - lo >= LOOP_MIN_M and lo >= LOOP_CLEAR_M and hi <= L - LOOP_CLEAR_M:
+                spans.append([lo, hi])
+        spans.sort()
+        merged = []
+        for lo, hi in spans:
+            if merged and lo <= merged[-1][1]:
+                merged[-1][1] = max(merged[-1][1], hi)
+            else:
+                merged.append([lo, hi])
+        for lo, hi in merged:
+            s = (lo + hi) / 2
+            lat, lon = point_at(pts, xy, s)
+            jid = f"A{len(loops) + 1}"
+            loops.append((jid, {"lat": round(lat, 6), "lon": round(lon, 6), "near": a, "far": b,
+                                "km": round(s / 1000, 1), "loop": True}))
+            via.setdefault(f"{a}>{b}", []).append([jid, round(s, 1)])
+            via.setdefault(f"{b}>{a}", []).append([jid, round(L - s, 1)])
+    for v in via.values():
+        v.sort(key=lambda z: z[1])
+    return dict(loops), via
+
+
 def main():
     try:
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -579,6 +694,14 @@ def main():
     for j, v in junctions.items():
         users = sorted({k for k, vv in via.items() if any(x[0] == j for x in vv)})
         print(f"   {j} cerca de {names.get(v['near'], v['near'])}: " + ", ".join(f"{names.get(k.split('>')[0])}→{names.get(k.split('>')[1])} ({dict(via[k])[j]:.0f} m)" for k in users if k.split('>')[0] == v['near']))
+    loops, loop_via = find_passing_loops(stops, out, raw, data)
+    for key, v in loop_via.items():
+        if key in out:
+            out[key]["via"] = v
+    junctions.update(loops)
+    print(f"-> {len(loops)} apartaderos de cruce en vía única sin parada de viajeros:")
+    for j, v in loops.items():
+        print(f"   {j}: {names.get(v['near'], v['near'])} → {names.get(v['far'], v['far'])}, km {v['km']}")
     res = {
         "source": "OpenStreetMap (Overpass API, railway=rail) · © OpenStreetMap contributors, ODbL",
         "generated": time.strftime("%Y-%m-%d"),

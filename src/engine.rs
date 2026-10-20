@@ -175,6 +175,9 @@ struct Pt {
     lat: f64,
     lon: f64,
     pass: bool, // punto de paso sintético (exprés): no para
+    /// Apartadero de cruce de vía única (punto de paso con vía de apartado, sin viajeros): el tren
+    /// no para por horario, pero puede detenerse en él para cruzarse (ver [`cadena_frente`]).
+    cruce: bool,
 }
 
 /// Un BLOQUE de vía de la secuencia de un tren, situado por POSICIÓN de ruta (`x_enter`, m).
@@ -256,6 +259,10 @@ struct Train {
     siding_since: f64,
     yield_target: usize,     // parada de apartado decidida (MAX = ninguna)
     stop_log: Vec<(f32, f32)>, // (llegada, salida) reales por punto del recorrido (NaN = no pasó)
+    line_ix: u16,              // índice en `Engine::line_names` (u16::MAX = mercancías)
+    /// Cercanías: regionales RÁPIDOS que pasan por su cabecera en su misma dirección `(tren, índice de
+    /// esa estación en sus puntos)`, para esperarlos antes de salir (ver [`seguidores_rapidos`]).
+    fast_followers: Vec<(u32, u32)>,
 }
 
 impl Train {
@@ -717,6 +724,13 @@ pub struct Engine {
     /// Trenes EN SERVICIO en cada muestra de `timeline` (mismo índice): denominador del retraso
     /// medio por tren del seguimiento de retrasos.
     timeline_active: Vec<u32>,
+    /// Líneas de viajeros de la jornada (orden alfabético) y, por línea y muestra de `timeline`, el
+    /// retraso acumulado (s) y los trenes en servicio: el seguimiento de retrasos por línea.
+    line_names: Vec<String>,
+    line_total: Vec<Vec<f32>>,
+    line_active: Vec<Vec<u16>>,
+    /// Acumulador por línea del sub-paso en curso (retraso s, trenes en servicio); se reutiliza.
+    line_acc: Vec<(f64, u32)>,
     next_sample: f64,
     /// Registro de todas las llegadas tarde a estación (≥ `LATE_LOG_THRESHOLD_S`) de la jornada,
     /// en orden temporal. Alimenta el contador de minutos de retraso y el log de CTC del visor.
@@ -893,7 +907,8 @@ impl Engine {
             let mut pts = Vec::with_capacity(gt.stops.len());
             for s in &gt.stops {
                 let Some((lat, lon)) = coord(&s.s) else { continue };
-                pts.push(Pt { id: s.s.clone(), a: shift(s.a), d: shift(s.d), lat, lon, pass: s.pass });
+                let cruce = s.pass && geom.and_then(|g| g.junction(&s.s)).is_some_and(|j| j.passing_loop);
+                pts.push(Pt { id: s.s.clone(), a: shift(s.a), d: shift(s.d), lat, lon, pass: s.pass, cruce });
             }
             if pts.len() < 2 {
                 continue;
@@ -926,11 +941,18 @@ impl Engine {
                 apply_davis(&mut veh, rc.davis_r0, rc.davis_r100);
             }
             let base_mass = veh.mass_kg;
-            let siding: Vec<bool> = if is_freight {
+            // Dónde puede apartarse: los mercancías en estaciones con más de 2 vías y en apartaderos de
+            // cruce; los cercanías, en sus PARADAS con más de 2 vías (hacen su parada fuera de la vía
+            // principal y dejan pasar al regional). Los regionales no se apartan.
+            let commuter = !is_freight && !topology::is_regional_line(&gt.line);
+            let siding: Vec<bool> = if is_freight || (commuter && rc.commuter_yield) {
                 let n = pts.len();
                 pts.iter()
                     .enumerate()
-                    .map(|(j, p)| j > 0 && j + 1 < n && net.node(&p.id).is_some() && topology::platform_tracks(net.stop_name(&p.id)) > 2)
+                    .map(|(j, p)| {
+                        let vias = net.node(&p.id).is_some() && topology::platform_tracks(net.stop_name(&p.id)) > 2;
+                        j > 0 && j + 1 < n && if is_freight { p.cruce || vias } else { !p.pass && vias }
+                    })
                     .collect()
             } else {
                 Vec::new()
@@ -979,6 +1001,8 @@ impl Engine {
                 siding_since: f64::NAN,
                 yield_target: usize::MAX,
                 stop_log: Vec::new(),
+                line_ix: u16::MAX,
+                fast_followers: Vec::new(),
             });
         }
 
@@ -1008,6 +1032,17 @@ impl Engine {
                 .collect();
             t.target_stop = next_real_stop(&t.pts, 0);
             t.stop_log = vec![(f32::NAN, f32::NAN); t.pts.len()];
+        }
+        // Líneas de viajeros (para el seguimiento de retrasos por línea), en orden estable.
+        let mut line_names: Vec<String> = trains.iter().filter(|t| !t.freight).map(|t| t.line.clone()).collect();
+        line_names.sort();
+        line_names.dedup();
+        for t in trains.iter_mut().filter(|t| !t.freight) {
+            t.line_ix = line_names.binary_search(&t.line).map_or(u16::MAX, |i| i as u16);
+        }
+        let n_lines = line_names.len();
+        if rc.commuter_wait_regional {
+            seguidores_rapidos(&mut trains, net, rc);
         }
 
         let infra = build_infra(net, &trains, single_track_str);
@@ -1074,6 +1109,10 @@ impl Engine {
             held_events: 0,
             timeline: Vec::new(),
             timeline_active: Vec::new(),
+            line_names,
+            line_total: vec![Vec::new(); n_lines],
+            line_active: vec![Vec::new(); n_lines],
+            line_acc: vec![(0.0, 0); n_lines],
             next_sample: cfg.start_sec as f64,
             late_arrivals: Vec::new(),
             rt,
@@ -1093,7 +1132,7 @@ impl Engine {
         let (dyn_red, dyn_single) = dyn_effects(&self.infra, &self.incidents, now);
 
         let free_run = self.cfg.free_run;
-        let Engine { trains, infra, occ, late_arrivals, holds, rt, .. } = self;
+        let Engine { trains, infra, occ, late_arrivals, holds, rt, line_acc, .. } = self;
         let dynp = Dyn { red: &dyn_red, single: &dyn_single };
         for v in occ.iter_mut() {
             v.clear(); // reutiliza la capacidad; nada de realojar por step
@@ -1198,17 +1237,26 @@ impl Engine {
         let mut total_delay = 0.0_f64; // retraso ACUMULADO de la red en este instante (s)
         let mut new_conflicts = 0u64;
         let mut in_service = 0u32;
+        for a in line_acc.iter_mut() {
+            *a = (0.0, 0);
+        }
         for (idx, t) in trains.iter_mut().enumerate() {
             if !active[idx] {
                 continue;
             }
             if t.in_service() && !t.freight {
                 in_service += 1;
+                if let Some(a) = line_acc.get_mut(t.line_ix as usize) {
+                    a.1 += 1;
+                }
             }
             if t.delay_s > 0.0 && !t.freight {
                 let dmin = t.delay_s / 60.0;
                 add_train_min += dmin * dt_min;
                 total_delay += t.delay_s;
+                if let Some(a) = line_acc.get_mut(t.line_ix as usize) {
+                    a.0 += t.delay_s;
+                }
                 // pax·min de retraso: pasajeros a bordo × minutos de retraso REAL de ESTE tren,
                 // integrado en el tiempo. Con el modelo de viajeros, los que lleva de verdad; sin él,
                 // el nominal × demanda horaria. Cada tren pesa por LO TARDE que va (no un 0/1 por
@@ -1242,6 +1290,10 @@ impl Engine {
         while now + 1e-9 >= self.next_sample {
             self.timeline.push((self.next_sample as u32, total_delay));
             self.timeline_active.push(in_service);
+            for (l, &(d, n)) in self.line_acc.iter().enumerate() {
+                self.line_total[l].push(d as f32);
+                self.line_active[l].push(n.min(u16::MAX as u32) as u16);
+            }
             self.next_sample += SAMPLE_STEP_S;
         }
     }
@@ -1304,6 +1356,12 @@ impl Engine {
         let mut arrivals = std::mem::take(&mut self.late_arrivals);
         arrivals.sort_by_key(|a| a.t); // orden temporal para el contador incremental y el log
         Trace { start: self.cfg.start_sec as f64, end, dt: sample_dt, ids, trains: tt, arrivals }
+    }
+
+    /// Registra también en una run headless cuánto retiene cada tramo (lo que `run_trace` hace siempre),
+    /// para el ranking de [`Engine::hold_ranking`]. Llamar antes de correr la jornada.
+    pub fn record_holds(&mut self) {
+        self.holds.get_or_insert_with(HashMap::new);
     }
 
     /// Los `n` tramos (cantones dirigidos) que más tiempo han retenido trenes en total, de mayor a
@@ -1410,6 +1468,15 @@ impl Engine {
         &self.timeline_active
     }
 
+    /// Seguimiento por línea, alineado con [`Engine::timeline`]: `(línea, retraso acumulado s,
+    /// trenes en servicio)` por muestra.
+    pub fn line_timelines(&self) -> impl Iterator<Item = (&str, &[f32], &[u16])> {
+        self.line_names
+            .iter()
+            .zip(self.line_total.iter().zip(&self.line_active))
+            .map(|(n, (t, a))| (n.as_str(), t.as_slice(), a.as_slice()))
+    }
+
     pub fn metrics(&self) -> RunMetrics {
         // Pico del retraso acumulado y su instante, a partir de la línea temporal.
         let (peak_total_delay_s, peak_time) = self
@@ -1512,6 +1579,17 @@ impl Engine {
             from_id,
             to_id,
             speed_kmh: t.v * 3.6,
+            asfa: t.asfa_cb == t.cb && t.asfa_cb != usize::MAX,
+            ahead: t
+                .seq
+                .get(t.cb + 1)
+                .map(|nb| {
+                    let r = if nb.stat_single { nb.res_single } else { nb.res } as usize;
+                    self.occ.get(r).map_or(Vec::new(), |o| {
+                        o.iter().filter(|&&j| self.trains[j].id != t.id).map(|&j| self.trains[j].id.clone()).collect()
+                    })
+                })
+                .unwrap_or_default(),
         })
     }
 
@@ -1548,6 +1626,10 @@ pub struct TrainDiag {
     pub from_id: String, // estación de dwell, o inicio del cantón en marcha
     pub to_id: String,   // próxima parada real (dwell) o fin del cantón
     pub speed_kmh: f64,
+    /// Lleva el límite ASFA de anuncio de parada (pasó la última señal en ámbar).
+    pub asfa: bool,
+    /// Trenes que ocupan AHORA el recurso del bloque siguiente (lo que puso esa señal en ámbar/rojo).
+    pub ahead: Vec<String>,
 }
 
 /// Avanza un tren un `step` completo (sub-pasos físicos ≤ `PHYS_SUBSTEP_S`). Devuelve `true` si el
@@ -1571,8 +1653,9 @@ fn avanzar_tren(
         let k = trains[idx].station_idx;
         let freight = trains[idx].freight;
         let dwell_ok = now - trains[idx].arrived_at >= trains[idx].dwell_min[k];
-        // Los mercancías no tienen horas comerciales: solo esperan la de salida de origen.
-        let sched_ok = !debe_esperar_horario(free_run || freight, k, now, trains[idx].pts[k].d);
+        // Los mercancías no tienen horas comerciales: solo esperan la de salida de origen. Una parada
+        // técnica en un punto de paso (cruce en apartadero) tampoco: su hora es solo la interpolada.
+        let sched_ok = trains[idx].pts[k].pass || !debe_esperar_horario(free_run || freight, k, now, trains[idx].pts[k].d);
         // Rotación: en cabecera, la unidad que hace este servicio tiene que haber llegado y
         // cambiado de cabina (si no, sale tarde: el retraso de la llegada se propaga).
         let unit_ok = k != 0 || unidad_lista(trains, idx, now, &rt.cfg);
@@ -1586,12 +1669,25 @@ fn avanzar_tren(
         }
         // Mercancías en vía de apartado: no sale mientras le siga un tren de viajeros (o hasta la
         // espera máxima).
+        // Cercanías apartado: no sale mientras le siga el regional (o hasta su espera máxima); su
+        // retraso vivo crece con la espera (es retraso real para sus viajeros).
         if trains[idx].in_siding {
-            let lookback = rt.cfg.freight_yield_lookback_m;
-            if now - trains[idx].siding_since < rt.cfg.freight_siding_max_s
-                && pasajero_detras(trains, occ, dynp, idx, lookback)
-            {
-                trains[idx].held_since = f64::NAN;
+            let (max_s, lookback) = if freight {
+                (rt.cfg.freight_siding_max_s, rt.cfg.freight_yield_lookback_m)
+            } else {
+                (rt.cfg.commuter_siding_max_s, rt.cfg.commuter_yield_lookback_m)
+            };
+            let detras = if freight {
+                pasajero_detras(trains, occ, dynp, idx, lookback)
+            } else {
+                regional_detras(trains, occ, dynp, idx, lookback).is_some()
+            };
+            if now - trains[idx].siding_since < max_s && detras {
+                let t = &mut trains[idx];
+                t.held_since = f64::NAN;
+                if !freight {
+                    t.delay_s = t.delay_s.max(now - t.pts[k].d);
+                }
                 return false;
             }
         }
@@ -1606,7 +1702,9 @@ fn avanzar_tren(
         // Salida de cabecera desde vía de estacionamiento: cruza la vía de llegada; el cruce tiene
         // que estar libre y ningún tren puede venir ya por ese último tramo de llegada.
         let cross_ok = k != 0 || salida_cruce_libre(trains, occ, idx, now, rt);
-        if !cross_ok || !bloque_entrada(infra, occ, dynp, trains, idx, &nb, now, free_run, rt) {
+        // Cercanías en cabecera: no sale delante de un regional rápido que está a punto de pasar.
+        let regional_ok = k != 0 || free_run || !rt.cfg.commuter_wait_regional || !regional_rapido_llega(trains, idx, now, &rt.cfg);
+        if !cross_ok || !regional_ok || !bloque_entrada(infra, occ, dynp, trains, idx, &nb, now, free_run, rt) {
             let t = &mut trains[idx];
             t.waiting = true; // salida bloqueada por ocupación
             t.react_until = f64::NAN;
@@ -1630,7 +1728,7 @@ fn avanzar_tren(
             let cid = trains[idx].cross_id as usize;
             rt.cross_until[cid] = now + rt.cfg.crossing_time_s;
         }
-        if trains[idx].in_siding {
+        if trains[idx].in_siding || trains[idx].yield_target == k {
             trains[idx].in_siding = false;
             trains[idx].yield_target = usize::MAX;
         }
@@ -1645,6 +1743,7 @@ fn avanzar_tren(
         trains[idx].canton_idx = k;
         trains[idx].target_stop = next_real_stop(&trains[idx].pts, k);
         trains[idx].v = 0.0;
+        planificar_cruce(trains, occ, dynp, idx, free_run);
         actualizar_asfa(infra, occ, dynp, trains, idx, now, free_run, rt);
         // continúa hacia la integración de movimiento este mismo sub-paso
     }
@@ -1657,6 +1756,13 @@ fn avanzar_tren(
     // viajeros que le sigue? (decisión antes de llegar, con distancia para frenar).
     if trains[idx].freight && rt.cfg.freight_yield && trains[idx].yield_target == usize::MAX {
         decidir_apartado(trains, occ, dynp, idx, rt);
+    } else if !trains[idx].freight
+        && !trains[idx].regional
+        && rt.cfg.commuter_yield
+        && !free_run
+        && trains[idx].yield_target == usize::MAX
+    {
+        decidir_apartado_cercanias(trains, occ, dynp, idx, rt);
     }
 
     let b_serv = trains[idx].veh.decel.min(rt.cfg.service_decel);
@@ -1759,10 +1865,14 @@ fn avanzar_tren(
                 trains[idx].cb = cb + 1;
                 ocupar(occ, dynp, idx, &trains[idx].seq[trains[idx].cb], true);
                 // Al cruzar la frontera de un cantón (sb 0), avanza el cantón físico.
-                if nb.sb == 0 {
+                let cruce = nb.sb == 0 && {
                     trains[idx].canton_idx = (trains[idx].canton_idx + 1).min(trains[idx].pts.len() - 2);
-                }
+                    planificar_cruce(trains, occ, dynp, idx, free_run)
+                };
                 actualizar_asfa(infra, occ, dynp, trains, idx, now, free_run, rt);
+                if cruce {
+                    break; // nueva parada objetivo (apartadero): se frena hacia ella desde el sub-paso siguiente
+                }
             } else {
                 // Señal en rojo: clavar el tren justo antes de la señal.
                 new_s = nb.x_enter;
@@ -1818,7 +1928,7 @@ fn llegada_a_parada(
         t.delay_s = (now - t.pts[k].a).max(0.0);
         // Registro de CTC: si el tren llega ≥1 min tarde a esta estación, se anota (instante,
         // tren, línea, stop, retraso). Vale para paradas intermedias Y terminal (mismo punto).
-        if t.delay_s >= LATE_LOG_THRESHOLD_S {
+        if t.delay_s >= LATE_LOG_THRESHOLD_S && !t.pts[k].pass {
             late.push(LateArrival {
                 t: now as u32,
                 train: t.id.clone(),
@@ -1838,11 +1948,14 @@ fn llegada_a_parada(
         t.phase = Phase::Dwell;
         t.station_idx = k;
         t.arrived_at = now;
+        // Entra en la vía de apartado: deja libre la vía principal al tren que le sigue. Los cercanías
+        // solo en una de sus paradas (en un apartadero de cruce es una parada técnica, en la vía).
+        if t.yield_target == k && (t.freight || !t.pts[k].pass) {
+            t.in_siding = true;
+            t.siding_since = now;
+        }
         if t.freight {
-            if t.yield_target == k {
-                // Entra en la vía de apartado: deja libre la vía principal al tren que le sigue.
-                t.in_siding = true;
-                t.siding_since = now;
+            if t.in_siding {
                 t.dwell_min[k] = 30.0;
             }
         } else if rt.cfg.pax_enabled && !t.pts[k].pass {
@@ -1975,6 +2088,146 @@ fn pasajero_detras(trains: &[Train], occ: &[Vec<usize>], dynp: &Dyn, idx: usize,
         j -= 1;
     }
     false
+}
+
+/// ¿Hay un REGIONAL detrás del tren `idx`, dentro de `lookback` m por su misma vía? Devuelve el primero.
+fn regional_detras(trains: &[Train], occ: &[Vec<usize>], dynp: &Dyn, idx: usize, lookback: f64) -> Option<usize> {
+    let t = &trains[idx];
+    let lim = t.s - lookback;
+    let mut j = t.cb;
+    while j > 0 {
+        let b = &t.seq[j];
+        if b.origin {
+            break;
+        }
+        if let Some(arr) = occ.get(dynp.block_res(b) as usize) {
+            if let Some(&o) = arr.iter().find(|&&o| o != idx && trains[o].regional && !trains[o].freight && trains[o].phase != Phase::Done) {
+                return Some(o);
+            }
+        }
+        if b.x_enter < lim {
+            break;
+        }
+        j -= 1;
+    }
+    None
+}
+
+/// Cuántas de las paradas REALES del tren `c` desde su punto `from` se salta el tren `r` (pasa sin
+/// parar). Mide si adelantarlo ahorra algo: un regional que para en las mismas no gana nada.
+fn paradas_que_se_salta(c: &Train, from: usize, r: &Train) -> u32 {
+    let mut n = 0;
+    for p in c.pts[from..].iter().filter(|p| !p.pass) {
+        if r.pts.iter().any(|q| q.id == p.id && q.pass) {
+            n += 1;
+        }
+    }
+    n
+}
+
+/// Cercanías: si al acercarse a su próxima parada (con más de 2 vías) le sigue de cerca un regional
+/// que se salta al menos `commuter_yield_min_skips` de sus paradas desde ahí y pasa por esa estación,
+/// hace la parada en la vía de apartado para dejarlo pasar (como los mercancías).
+fn decidir_apartado_cercanias(trains: &mut [Train], occ: &[Vec<usize>], dynp: &Dyn, idx: usize, rt: &RealismRt) {
+    let t = &trains[idx];
+    let j = t.target_stop;
+    if j == 0 || j + 1 >= t.pts.len() || !t.siding.get(j).copied().unwrap_or(false) {
+        return;
+    }
+    if t.cum_l[j] - t.s > rt.cfg.commuter_yield_decide_m {
+        return;
+    }
+    let Some(r) = regional_detras(trains, occ, dynp, idx, rt.cfg.commuter_yield_lookback_m) else { return };
+    // Solo si el regional va FRENADO por él (ámbar del ASFA o retenido): si le sigue a distancia sin
+    // alcanzarlo, apartarse solo retrasa al cercanías (el CTC real no lo haría).
+    let tr = &trains[r];
+    let frenado = tr.waiting || (tr.asfa_cb != usize::MAX && tr.asfa_cb == tr.cb);
+    if rt.cfg.commuter_yield_only_hindered && !frenado {
+        return;
+    }
+    let estacion = &t.pts[j].id;
+    if !trains[r].pts.iter().any(|q| &q.id == estacion) {
+        return; // no pasa por aquí: va por otro ramal
+    }
+    if paradas_que_se_salta(t, j, &trains[r]) < rt.cfg.commuter_yield_min_skips {
+        return;
+    }
+    trains[idx].yield_target = j;
+}
+
+/// Regionales RÁPIDOS que pasan por la cabecera de cada cercanías en su misma dirección (precálculo,
+/// una vez): un regional es rápido si se salta MÁS de `fast_skips_total_gt` estaciones en su recorrido
+/// y al menos `fast_common_min` de ellas son paradas del cercanías. Solo los que pasan por la cabecera
+/// hasta `commuter_wait_margin_min` (+ holgura por retraso) después de la salida del cercanías.
+fn seguidores_rapidos(trains: &mut [Train], net: &Network, rc: &RealismCfg) {
+    // Estaciones por las que pasa cada regional rápido → (tren, índice del punto).
+    let mut by_station: HashMap<&str, Vec<(usize, usize)>> = HashMap::new();
+    let mut skipped: Vec<std::collections::HashSet<&str>> = vec![Default::default(); trains.len()];
+    for (r, t) in trains.iter().enumerate() {
+        if t.freight || !t.regional {
+            continue;
+        }
+        let sk: std::collections::HashSet<&str> =
+            t.pts.iter().filter(|p| p.pass && net.node(&p.id).is_some()).map(|p| p.id.as_str()).collect();
+        if sk.len() as u32 <= rc.fast_skips_total_gt {
+            continue;
+        }
+        for (j, p) in t.pts.iter().enumerate().take(t.pts.len().saturating_sub(1)) {
+            by_station.entry(p.id.as_str()).or_default().push((r, j));
+        }
+        skipped[r] = sk;
+    }
+    let ventana = rc.commuter_wait_margin_min * 60.0;
+    let mut out: Vec<(usize, Vec<(u32, u32)>)> = Vec::new();
+    for (c, t) in trains.iter().enumerate() {
+        if t.freight || t.regional || t.pts.len() < 2 {
+            continue;
+        }
+        let Some(cands) = by_station.get(t.pts[0].id.as_str()) else { continue };
+        let (dep, siguiente) = (t.pts[0].d, &t.pts[1].id);
+        let mut f: Vec<(u32, u32)> = Vec::new();
+        for &(r, j) in cands {
+            let rt = &trains[r];
+            // Misma dirección y misma vía: su punto siguiente es el del cercanías.
+            if &rt.pts[j + 1].id != siguiente {
+                continue;
+            }
+            let paso = rt.pts[j].d;
+            if paso < dep - 1800.0 || paso > dep + ventana + 1800.0 {
+                continue;
+            }
+            let comunes = t.pts[1..].iter().filter(|p| !p.pass && skipped[r].contains(p.id.as_str())).count() as u32;
+            if comunes >= rc.fast_common_min {
+                f.push((r as u32, j as u32));
+            }
+        }
+        if !f.is_empty() {
+            out.push((c, f));
+        }
+    }
+    for (c, f) in out {
+        trains[c].fast_followers = f;
+    }
+}
+
+/// Cercanías en cabecera: ¿va a pasar por aquí, en su misma dirección, un regional rápido antes de
+/// que se agote el margen de espera? (su hora de paso + su retraso vivo). Nunca espera más allá de su
+/// hora de salida + `commuter_wait_margin_min`, y no espera a un regional que ya ha pasado.
+fn regional_rapido_llega(trains: &[Train], idx: usize, now: f64, rc: &RealismCfg) -> bool {
+    let t = &trains[idx];
+    let limite = t.pts[0].d + rc.commuter_wait_margin_min * 60.0;
+    if now > limite {
+        return false;
+    }
+    t.fast_followers.iter().any(|&(r, j)| {
+        let r = &trains[r as usize];
+        let j = j as usize;
+        if r.phase == Phase::Done || r.s > r.cum_l[j] + 1.0 {
+            return false; // ya ha pasado
+        }
+        let eta = r.pts[j].d + r.delay_s;
+        eta >= now - 60.0 && eta <= limite
+    })
 }
 
 /// Mercancías: elige la próxima estación con vía de apartado (a distancia de frenado y dentro de la
@@ -2127,7 +2380,7 @@ fn anden_lleno(occupants: &[usize], trains: &[Train], except: Option<usize>, tra
 /// que sigue también es vía única, cruzará sin detenerse, así que necesita toda la cadena de vía
 /// única hasta su próxima parada real. Sin esto, dos exprés en sentidos opuestos se encuentran en un
 /// apartadero donde ninguno para y cada uno retiene el tramo que pide el otro (interbloqueo real del
-/// R15 en Riudecanyes-Botarell). Con horario basta la comprobación de entrada `cadena_sin_frente`.
+/// R15 en Riudecanyes-Botarell). Con horario basta la comprobación de entrada `cadena_frente`.
 fn cadena_unica(t: &Train, dynp: &Dyn, k: usize, out: &mut Vec<u32>) {
     out.clear();
     let Some(b) = t.seq.get(k) else { return };
@@ -2156,13 +2409,18 @@ fn cadena_unica(t: &Train, dynp: &Dyn, k: usize, out: &mut Vec<u32>) {
 /// - Seguir a un tren en el MISMO sentido sí está permitido (bloque a bloque, como siempre).
 /// - Un tren de frente que PARA en una estación de la cadena antes de llegar no bloquea: el cruce se
 ///   hace allí (él espera en la vía de apartado).
+/// - Si entre los dos hay un APARTADERO DE CRUCE (`Pt::cruce`, sin viajeros), se entra igualmente y
+///   el cruce se hace en el último apartadero antes del tren de frente: [`Cadena::CruzarEn`] (lo
+///   fija [`planificar_cruce`] como parada técnica). Es lo que hace el horario real: Samper → Caspe
+///   son 30 km de vía única y los R15 se cruzan a mitad, en Chiprana.
 /// - MODO SIN HORARIOS: cualquier ocupante de la cadena bloquea (además se reserva, `cadena_unica`).
-fn cadena_sin_frente(trains: &[Train], occ: &[Vec<usize>], dynp: &Dyn, idx: usize, k: usize, free_run: bool) -> bool {
+fn cadena_frente(trains: &[Train], occ: &[Vec<usize>], dynp: &Dyn, idx: usize, k: usize, free_run: bool) -> Cadena {
     let t = &trains[idx];
-    let Some(b) = t.seq.get(k) else { return true };
+    let Some(b) = t.seq.get(k) else { return Cadena::Libre };
     if b.origin || !dynp.block_single(b) {
-        return true;
+        return Cadena::Libre;
     }
+    let mut apartadero = None; // último apartadero de cruce de la cadena antes del cantón mirado
     for i in k + 1..t.seq.len() {
         let nb = &t.seq[i];
         if nb.sb != 0 {
@@ -2173,12 +2431,16 @@ fn cadena_sin_frente(trains: &[Train], occ: &[Vec<usize>], dynp: &Dyn, idx: usiz
         if !t.pts[p].pass || p == t.yield_target || !dynp.block_single(nb) {
             break;
         }
+        // Un tren de frente en `nb` viene hacia `p`: si `p` es un apartadero, cabe el cruce en él.
+        if t.pts[p].cruce && !free_run {
+            apartadero = Some(p);
+        }
         for &o in &occ[nb.res_single as usize] {
             if o == idx {
                 continue;
             }
             if free_run {
-                return false;
+                return Cadena::Bloqueada;
             }
             let ot = &trains[o];
             let ob = &ot.seq[ot.cb];
@@ -2194,11 +2456,50 @@ fn cadena_sin_frente(trains: &[Train], occ: &[Vec<usize>], dynp: &Dyn, idx: usiz
                 .iter()
                 .any(|x| x.sb == 0 && Some(t.pts[x.arr_idx - 1].id.as_str()) == su_parada);
             if !para_antes {
-                return false;
+                return apartadero.map_or(Cadena::Bloqueada, Cadena::CruzarEn);
             }
         }
     }
-    true
+    Cadena::Libre
+}
+
+/// Resultado de mirar la cadena de vía única por delante (ver [`cadena_frente`]).
+#[derive(Clone, Copy, PartialEq, Debug)]
+enum Cadena {
+    /// Ningún tren de frente sin cruce previsto: se entra.
+    Libre,
+    /// Viene un tren de frente y no hay dónde cruzarse antes: no se entra.
+    Bloqueada,
+    /// Viene un tren de frente, pero el apartadero de cruce `pts[p]` queda entre los dos: se entra
+    /// y se para en él para cruzarse.
+    CruzarEn(usize),
+}
+
+/// Recién entrado el tren `idx` en el bloque `seq[cb]`: si la cadena de vía única por delante pide
+/// cruzarse en un apartadero, lo fija como PARADA TÉCNICA (`yield_target` + `target_stop`, el mismo
+/// mecanismo que el apartado de los mercancías). Allí para fuera de la vía principal, libera el
+/// tramo para el de frente (regla del apartadero en la ocupación) y sale en cuanto se lo deja.
+/// Un cruce ya planificado se REVISA en cada cantón: si el de frente ya se ha cruzado en otro sitio
+/// (p. ej. esperó él en un apartadero anterior), la parada técnica sobra y se anula. Los apartados de
+/// mercancías para dejar pasar a un viajero (`decidir_apartado`) no se tocan.
+/// Devuelve si ha cambiado la parada objetivo.
+fn planificar_cruce(trains: &mut [Train], occ: &[Vec<usize>], dynp: &Dyn, idx: usize, free_run: bool) -> bool {
+    let cb = trains[idx].cb;
+    if trains[idx].seq[cb].sb != 0 {
+        return false;
+    }
+    let t = &mut trains[idx];
+    let antes = t.target_stop;
+    if !t.freight && t.yield_target != usize::MAX && t.pts[t.yield_target].cruce {
+        t.yield_target = usize::MAX;
+        t.target_stop = next_real_stop(&t.pts, t.canton_idx);
+    }
+    if let Cadena::CruzarEn(p) = cadena_frente(trains, occ, dynp, idx, cb, free_run) {
+        let t = &mut trains[idx];
+        t.yield_target = p;
+        t.target_stop = p;
+    }
+    trains[idx].target_stop != antes
 }
 
 /// ¿Va a entrar pronto (según su horario + retraso) en el cantón de vía única `rk` un tren con
@@ -2265,7 +2566,7 @@ fn bloque_entrada(
     {
         return false;
     }
-    if nb.sb == 0 && !cadena_sin_frente(trains, occ, dynp, idx, trains[idx].cb + 1, free_run) {
+    if nb.sb == 0 && cadena_frente(trains, occ, dynp, idx, trains[idx].cb + 1, free_run) == Cadena::Bloqueada {
         return false;
     }
     // Prioridad en vía única: se anticipa con su HORARIO; sin horarios no hay reserva. Los
@@ -2899,7 +3200,7 @@ mod tests {
 
     #[test]
     fn retraso_vivo_por_posicion() {
-        let pt = |d: f64, a: f64| Pt { id: String::new(), a, d, lat: 0.0, lon: 0.0, pass: false };
+        let pt = |d: f64, a: f64| Pt { id: String::new(), a, d, lat: 0.0, lon: 0.0, pass: false, cruce: false };
         // Sale de A a las 1000 s, debe llegar a B a las 1600 s; 3000 m de vía.
         let pts = vec![pt(1000.0, 0.0), pt(1700.0, 1600.0)];
         let cum = vec![0.0, 3000.0];
@@ -3088,7 +3389,7 @@ mod tests {
             react_until: f64::NAN, onboard: 0.0, pool: Vec::new(), alight_p: Vec::new(), capacity: 0.0,
             doors: 1.0, door_factor: 1.0, base_mass: 0.0, cross_id: u32::MAX, cross_app_res: u32::MAX,
             siding: Vec::new(), in_siding: false, siding_since: f64::NAN, yield_target: usize::MAX,
-            stop_log: Vec::new(),
+            stop_log: Vec::new(), line_ix: u16::MAX, fast_followers: Vec::new(),
         }
     }
     fn bloque(from: u32, to: u32, arr_idx: usize, single: bool, res: u32) -> Block {
@@ -3113,7 +3414,7 @@ mod tests {
 
     #[test]
     fn via_unica_sin_encuentro_de_frente_donde_nadie_para() {
-        let pt = |id: &str, pass: bool| Pt { id: id.into(), a: 0.0, d: 0.0, lat: 0.0, lon: 0.0, pass };
+        let pt = |id: &str, pass: bool| Pt { id: id.into(), a: 0.0, d: 0.0, lat: 0.0, lon: 0.0, pass, cruce: false };
         let mut origin = bloque(0, 0, 0, false, 0);
         origin.origin = true;
         // Tren 0: A (para) →(único, rec 10) B (no para) →(único, rec 11) C (para). Quiere entrar en A→B.
@@ -3130,21 +3431,61 @@ mod tests {
         let dynp = Dyn { red: &red, single: &single };
         let mut trains = vec![a, o];
         // Ninguno para en B: se quedarían cara a cara → no se le da paso.
-        assert!(!cadena_sin_frente(&trains, &occ, &dynp, 0, 1, false));
+        assert_eq!(cadena_frente(&trains, &occ, &dynp, 0, 1, false), Cadena::Bloqueada);
         // Si el de frente para en B, el cruce se hace allí → sí puede entrar.
         trains[1].target_stop = 1;
-        assert!(cadena_sin_frente(&trains, &occ, &dynp, 0, 1, false));
+        assert_eq!(cadena_frente(&trains, &occ, &dynp, 0, 1, false), Cadena::Libre);
         // Un tren que va en NUESTRO sentido por B→C no bloquea (se le sigue bloque a bloque)…
         trains[1].target_stop = 2;
         trains[1].seq[1] = bloque(1, 2, 2, true, 11);
-        assert!(cadena_sin_frente(&trains, &occ, &dynp, 0, 1, false));
+        assert_eq!(cadena_frente(&trains, &occ, &dynp, 0, 1, false), Cadena::Libre);
         // …salvo sin horarios, donde la cadena entera ha de estar libre.
-        assert!(!cadena_sin_frente(&trains, &occ, &dynp, 0, 1, true));
+        assert_eq!(cadena_frente(&trains, &occ, &dynp, 0, 1, true), Cadena::Bloqueada);
+    }
+
+    #[test]
+    fn via_unica_cruce_en_apartadero_sin_viajeros() {
+        let pt = |id: &str, pass: bool, cruce: bool| Pt { id: id.into(), a: 0.0, d: 0.0, lat: 0.0, lon: 0.0, pass, cruce };
+        let mut origin = bloque(0, 0, 0, false, 0);
+        origin.origin = true;
+        // Samper (para) →(único, rec 10) apartadero X (no para; vía de cruce) →(único, rec 11) Caspe.
+        let s = tren_prueba(Phase::Dwell, vec![origin.clone(), bloque(0, 1, 1, true, 10), bloque(1, 2, 2, true, 11)],
+            vec![pt("S", false, false), pt("X", true, true), pt("C", false, false)]);
+        // De frente por Caspe → X (rec 11), sin parar en X, hacia Samper.
+        let mut o = tren_prueba(Phase::Running, vec![origin.clone(), bloque(2, 1, 1, true, 11), bloque(1, 0, 2, true, 10)],
+            vec![pt("C", false, false), pt("X", true, true), pt("S", false, false)]);
+        o.cb = 1;
+        o.target_stop = 2;
+        let mut occ = vec![Vec::new(); 12];
+        occ[11].push(1);
+        let (red, single) = (HashSet::new(), HashSet::new());
+        let dynp = Dyn { red: &red, single: &single };
+        let mut trains = vec![s, o];
+        // Sin el apartadero esperaría en Samper todo el tramo; con él se cruzan en X.
+        assert_eq!(cadena_frente(&trains, &occ, &dynp, 0, 1, false), Cadena::CruzarEn(1));
+        // Sin horarios no se planifican cruces: la cadena entera ha de estar libre.
+        assert_eq!(cadena_frente(&trains, &occ, &dynp, 0, 1, true), Cadena::Bloqueada);
+        // Al entrar en Samper → X, el apartadero pasa a ser su parada técnica.
+        trains[0].cb = 1;
+        trains[0].phase = Phase::Running;
+        trains[0].target_stop = 2;
+        assert!(planificar_cruce(&mut trains, &occ, &dynp, 0, false));
+        assert_eq!((trains[0].target_stop, trains[0].yield_target), (1, 1));
+        // Visto desde el de frente (aún en Caspe): el otro para en X → puede salir hacia X.
+        trains[1].cb = 0;
+        trains[1].phase = Phase::Dwell;
+        occ[11].clear();
+        occ[10].push(0);
+        assert_eq!(cadena_frente(&trains, &occ, &dynp, 1, 1, false), Cadena::Libre);
+        // Si el de frente ya no está en la cadena (se cruzaron en otro sitio), la parada técnica sobra.
+        let occ_libre = vec![Vec::new(); 12];
+        assert!(planificar_cruce(&mut trains, &occ_libre, &dynp, 0, false));
+        assert_eq!((trains[0].target_stop, trains[0].yield_target), (2, usize::MAX));
     }
 
     #[test]
     fn cadena_de_via_unica_hasta_la_proxima_parada() {
-        let pt = |id: &str, pass: bool| Pt { id: id.into(), a: 0.0, d: 0.0, lat: 0.0, lon: 0.0, pass };
+        let pt = |id: &str, pass: bool| Pt { id: id.into(), a: 0.0, d: 0.0, lat: 0.0, lon: 0.0, pass, cruce: false };
         // A →(único) B (no para) →(único) C (para) →(único) D
         let pts = vec![pt("A", false), pt("B", true), pt("C", false), pt("D", false)];
         let mut origin = bloque(0, 0, 0, false, 0);
@@ -3163,9 +3504,9 @@ mod tests {
     #[test]
     fn next_real_stop_salta_puntos_de_paso() {
         let pts = vec![
-            Pt { id: "A".into(), a: 0.0, d: 0.0, lat: 0.0, lon: 0.0, pass: false },
-            Pt { id: "P".into(), a: 60.0, d: 60.0, lat: 0.0, lon: 0.0, pass: true },
-            Pt { id: "B".into(), a: 120.0, d: 120.0, lat: 0.0, lon: 0.0, pass: false },
+            Pt { id: "A".into(), a: 0.0, d: 0.0, lat: 0.0, lon: 0.0, pass: false, cruce: false },
+            Pt { id: "P".into(), a: 60.0, d: 60.0, lat: 0.0, lon: 0.0, pass: true, cruce: false },
+            Pt { id: "B".into(), a: 120.0, d: 120.0, lat: 0.0, lon: 0.0, pass: false, cruce: false },
         ];
         assert_eq!(next_real_stop(&pts, 0), 2); // salta el punto de paso P
     }
@@ -3194,7 +3535,7 @@ mod tests {
     #[test]
     fn la_unidad_tiene_que_llegar_y_cambiar_de_cabina() {
         let rc = RealismCfg::default();
-        let pt = |d: f64| Pt { id: "A".into(), a: d, d, lat: 0.0, lon: 0.0, pass: false };
+        let pt = |d: f64| Pt { id: "A".into(), a: d, d, lat: 0.0, lon: 0.0, pass: false, cruce: false };
         let prev = tren_prueba(Phase::Running, vec![], vec![pt(0.0), pt(1000.0)]);
         let mut next = tren_prueba(Phase::Dwell, vec![], vec![pt(1200.0), pt(2000.0)]);
         next.prev_unit = Some(0);

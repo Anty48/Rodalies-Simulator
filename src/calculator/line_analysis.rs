@@ -802,7 +802,7 @@ mod tests {
         assert!(d.programmed.n >= 1 || d.programmed.n == 0); // no debe entrar en pánico
 
         // Modelo refinado con CVM ADIF si está el fichero procesado.
-        if let Some(adif) = AdifNet::load(std::path::Path::new("./processed/adif/rfig_speed.json")) {
+        if let Some(adif) = AdifNet::load_default() {
             let r = analyze_line(&net, &line, &dir0.key, &series, &DwellMode::Fixed(0), 0.2, Some(&adif), None);
             assert!(r.adif_available, "ADIF cargado pero no marcado disponible");
             for id in &r.series {

@@ -393,8 +393,10 @@ h4 { margin:16px 0 8px; font-size:.98rem; }
 
 /* ---- Barra del panel (volver al menú + configuración) ---- */
 .panel-bar { display:flex; align-items:center; justify-content:space-between; gap:12px; margin:-8px 0 18px; }
-.back-link { color:var(--muted); text-decoration:none; font-size:.9rem; font-weight:600; display:inline-flex; align-items:center; gap:6px; }
-.back-link:hover { color:var(--accent); }
+/* Botón «← Menú» en todas las páginas: un botón de verdad, no un texto gris en la esquina. */
+.back-link { color:var(--text); text-decoration:none; font-size:.88rem; font-weight:700; display:inline-flex; align-items:center; gap:6px;
+  padding:7px 14px; border-radius:999px; border:1px solid var(--border); background:var(--panel); box-shadow:0 1px 3px rgba(0,0,0,.06); transition:.14s; }
+.back-link:hover { color:var(--accent); border-color:var(--accent); }
 
 /* ---- Modal de configuración ---- */
 .settings { display:none; position:fixed; inset:0; background:rgba(20,20,26,.55); z-index:2000;
@@ -1043,53 +1045,55 @@ pub fn render_menu_page() -> String {
       </a>
     </div>
 
-    <div class="tiles three">
-      <a class="tile" href="/info">
-        <div class="tile-ic">ℹ️</div>
-        <h3>Información</h3>
-        <p>Cómo se calculan los tiempos entre estaciones (física del material + Vmax de vía + LTV) y todas las probabilidades del modelo de incidencias (dónde y cuándo aparecen).</p>
-      </a>
+    <!-- Justo debajo del simulador principal: las otras dos formas de usar el motor. -->
+    <div class="tiles">
       <a class="tile" href="/numeros">
         <div class="tile-ic">⚡</div>
-        <h3>Varias runs (solo números)</h3>
-        <p>Corre el motor headless muchas veces (varias semillas) sin dibujar nada y compara solo las métricas: retraso, retenidos, PAX·min e incidencias del día. Mismo motor que el visual.</p>
+        <h3>Simulaciones encadenadas rápidas</h3>
+        <p>Corre el motor sin dibujar nada muchas veces seguidas (varias semillas) y compara solo las métricas: retraso, retenidos, PAX·min e incidencias del día. Mismo motor que el visual.</p>
       </a>
-      <a class="tile" href="/incidencias">
-        <div class="tile-ic">🚨</div>
-        <h3>Incidencias</h3>
-        <p>Crea, edita y borra las plantillas de incidencia (señal roja o vía única) con su probabilidad <b>cada X horas</b>. Las usan el modo visual y las runs.</p>
+      <a class="tile" href="/datos">
+        <div class="tile-ic">📡</div>
+        <h3>Datos reales de Renfe</h3>
+        <p>Graba día a día dónde están los trenes de Rodalies, sus retrasos, cancelaciones y avisos (GTFS-RT de Renfe), analiza cada día con las herramientas del simulador y compáralo con una simulación.</p>
       </a>
     </div>
 
-    <a class="tile tile-mini" href="/horarios">
-      <div class="tile-ic">🕒</div>
-      <div><h3>Horarios cadenciados</h3><p>Coloca en un reloj a qué minuto pasa cada línea por Sants y genera una malla para probarla en el visual o en las runs.</p></div>
-    </a>
-
-    <!-- Modelo: qué se puede ajustar, qué se asume y los trenes de mercancías. -->
-    <h2 class="menu-sec">Modelo</h2>
+    <!-- Lo que se configura: qué puede pasar (incidencias), qué más circula (mercancías) y cómo (modelo). -->
+    <h2 class="menu-sec">Configuración</h2>
     <div class="tiles three">
-      <a class="tile tile-mini" href="/configuracion">
-        <div class="tile-ic">⚙️</div>
-        <div><h3>Configuración del modelo</h3><p>Todo lo configurable del realismo: viajeros y paradas, rotación en cabecera, conducción (ASFA), vía, cruces y mercancías. Actualizar LTV.</p></div>
-      </a>
-      <a class="tile tile-mini" href="/supuestos">
-        <div class="tile-ic">📋</div>
-        <div><h3>Supuestos</h3><p>Qué sale de datos reales, qué es aproximado y qué se asume sin dato.</p></div>
+      <a class="tile tile-mini" href="/incidencias">
+        <div class="tile-ic">🚨</div>
+        <div><h3>Incidencias</h3><p>Plantillas de incidencia (señal roja o vía única) con su probabilidad cada X horas. Las usan el modo visual y las simulaciones encadenadas.</p></div>
       </a>
       <a class="tile tile-mini" href="/mercancias">
         <div class="tile-ic">🚛</div>
         <div><h3>Mercancías</h3><p>Corredores y trenes de mercancías: generador semialeatorio, escenarios guardados y vista previa del día.</p></div>
       </a>
+      <a class="tile tile-mini" href="/configuracion">
+        <div class="tile-ic">⚙️</div>
+        <div><h3>Configuración del modelo</h3><p>Todo lo configurable del realismo: viajeros y paradas, rotación, conducción (ASFA), vía, mercancías y prioridad de los regionales. Actualizar LTV.</p></div>
+      </a>
     </div>
 
-    <a class="tile tile-mini" href="/datos" style="margin-top:14px">
-      <div class="tile-ic">📡</div>
-      <div><h3>Datos reales de Renfe</h3><p>Graba día a día dónde están los trenes de Rodalies, sus retrasos, cancelaciones y avisos (GTFS-RT de Renfe); recogida automática con un botón y comparación con el simulador.</p></div>
-    </a>
+    <h2 class="menu-sec">Información y horarios</h2>
+    <div class="tiles three">
+      <a class="tile tile-mini" href="/supuestos">
+        <div class="tile-ic">📋</div>
+        <div><h3>Supuestos</h3><p>Qué sale de datos reales (con su fuente), qué es aproximado y qué se asume sin dato.</p></div>
+      </a>
+      <a class="tile tile-mini" href="/info">
+        <div class="tile-ic">ℹ️</div>
+        <div><h3>Información</h3><p>Cómo se calculan los tiempos entre estaciones y todas las probabilidades del modelo de incidencias.</p></div>
+      </a>
+      <a class="tile tile-mini" href="/horarios">
+        <div class="tile-ic">🕒</div>
+        <div><h3>Horarios cadenciados</h3><p>Coloca en un reloj a qué minuto pasa cada línea por Sants y genera una malla para probarla.</p></div>
+      </a>
+    </div>
 
     <!-- Herramientas del panel de análisis que aún no se han migrado al motor unificado de la app. -->
-    <h2 class="menu-sec">Otras funciones experimentales</h2>
+    <h2 class="menu-sec">Herramientas experimentales</h2>
     <div class="tiles">
       <a class="tile tile-mini" href="/panel#calc">
         <div class="tile-ic">📐</div>
@@ -1155,7 +1159,7 @@ pub fn render_cadence_page() -> String {
     <nav class="cad-tabs" id="cadTabs" role="tablist"></nav>
     <div id="cadBody"></div>
 
-    <p class="sub cad-help">Cada marcador es un tren que pasa por la referencia en ese minuto, cada hora (o cada N horas). Pulsa un marcador para elegir el recorrido completo (origen → destino), la frecuencia y, si quieres, una variante cada N horas (p. ej. R3: a Ripoll cada hora y a Puigcerdà cada 3 h). Los trenes que también pasan por otra referencia aparecen allí calculados, en gris, sin poder editarlos. El horario se guarda en este navegador y se elige en la pantalla previa del simulador visual o en Varias runs.</p>
+    <p class="sub cad-help">Cada marcador es un tren que pasa por la referencia en ese minuto, cada hora (o cada N horas). Pulsa un marcador para elegir el recorrido completo (origen → destino), la frecuencia y, si quieres, una variante cada N horas (p. ej. R3: a Ripoll cada hora y a Puigcerdà cada 3 h). Los trenes que también pasan por otra referencia aparecen allí calculados, en gris, sin poder editarlos. El horario se guarda en este navegador y se elige en la pantalla previa del simulador visual o en Simulaciones encadenadas rápidas.</p>
   </div>
   <script src="/game/cadencia.js"></script>"##
     );
@@ -1328,7 +1332,7 @@ pub fn render_info_page() -> String {
 /// Página del modo "VARIAS RUNS (solo números)": corre el motor headless para varias semillas y
 /// compara las métricas. Otra ventana/modo aparte del visual (mismo motor).
 pub fn render_numbers_page() -> String {
-    let head = format!("<title>Rodalies Simulator · Varias runs (números)</title>\n{STYLE}");
+    let head = format!("<title>Rodalies Simulator · Simulaciones encadenadas rápidas (números)</title>\n{STYLE}");
     let body = r##"<style>
 /* Esta página necesita ancho para la tabla de runs (la columna de incidencias es la clave). */
 .menu-wrap{max-width:1320px}
@@ -1415,7 +1419,7 @@ a.row-btn{text-decoration:none}
 <div class="menu-wrap">
     <div class="panel-bar"><a class="back-link" href="/">← Menú</a></div>
     <div class="menu-top"><div class="menu-brand"><img class="logo" src="/game/lines/r_logo.png" alt="Rodalies" width="46" height="46"><div>
-      <h1>Varias runs · solo motor y números</h1>
+      <h1>Simulaciones encadenadas rápidas · solo motor y números</h1>
       <div class="sub">Corre el motor unificado headless (física + incidencias) para un rango de semillas y compara métricas. Mismo motor que el modo visual.</div>
     </div></div></div>
 
@@ -1532,8 +1536,7 @@ a.row-btn{text-decoration:none}
     loadTpls();
 
     // Variabilidad de velocidad: cada tren, en cada tramo entre señales, circula a Vmax·f con f gaussiana
-    // de media 1−p truncada a [1−2p, 1] (p definido a 120 km/h; el motor lo escala con la Vmax). Preferencia de este modo (localStorage "rod-vvar-numeros").
-    const VVKEY="rod-vvar-numeros";
+    // de media 1−p truncada a [1−2p, 1] (p definido a 120 km/h; el motor lo escala con la Vmax). Empieza con el valor de «Configuración del modelo».
     const vvarPct=()=>{ const p=parseFloat($("vvarPct").value); return Number.isFinite(p)?Math.min(25,Math.max(0.5,p)):3; };
     const vvarOn=()=>$("vvarOn").checked;
     function paintVvar(){
@@ -1541,8 +1544,9 @@ a.row-btn{text-decoration:none}
       $("vvarRow").hidden=!on; $("vvarHint").hidden=!on;
       if(on) $("vvarHint").textContent=`A 120 km/h: media Vmax − ${f(p)} % · entre Vmax − ${f(2*p)} % y Vmax. Escala con la Vmax (a 60 km/h, la mitad) y se sortea en cada tramo entre señales. Súbelo en días de lluvia.`;
     }
-    function saveVvar(){ try{ localStorage.setItem(VVKEY, JSON.stringify({on:vvarOn(),p:vvarPct()})); }catch(e){} }
-    try{ const v=JSON.parse(localStorage.getItem(VVKEY)); if(v){ $("vvarOn").checked=!!v.on; if(Number.isFinite(v.p)) $("vvarPct").value=v.p; } }catch(e){}
+    // Valor inicial: el de «Configuración del modelo» (activada al 2 % por defecto); se puede cambiar
+    // para esta tanda.
+    fetch("/api/realism").then(r=>r.json()).then(j=>{ const c=j.current||{}; $("vvarOn").checked=c.speed_var_enabled!==false; if(Number.isFinite(c.speed_var_pct)) $("vvarPct").value=c.speed_var_pct; paintVvar(); }).catch(()=>{});
     paintVvar();
     // Escenarios de mercancías (compartidos con el visual); preferencia de este modo en "rod-frt-numeros".
     (async()=>{
@@ -1555,8 +1559,8 @@ a.row-btn{text-decoration:none}
       }catch(e){}
       el.onchange=()=>{ try{ localStorage.setItem("rod-frt-numeros",el.value); }catch(e){} };
     })();
-    $("vvarOn").onchange=()=>{ paintVvar(); saveVvar(); };
-    $("vvarPct").oninput=()=>{ paintVvar(); saveVvar(); };
+    $("vvarOn").onchange=paintVvar;
+    $("vvarPct").oninput=paintVvar;
 
     // Selector de horarios (igual que el visual): guardado (con su fecha) / nuevo / importar.
     let GTFS_DATE="";   // fecha del GTFS cargado (se adjunta a cada tanda para "ver en simulador")
@@ -1620,7 +1624,7 @@ a.row-btn{text-decoration:none}
       const chosen=TPLS.filter(t=>SEL.has(t.id));
       const vv=vvarOn()?vvarPct():null;   // variabilidad de velocidad de ESTA tanda (null = a Vmax)
       const frt=$("numFrt").value;   // escenario de mercancías de ESTA tanda ("none" = sin)
-      const selQ = "&sel="+chosen.map(t=>encodeURIComponent(t.id)).join(",")+(vv?"&vvar="+vv:"")+(cad?"&cad="+cad.id:"")+(frt&&frt!=="none"?"&frt="+encodeURIComponent(frt):"");
+      const selQ = "&sel="+chosen.map(t=>encodeURIComponent(t.id)).join(",")+"&vvar="+(vv||0)+(cad?"&cad="+cad.id:"")+(frt&&frt!=="none"?"&frt="+encodeURIComponent(frt):"");
       // Resultados de ESTA tanda (para exportar): runs + plantillas en juego + rango de semillas.
       LAST={runs:[],templates:chosen.map(t=>({motivo:t.motivo,effect:t.effect,dur_min:t.dur_min,prob:t.prob,every_h:t.every_h})),a,b,
         selIds:chosen.map(t=>t.id),gtfs:GTFS_DATE,vvar:vv,cad,frt};
@@ -1739,7 +1743,7 @@ pub fn render_incidents_page() -> String {
   <div class="panel-bar"><a class="back-link" href="/">← Menú</a></div>
   <div class="menu-top"><div class="menu-brand"><img class="logo" src="/game/lines/r_logo.png" alt="Rodalies" width="46" height="46"><div>
     <h1>Incidencias · creador de plantillas</h1>
-    <div class="sub">Plantillas compartidas por el <a href="/game">modo visual</a> y <a href="/numeros">Varias runs</a>. Cada modo elige después cuáles entran en juego.</div>
+    <div class="sub">Plantillas compartidas por el <a href="/game">modo visual</a> y <a href="/numeros">Simulaciones encadenadas rápidas</a>. Cada modo elige después cuáles entran en juego.</div>
   </div></div></div>
 
   <div class="inc-layout">
@@ -1865,6 +1869,12 @@ pub fn render_incidents_page() -> String {
 /// Estilos comunes de las páginas de realismo (configuración, supuestos, mercancías).
 const REALISM_CSS: &str = r##"<style>
 .menu-wrap{max-width:1180px}
+/* /supuestos: el texto salta de línea (la regla global th,td{white-space:nowrap} lo sacaba del margen). */
+.tbl.sup{table-layout:fixed}
+.tbl.sup th,.tbl.sup td{white-space:normal;overflow-wrap:anywhere;vertical-align:top;line-height:1.45}
+@media(max-width:640px){.tbl.sup th:first-child,.tbl.sup td:first-child{width:64px}.tbl.sup th:last-child,.tbl.sup td:last-child{width:38%}}
+.src-links{margin:4px 0 0;padding-left:16px;font-size:.74rem;line-height:1.35}
+.src-links li{margin:2px 0;overflow-wrap:anywhere}
 .cfg-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:16px;margin-top:14px}
 .cfg-sec h2{margin:0 0 4px;font-size:1.05rem}
 .cfg-sec .sub{margin:0 0 12px}
@@ -1923,7 +1933,7 @@ pub fn render_config_page() -> String {
   <div class="panel-bar"><a class="back-link" href="/">← Menú</a></div>
   <div class="menu-top"><div class="menu-brand"><img class="logo" src="/game/lines/r_logo.png" alt="Rodalies" width="46" height="46"><div>
     <h1>Configuración del modelo</h1>
-    <div class="sub">Todo lo que se puede ajustar del realismo del simulador. Los valores iniciales son los propuestos como razonables (se indican al lado). Vale para el <a href="/game">modo visual</a>, <a href="/numeros">Varias runs</a> y el optimizador. Lo que se asume sin poder ajustarlo está en <a href="/supuestos">Supuestos</a>.</div>
+    <div class="sub">Todo lo que se puede ajustar del realismo del simulador. Los valores iniciales son los propuestos como razonables (se indican al lado). Vale para el <a href="/game">modo visual</a>, <a href="/numeros">Simulaciones encadenadas rápidas</a> y el optimizador. Lo que se asume sin poder ajustarlo está en <a href="/supuestos">Supuestos</a>.</div>
   </div></div></div>
   <div class="bar">
     <button class="btn" id="saveBtn">Guardar cambios</button>
@@ -1972,6 +1982,8 @@ pub fn render_config_page() -> String {
       ["davis_enabled","Resistencia al avance (estimada)","","bool"],
       ["davis_r0","Resistencia a 0 km/h (N/kN)","","num",0.1],
       ["davis_r100","Resistencia a 100 km/h (N/kN)","","num",0.1],
+      ["speed_var_enabled","Variabilidad de velocidad","Los trenes no van siempre clavados a Vmax. Es el valor con el que empiezan el modo visual, las simulaciones encadenadas y la comparación con un día real.","bool"],
+      ["speed_var_pct","Factor de aleatoriedad a 120 km/h (%)","Media Vmax − p %, entre Vmax − 2p % y Vmax; escala con la Vmax.","num",0.5],
     ]},
     {t:"Vía y cabeceras",s:"Huecos sin dato de velocidad y salidas desde vías de estacionamiento.",f:[
       ["fill_track_gaps","Rellenar huecos de velocidad de vía","Con la menor velocidad de los tramos vecinos.","bool"],
@@ -1985,6 +1997,18 @@ pub fn render_config_page() -> String {
       ["freight_yield_decide_m","Antelación para decidir apartarse (m)","","num",100],
       ["freight_siding_max_s","Espera máxima en el apartadero (s)","","num",30],
       ["freight_yield_window_s","Cesión de paso en bifurcación / vía única (s)","Ceden si un tren de viajeros va a entrar en este tiempo.","num",5],
+    ]},
+    {t:"Prioridad de los regionales",s:"Cómo dejan paso los cercanías a los regionales rápidos (los que se saltan paradas): esperando en su cabecera antes de salir delante de uno, o apartándose en una estación con vías de más.",f:[
+      ["commuter_wait_regional","Esperar en cabecera al regional rápido","Si detrás viene un regional rápido que pasa por la cabecera en su misma dirección, el cercanías no sale delante de él.","bool"],
+      ["commuter_wait_margin_min","Margen de espera en cabecera (min)","Espera máxima sobre su hora de salida; pasado el margen sale igualmente.","num",0.5],
+      ["fast_skips_total_gt","Regional rápido: se salta más de (paradas)","Paradas que se salta en todo su recorrido.","num",1],
+      ["fast_common_min","…de las que coinciden con el cercanías al menos","Paradas que el cercanías sí hace y el regional se salta.","num",1],
+      ["commuter_yield","Los cercanías se apartan para dejar pasar","Como los mercancías: hacen la parada en una vía de apartado (estaciones con más de 2 vías).","bool"],
+      ["commuter_yield_only_hindered","Solo si el regional va frenado detrás","Con ámbar del ASFA o retenido. Si no, se apartan en cuanto lo detectan aunque no les alcance.","bool"],
+      ["commuter_yield_lookback_m","Distancia hacia atrás que vigilan (m)","","num",100],
+      ["commuter_yield_decide_m","Antelación para decidir apartarse (m)","Distancia a su próxima parada.","num",100],
+      ["commuter_siding_max_s","Espera máxima apartado (s)","","num",30],
+      ["commuter_yield_min_skips","Solo si el regional se salta al menos (de sus próximas paradas)","Si para en las mismas, adelantarlo no ahorra nada.","num",1],
     ]},
   ];
   let CUR=null, DEF=null;
@@ -2018,7 +2042,7 @@ pub fn render_config_page() -> String {
       <a href="/incidencias">Incidencias: tipos, duración y probabilidad →</a>
       <a href="/mercancias">Mercancías: corredores, trenes y escenarios →</a>
       <a href="/horarios">Horarios cadenciados →</a>
-      <span class="hlp">Antes de cada run (modo visual / Varias runs): semilla, variabilidad de velocidad del maquinista, horario, incidencias activas y escenario de mercancías.</span></div></section>`;
+      <span class="hlp">Antes de cada run (modo visual / Simulaciones encadenadas rápidas): semilla, variabilidad de velocidad del maquinista, horario, incidencias activas y escenario de mercancías.</span></div></section>`;
     $("grid").innerHTML=secs+seriesHtml()+tunnel+ltv+other;
     $("grid").querySelectorAll("input").forEach(el=>el.addEventListener("input",mark));
     $("ltvBtn").onclick=fetchLtv;
@@ -2085,11 +2109,13 @@ pub fn render_assumptions_page() -> String {
 (function(){
   const esc=x=>String(x).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
   const LV={dato:"dato",aprox:"aprox",supuesto:"supuesto"};
+  // Enlaces a la fuente (título de la cita sin traducir, como en una bibliografía; en un PDF lleva la página).
+  const src=ls=>ls&&ls.length?`<ul class="src-links" data-no-i18n>${ls.map(([t,u])=>`<li><a href="${esc(u)}" target="_blank" rel="noopener">${esc(t)}</a></li>`).join("")}</ul>`:"";
   fetch("/api/assumptions").then(r=>r.json()).then(a=>{
     const by={}; a.forEach(x=>(by[x.area]=by[x.area]||[]).push(x));
     document.getElementById("list").innerHTML=Object.entries(by).map(([area,xs])=>`<section class="card" style="margin-top:14px"><h2 style="margin:0 0 8px">${esc(area)}</h2>
-      <div class="tbl-wrap"><table class="tbl"><thead><tr><th style="width:90px">Nivel</th><th>Supuesto</th><th style="width:28%">Fuente</th></tr></thead><tbody>
-      ${xs.map(x=>`<tr><td><span class="lvl ${x.level}">${LV[x.level]||x.level}</span></td><td>${esc(x.text)}</td><td class="hlp">${esc(x.source)}</td></tr>`).join("")}
+      <div class="tbl-wrap"><table class="tbl sup"><thead><tr><th style="width:92px">Nivel</th><th>Supuesto</th><th style="width:32%">Fuente</th></tr></thead><tbody>
+      ${xs.map(x=>`<tr><td><span class="lvl ${x.level}">${LV[x.level]||x.level}</span></td><td>${esc(x.text)}</td><td class="hlp">${esc(x.source)}${src(x.links)}</td></tr>`).join("")}
       </tbody></table></div></section>`).join("");
   });
 })();
@@ -2232,7 +2258,14 @@ pub fn render_freight_page() -> String {
 pub fn render_data_page() -> String {
     let head = format!("<title>Rodalies Simulator · Datos reales</title>\n{STYLE}\n{REALISM_CSS}");
     let body = r##"<style>
-.dr-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(360px,1fr));gap:16px;margin-top:14px}
+.dr-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px;margin-top:14px;align-items:start}
+@media(max-width:1100px){.dr-grid{grid-template-columns:repeat(2,minmax(0,1fr))}#cloudCard{grid-column:1/-1}}
+@media(max-width:720px){.dr-grid{grid-template-columns:1fr}}
+#cloudCard .cl-steps{grid-template-columns:1fr;gap:10px}
+#cloudCard .cl-step h3{font-size:.88rem}
+#cloudCard .cl-guide ol{font-size:.8rem}
+#cloudCard .dr-btns .btn{padding:6px 11px;font-size:.8rem}
+#cloudCard .cl-intro{font-size:.82rem;line-height:1.45}
 .dr-state{display:flex;align-items:center;gap:10px;font-weight:700;font-size:1.05rem;margin:4px 0 8px}
 .dr-dot{width:12px;height:12px;border-radius:50%;background:#9ca3af}
 .dr-dot.on{background:#1f9d55;box-shadow:0 0 0 4px #1f9d5530}
@@ -2270,6 +2303,35 @@ pub fn render_data_page() -> String {
 .inc-old summary{cursor:pointer;font-size:.85rem;margin-top:10px;color:var(--muted)}
 .ana-inc{cursor:help;text-decoration:underline dotted}
 @keyframes drpop{0%{transform:scale(.4);opacity:.3}60%{transform:scale(1.35)}100%{transform:scale(1);opacity:1}}
+.rd-kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:10px;margin:10px 0}
+.rd-kpis>div{border:1px solid var(--border);border-radius:10px;padding:9px 12px;background:var(--panel2)}
+.rd-kpis .lb{display:block;font-size:.7rem;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--muted)}
+.rd-kpis .vl{font-size:1.05rem;font-weight:700;font-variant-numeric:tabular-nums}
+.rd-h{margin:20px 0 6px;font-size:1rem}
+.rd-ln{display:inline-flex;align-items:center;gap:5px;font-weight:700}
+.rd-ln::before{content:"";width:10px;height:10px;border-radius:50%;background:var(--lc)}
+.rd-seg{list-style:none;margin:8px 0 0;padding:0;display:flex;flex-direction:column;gap:6px}
+.rd-seg li{display:grid;grid-template-columns:28px minmax(0,1fr) 110px;gap:4px 10px;align-items:center;border:1px solid var(--border);border-radius:9px;padding:7px 10px;background:var(--panel2);font-size:.85rem}
+.rd-seg .rk{font-weight:700;color:var(--muted);text-align:center}
+.rd-seg .nm{font-weight:700;min-width:0;overflow-wrap:anywhere}
+.rd-seg .tot{text-align:right;font-weight:700;font-variant-numeric:tabular-nums}
+.rd-seg .meta{grid-column:2/4;display:flex;gap:10px;flex-wrap:wrap;color:var(--muted);font-size:.78rem}
+.rd-seg .bar{grid-column:2/4;height:5px;border-radius:3px;background:var(--border);overflow:hidden}
+.rd-seg .bar i{display:block;height:100%;background:var(--accent)}
+.rd-seg li.both{border-color:var(--accent)}
+.rd-two{display:grid;grid-template-columns:repeat(auto-fit,minmax(340px,1fr));gap:16px}
+.cmp-form{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:12px;margin-top:10px}
+.cmp-form label{display:flex;flex-direction:column;gap:4px;font-size:.8rem;font-weight:700;color:var(--muted)}
+.cmp-form input[type=number],.cmp-form select{padding:6px 8px;border-radius:7px;border:1px solid var(--border);background:var(--panel);color:var(--text);font:inherit;font-size:.88rem}
+.cmp-src{display:flex;gap:16px;flex-wrap:wrap;margin:6px 0 2px;font-size:.9rem}
+.cmp-tpl{display:flex;flex-direction:column;gap:3px;max-height:160px;overflow:auto;border:1px solid var(--border);border-radius:7px;padding:6px 8px;font-weight:500;color:var(--text)}
+.cmp-tpl label{flex-direction:row;align-items:center;gap:6px;font-weight:500;color:var(--text);font-size:.84rem}
+.cmp-sw{display:inline-block;width:18px;height:0;border-top:3px solid currentColor;vertical-align:middle;margin-right:5px}
+.cmp-sw.dash{border-top-style:dashed}
+.cmp-tbl td.d{font-weight:700}
+.cmp-tbl td.better{color:#1f9d55}.cmp-tbl td.worse{color:#dc2626}
+.cmp-tbl th,.cmp-tbl td{white-space:nowrap}
+.cmp-note{border-left:3px solid var(--accent);padding:4px 10px;margin:8px 0;font-size:.84rem;background:var(--panel2);border-radius:4px}
 </style>
 <div class="menu-wrap fr-wide">
   <div class="panel-bar"><a class="back-link" href="/">← Menú</a></div>
@@ -2313,11 +2375,10 @@ pub fn render_data_page() -> String {
       </ul>
       <p class="hlp">De ahí se deducen los tiempos reales de cada tramo y de cada parada y la puntualidad por línea. No incluye trenes de mercancías, ocupación de los trenes ni el motivo exacto de cada retraso. Las paradas más cortas que el refresco no se ven como «parado».</p>
     </section>
-  </div>
 
-  <section class="card" style="margin-top:16px" id="cloudCard">
+  <section class="card" id="cloudCard">
     <h2 style="margin:0 0 4px">En la nube (Cloudflare, gratis)</h2>
-    <p class="hlp" style="margin:0">El mismo recolector, funcionando día y noche en Cloudflare: no hace falta tener el ordenador encendido ni ningún servidor. Usa el plan gratuito de Cloudflare Workers <b>sin tarjeta</b>, así que no te pueden cobrar nada: si algún día se pasara de los límites gratuitos, simplemente dejaría de grabar. Lee los datos de Renfe cada 20 s, guarda solo lo de Rodalies comprimido y conserva 45 días; los descargas aquí cuando quieras.</p>
+    <p class="hlp cl-intro" style="margin:0">El mismo recolector día y noche, sin el ordenador encendido. Plan gratuito de Cloudflare Workers <b>sin tarjeta</b>: no te pueden cobrar (si se pasara del límite, solo dejaría de grabar). Graba cada 20 s y guarda 45 días.</p>
 
     <div id="clSetup" hidden>
       <div class="cl-steps">
@@ -2362,6 +2423,7 @@ pub fn render_data_page() -> String {
       <div class="hlp" id="clMsg"></div>
     </div>
   </section>
+  </div>
 
   <section class="card" style="margin-top:16px" id="daysCard">
     <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap">
@@ -2392,7 +2454,40 @@ pub fn render_data_page() -> String {
     <p class="hlp" style="margin:6px 0 0">Retrasos, puntualidad y cancelaciones reales del día elegido, con las incidencias publicadas para cada línea ese día (pasa el ratón por encima para leerlas; «+N» = avisos que ya venían de días anteriores). El color del día es su valoración.</p>
     <div id="ana" class="dr-out hlp">Cargando…</div>
   </section>
+
+  <section class="card" style="margin-top:16px" id="rdCard">
+    <div class="dr-head">
+      <h2 style="margin:0">Día real con las herramientas del simulador</h2>
+      <div class="dr-btns" style="margin:0">
+        <select class="dr-sel" id="rdDay" aria-label="Día" data-no-i18n></select>
+        <button class="btn" id="rdGo">Analizar el día</button>
+        <button class="btn ghost" id="cmpOpen">Comparar con una simulación</button>
+      </div>
+    </div>
+    <p class="hlp" style="margin:6px 0 0">El día grabado se pasa por las MISMAS herramientas que una jornada simulada: seguimiento de retrasos (red y por línea), análisis de los picos de retraso, puntualidad por línea y por hora, y los tramos donde más retraso se genera. Así una simulación y un día real se miden exactamente igual.</p>
+    <div id="rdOut" class="dr-out"></div>
+  </section>
+
+  <section class="card" style="margin-top:16px" id="cmpCard" hidden>
+    <div class="dr-head"><h2 style="margin:0">Comparar simulación ↔ realidad</h2><button class="btn ghost" id="cmpClose">Cerrar</button></div>
+    <p class="hlp" style="margin:6px 0 0">Elige el día real y la simulación: una configuración nueva o una run del historial del simulador visual. Se simula la jornada entera con esa configuración y se compara con el día real en todo lo que se mide igual a los dos lados.</p>
+    <div class="cmp-src"><label><input type="radio" name="cmpSrc" value="new" checked> Nueva configuración</label><label><input type="radio" name="cmpSrc" value="hist"> Del historial de runs visuales</label></div>
+    <div class="cmp-form">
+      <label>Día real<select id="cmpDay" data-no-i18n></select></label>
+      <div id="cmpNew" style="display:contents">
+        <label>Semilla<input type="number" id="cmpSeed" value="1" min="0" step="1"></label>
+        <label>Horarios<select id="cmpSched"></select></label>
+        <label>Variabilidad de velocidad (%)<span style="display:flex;gap:6px;align-items:center"><input type="checkbox" id="cmpVvarOn"><input type="number" id="cmpVvar" value="3" min="0" max="15" step="0.5" style="flex:1"></span></label>
+        <label>Mercancías<select id="cmpFrt"><option value="none">Sin mercancías</option></select></label>
+        <label>Incidencias que pueden ocurrir<div class="cmp-tpl" id="cmpTpl">Cargando…</div></label>
+      </div>
+      <div id="cmpHist" style="display:none"><label>Run del historial<select id="cmpHistSel" data-no-i18n></select></label></div>
+    </div>
+    <div class="dr-btns"><button class="btn" id="cmpGo">Comparar</button></div>
+    <div id="cmpOut" class="dr-out"></div>
+  </section>
 </div>
+<script src="/game/delay_track.js"></script>
 <script>
 (function(){
   const $=id=>document.getElementById(id);
@@ -2595,6 +2690,10 @@ pub fn render_data_page() -> String {
     const firstI=!$("incDay").options.length, firstA=!$("anaDay").options.length;
     fillSel($("incDay"),incDays,false);
     fillSel($("anaDay"),rec,true);
+    const firstR=!$("rdDay").options.length;
+    fillSel($("rdDay"),rec,false);
+    fillSel($("cmpDay"),rec,false);
+    if(firstR&&rec.length){ const d=rec.find(x=>DAYS[x].coverage>=50)||rec[0]; $("rdDay").value=d; $("cmpDay").value=d; paintSel($("rdDay")); paintSel($("cmpDay")); }
     if(firstI){ $("incDay").value=todayStr(); paintSel($("incDay")); loadIncidents(); }
     if(firstA){
       if(!rec.length){ $("ana").textContent="Aún no hay días grabados."; return; }
@@ -2682,6 +2781,271 @@ pub fn render_data_page() -> String {
       status(); afterNewData();
     } else if(!j.ok) $("clMsg").textContent="No se pudieron descargar los datos nuevos: "+j.error;
   }
+  // ── Día real con las herramientas del simulador · comparación simulación ↔ realidad ──────────
+  // El servidor devuelve el día real como una run del motor (`run`: seguimiento + análisis de picos +
+  // por línea + avisos) y las MISMAS estadísticas que calcula para una jornada simulada (`stats`).
+  const DT=()=>window.DelayTrack;
+  const REAL_COL="#2a78d6";   // serie REAL en los gráficos de comparación; la simulada, naranja
+  const SIM_COL="#ec6e15";
+  const hhmm=s=>{s=Math.max(0,Math.round(s));return String(Math.floor(s/3600)%24).padStart(2,"0")+":"+String(Math.floor(s%3600/60)).padStart(2,"0");};
+  const kpi=(lb,vl)=>`<div><span class="lb">${esc(T(lb))}</span><span class="vl" data-no-i18n>${vl}</span></div>`;
+  const colorOf=st=>{ const m={}; (st.lines||[]).forEach(l=>m[l.line]=l.color); return l=>m[l]||"var(--muted)"; };
+  const chip=(l,c)=>`<span class="rd-ln" style="--lc:${esc(c)}" data-no-i18n>${esc(l)}</span>`;
+  // Resumen del seguimiento: pico del retraso medio en horas de servicio, media del día (solo minutos
+  // con trenes: los huecos de un día real no cuentan) y episodios del análisis con su τ mediano.
+  function trackKpis(run){
+    const tr=run&&run.track; if(!tr||!DT()) return {};
+    const pk=DT().servicePeak(tr,tr.mean);
+    let s=0,c=0; tr.mean.forEach((v,i)=>{ if(tr.active[i]>0){ s+=v; c++; } });
+    const eps=(run.analysis&&run.analysis.mean)||[];
+    const taus=eps.map(p=>p.fits.find(f=>f.model==="exp")).filter(Boolean).map(f=>f.p[2]).sort((a,b)=>a-b);
+    return {peak:pk.v, peak_t:tr.t0+pk.i*tr.dt, mean:c?s/c:null, episodes:eps.length, tau:taus.length?taus[Math.floor(taus.length/2)]:null};
+  }
+  // Tabla por línea: una estadística (st) o varias en paralelo [{t:"Sim.",st},{t:"Real",st}].
+  function lineTable(sets){
+    const names=[...new Set(sets.flatMap(x=>x.st.lines.map(l=>l.line)))].sort((a,b)=>a.localeCompare(b,undefined,{numeric:true}));
+    const col=colorOf({lines:sets.flatMap(x=>x.st.lines)});
+    const get=(x,l)=>x.st.lines.find(y=>y.line===l);
+    const cols=[["Trenes","trains",0,""],["Puntualidad","punct_pct",1," %"],["Retraso medio","mean_min",2," min"],["p90","p90_min",1," min"],["Máximo","max_min",0," min"],["≥ 15 min","over15_pct",1," %"]];
+    const multi=sets.length>1;
+    const head=cols.map(c=>multi?sets.map(x=>`<th class="num">${esc(T(c[0]))}<br><span class="hlp">${esc(T(x.t))}</span></th>`).join(""):`<th class="num">${esc(T(c[0]))}</th>`).join("");
+    const hasCan=sets.some(x=>x.st.lines.some(l=>l.canceled!=null));
+    const rows=["Red",...names].map(l=>`<tr><td>${l==="Red"?`<b>${esc(T("Toda la red"))}</b>`:chip(l,col(l))}</td>${cols.map(c=>sets.map(x=>{ const v=l==="Red"?x.st.network:get(x,l); return `<td class="num">${v?n(v[c[1]],c[2])+c[3]:"–"}</td>`; }).join("")).join("")}${hasCan?`<td class="num">${(()=>{ const x=sets.find(z=>z.st.network.canceled!=null); const v=x&&(l==="Red"?x.st.network:get(x,l)); return v&&v.canceled!=null?n(v.canceled):"–"; })()}</td>`:""}</tr>`).join("");
+    return `<div class="tbl-wrap"><table class="tbl cmp-tbl"><thead><tr><th>${esc(T("Línea"))}</th>${head}${hasCan?`<th class="num">${esc(T("Cancelados"))}</th>`:""}</tr></thead><tbody>${rows}</tbody></table></div>`;
+  }
+  // Ranking de tramos donde se GENERA el retraso (subida del retraso entre llegadas consecutivas).
+  function segList(st,max,mark){
+    const segs=(st.segments||[]).slice(0,max), col=colorOf(st), top=segs.length?segs[0].gain_min:1;
+    if(!segs.length) return `<p class="hlp">${esc(T("No hay tramos donde se genere retraso."))}</p>`;
+    return `<ol class="rd-seg" data-no-i18n>${segs.map((g,i)=>`<li class="${mark&&mark.has(g.from+">"+g.to)?"both":""}"><span class="rk">${i+1}</span><span class="nm">${esc(g.from_name)} → ${esc(g.to_name)}</span><span class="tot">${n(g.gain_min,0)} min</span>
+      <span class="bar"><i style="width:${Math.max(2,100*g.gain_min/top).toFixed(1)}%"></i></span>
+      <span class="meta"><span>${n(g.n)} ${esc(T("pasos"))}</span><span>${esc(T("media"))} ${g.mean_min>=0?"+":""}${n(g.mean_min,2)} min/${esc(T("paso"))}</span>${g.lines.slice(0,4).map(([l,m])=>`<span>${chip(l,col(l))} ${n(100*m/Math.max(1e-9,g.gain_min),0)} %</span>`).join("")}${mark&&mark.has(g.from+">"+g.to)?`<span><b>${esc(T("también en el otro lado"))}</b></span>`:""}</span></li>`).join("")}</ol>`;
+  }
+  // Puntualidad por hora (una o dos series; solo las horas con llegadas en todas).
+  function hourChart(el,sets){
+    const hours=sets.map(x=>new Map(x.st.by_hour.map(h=>[h.hour,h])));
+    const xs=[...hours[0].keys()].filter(h=>hours.every(m=>m.has(h))).sort((a,b)=>a-b);
+    if(!xs.length||!DT()){ el.innerHTML=`<p class="hlp">–</p>`; return; }
+    DT().injectCss();
+    DT().lineChart(el,{xs,height:220,ydec:1,yunitShort:"%",label:T("Puntualidad por hora"),
+      xfmt:h=>`${String(h).padStart(2,"0")}:00–${String(h+1).padStart(2,"0")}:00`,
+      xticks:(a,b)=>{ const o=[]; for(let h=Math.ceil(a/2)*2;h<=b;h+=2) o.push({x:h,label:String(h).padStart(2,"0")+"h"}); return o; },
+      series:sets.map((x,k)=>({name:T(x.t)+" · "+T("puntualidad"),ys:xs.map(h=>hours[k].get(h).punct_pct),color:x.color,dash:x.dash||"",width:2}))});
+  }
+
+  // ── Analizar un día real ──
+  let RD_SEQ=0;
+  async function analyzeReal(){
+    const day=$("rdDay").value; if(!day) return;
+    const seq=++RD_SEQ;
+    $("rdOut").innerHTML=`<p class="hlp">${esc(T("Analizando el día (la primera vez tarda unos segundos)…"))}</p>`;
+    let j; try{ j=await post("/api/gtfsrt/track?day="+day); }catch(e){ j={ok:false,error:String(e)}; }
+    if(seq!==RD_SEQ) return;
+    if(!j.ok){ $("rdOut").innerHTML=`<p>${esc(j.error||"Error")}</p>`; return; }
+    paintReal(j);
+  }
+  function gapText(run){
+    const g=run.gaps||[]; if(!g.length) return "";
+    const m=g.reduce((s,x)=>s+(x[1]-x[0]+1)/60,0);
+    return ` · <b>${n(m,0)} min ${esc(T("sin datos"))}</b> (${g.map(x=>hhmm(x[0])+"–"+hhmm(x[1])).join(", ")})`;
+  }
+  function paintReal(j){
+    const st=j.stats, N=st.network, k=trackKpis(j.run), title=T("Día real")+" · "+fmtDayW(j.day);
+    $("rdOut").innerHTML=`<p class="hlp" data-no-i18n>${n(j.polls)} ${esc(T("sondeos"))} · ${n(j.trips)} ${esc(T("trenes observados"))}${gapText(j.run)}</p>
+      <div class="rd-kpis">
+        ${kpi("Puntualidad (llegadas con < 3 min)",n(N.punct_pct,1)+" %")}
+        ${kpi("Retraso medio al llegar",n(N.mean_min,2)+" min")}
+        ${kpi("Llegadas con ≥ 15 min",n(N.over15_pct,1)+" %")}
+        ${kpi("Retraso máximo",n(N.max_min,0)+" min")}
+        ${kpi("Pico del retraso medio por tren",k.peak==null?"–":n(k.peak,2)+" min · "+hhmm(k.peak_t))}
+        ${kpi("Episodios de retraso destacables",n(k.episodes)+(k.tau!=null?" · τ "+n(k.tau,1)+" min":""))}
+        ${kpi("Viajes cancelados",n(N.canceled))}
+      </div>
+      <div class="dr-btns"><button class="btn" id="rdTrack">Seguimiento de retrasos (red y por línea)</button><button class="btn ghost" id="rdInc">Avisos del día por impacto</button></div>
+      <h3 class="rd-h">Por línea</h3>${lineTable([{t:"Real",st}])}
+      <h3 class="rd-h">Puntualidad por hora</h3><div id="rdHour"></div>
+      <h3 class="rd-h">Tramos donde más retraso se genera</h3>
+      <p class="hlp" style="margin:0">Cuánto sube el retraso de los trenes entre su llegada a una estación y la llegada a la siguiente observada (incluye la parada). Suma del día; la barra compara con el peor tramo.</p>
+      ${segList(st,15)}`;
+    $("rdTrack").onclick=()=>DT().open(j.run,{title});
+    $("rdInc").onclick=()=>DT().openIncidents(j.run,{title});
+    hourChart($("rdHour"),[{t:"Real",st,color:REAL_COL}]);
+  }
+  $("rdGo").onclick=analyzeReal;
+  $("rdDay").onchange=()=>{ paintSel($("rdDay")); $("cmpDay").value=$("rdDay").value; paintSel($("cmpDay")); };
+
+  // ── Comparar con una simulación ──
+  const HIST_KEY="rod-visual-history", CAD_KEY="rod-cadences";
+  const lsJson=k=>{ try{ const v=JSON.parse(localStorage.getItem(k)); return Array.isArray(v)?v:[]; }catch(e){ return []; } };
+  let TPLS=[];
+  async function fillCmpForm(){
+    try{ const c=(await (await fetch("/api/realism")).json()).current||{}; $("cmpVvarOn").checked=c.speed_var_enabled!==false; if(Number.isFinite(c.speed_var_pct)) $("cmpVvar").value=c.speed_var_pct; }catch(e){}
+    $("cmpSched").innerHTML=`<option value="gtfs">${esc(T("Horario GTFS de Renfe"))}</option><option value="free">${esc(T("Sin horarios (modo caos)"))}</option>`+
+      lsJson(CAD_KEY).map(c=>`<option value="cad:${esc(c.id)}">${esc(T("Cadenciado"))} · ${esc(c.name)}</option>`).join("");
+    try{
+      TPLS=await (await fetch("/api/incidents/templates")).json();
+      $("cmpTpl").innerHTML=TPLS.length?TPLS.map(t=>`<label><input type="checkbox" value="${esc(t.id)}"${t.enabled?" checked":""}> <span data-no-i18n>${esc(t.motivo)}</span> <span class="hlp">· ${n(t.dur_min)} min</span></label>`).join(""):`<span class="hlp">${esc(T("No hay plantillas de incidencias."))}</span>`;
+    }catch(e){ $("cmpTpl").textContent=String(e); }
+    try{
+      const scs=await (await fetch("/api/freight/scenarios")).json();
+      $("cmpFrt").innerHTML=`<option value="none">${esc(T("Sin mercancías"))}</option>`+scs.map(s=>`<option value="${esc(s.id)}">${esc(s.name)}</option>`).join("");
+    }catch(e){}
+    const h=lsJson(HIST_KEY);
+    $("cmpHistSel").innerHTML=h.length?h.map((r,i)=>`<option value="${i}">${esc(new Date(r.t).toLocaleString(L(),{dateStyle:"short",timeStyle:"short"}))} · ${esc(T("semilla"))} ${r.seed} · ${esc(r.sched)}${r.q==null?" · "+esc(T("config. incompleta")):""}</option>`).join(""):`<option value="">${esc(T("El historial está vacío"))}</option>`;
+  }
+  function srcMode(){ return (document.querySelector('input[name="cmpSrc"]:checked')||{}).value||"new"; }
+  document.querySelectorAll('input[name="cmpSrc"]').forEach(r=>r.onchange=()=>{ const h=srcMode()==="hist"; $("cmpNew").style.display=h?"none":"contents"; $("cmpHist").style.display=h?"":"none"; });
+  async function loadCadence(localId){
+    const c=lsJson(CAD_KEY).find(x=>x.id===localId);
+    if(!c) throw new Error(T("El horario cadenciado ya no está guardado en este navegador."));
+    const r=await (await fetch("/api/cadence/load",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({name:c.name,markers:c.spec.markers||[],groups:c.spec.groups||[]})})).json();
+    if(!r.ok) throw new Error(r.error||"No se pudo generar el horario cadenciado.");
+    return {id:r.id,name:c.name};
+  }
+  // Consulta del motor (mismos parámetros que el visor) + descripción legible de la configuración.
+  async function cmpQuery(){
+    if(srcMode()==="hist"){
+      const r=lsJson(HIST_KEY)[+$("cmpHistSel").value];
+      if(!r) throw new Error(T("Elige una run del historial."));
+      let q=r.q, note="";
+      if(q==null){   // run guardada antes de que el historial guardara la configuración completa
+        q=(r.vvar?"&vvar="+r.vvar:"")+(/caos/i.test(r.sched||"")?"&free=1":"");
+        note=T("Run antigua: el historial no guardó qué incidencias estaban activas; se usan las activas ahora.");
+      }
+      if(!/[?&]vvar=/.test(q)) q+="&vvar=0";   // en el historial, sin vvar = a Vmax (antes de que fuera del modelo)
+      if(r.cad_local){ const c=await loadCadence(r.cad_local); q=q.replace(/&cad=[^&]*/,"")+"&cad="+encodeURIComponent(c.id); }
+      return {q:"seed="+r.seed+q, label:`${T("Historial")} · ${T("semilla")} ${r.seed} · ${r.sched}${r.vvar?" · vvar "+r.vvar+" %":""}`, note};
+    }
+    const seed=Math.max(0,parseInt($("cmpSeed").value||"1",10)), sched=$("cmpSched").value;
+    const sel=[...$("cmpTpl").querySelectorAll("input:checked")].map(i=>i.value);
+    let q="seed="+seed+"&sel="+sel.map(encodeURIComponent).join(",");
+    const vv=$("cmpVvarOn").checked?Math.max(0,+$("cmpVvar").value||0):0;
+    q+="&vvar="+vv;   // 0 = a Vmax (sin el parámetro mandaría el del modelo)
+    if($("cmpFrt").value!=="none") q+="&frt="+encodeURIComponent($("cmpFrt").value);
+    let sl=T("Horario GTFS");
+    if(sched==="free"){ q+="&free=1"; sl=T("Sin horarios (modo caos)"); }
+    else if(sched.startsWith("cad:")){ const c=await loadCadence(sched.slice(4)); q+="&cad="+encodeURIComponent(c.id); sl=T("Cadenciado")+" · "+c.name; }
+    const frt=$("cmpFrt").selectedOptions[0];
+    return {q, label:`${T("semilla")} ${seed} · ${sl} · ${n(sel.length)} ${T(sel.length===1?"tipo de incidencia":"tipos de incidencia")}${vv?" · vvar "+vv+" %":""}${$("cmpFrt").value!=="none"?" · "+frt.textContent:""}`, note:""};
+  }
+  let CMP_SEQ=0;
+  $("cmpGo").onclick=async()=>{
+    const day=$("cmpDay").value; if(!day){ $("cmpOut").innerHTML=`<p>${esc(T("No hay días grabados."))}</p>`; return; }
+    const seq=++CMP_SEQ; $("cmpGo").disabled=true;
+    $("cmpOut").innerHTML=`<p class="hlp">${esc(T("Simulando la jornada y analizando el día real (unos segundos)…"))}</p>`;
+    try{
+      const c=await cmpQuery();
+      const j=await (await fetch("/api/compare/day?day="+day+"&"+c.q)).json();
+      if(seq!==CMP_SEQ) return;
+      if(!j.ok){ $("cmpOut").innerHTML=`<p>${esc(j.error||"Error")}</p>`; return; }
+      paintCmp(j,c);
+    }catch(e){ $("cmpOut").innerHTML=`<p>${esc(e.message||e)}</p>`; }
+    finally{ $("cmpGo").disabled=false; }
+  };
+  $("cmpOpen").onclick=async()=>{ $("cmpCard").hidden=false; await fillCmpForm(); $("cmpCard").scrollIntoView({behavior:"smooth",block:"start"}); };
+  $("cmpClose").onclick=()=>{ $("cmpCard").hidden=true; };
+  $("cmpDay").onchange=()=>paintSel($("cmpDay"));
+
+  // Dos series de la jornada alineadas por hora (solo el tramo común a las dos).
+  function align(a,b,key){
+    const ta=a.track, tb=b.track, t0=Math.max(ta.t0,tb.t0), t1=Math.min(ta.t0+ta.dt*(ta.mean.length-1),tb.t0+tb.dt*(tb.mean.length-1));
+    const xs=[]; for(let t=t0;t<=t1;t+=60) xs.push(t);
+    const at=(tr,arr)=>xs.map(t=>{ const i=Math.round((t-tr.t0)/tr.dt); return arr[Math.max(0,Math.min(arr.length-1,i))]; });
+    return {xs, ya:at(ta,key(ta)), yb:at(tb,key(tb))};
+  }
+  function paintCmp(j,c){
+    const S=j.sim, R=j.real, ss=S.stats, rs=R.stats, kS=trackKpis(S.run), kR=trackKpis(R.run), M=j.matching;
+    const SIMT=T("Simulación"), REALT=T("Real");
+    // Fila de la tabla resumen: valor simulado, real y diferencia. El color NO dice que una sea «mejor»:
+    // marca si la simulación sale más optimista (verde) o más pesimista (rojo) que la realidad.
+    const row=(lb,a,b,d,u,higherWorse)=>{
+      const diff=a!=null&&b!=null&&isFinite(a)&&isFinite(b)?a-b:null;
+      const cls=diff==null||Math.abs(diff)<1e-9?"":((diff>0)===higherWorse?"worse":"better");
+      // Diferencia de dos porcentajes = puntos porcentuales.
+      const du=u===" %"?" p.p.":u;
+      return `<tr><td>${esc(T(lb))}</td><td class="num">${a==null?"–":n(a,d)+u}</td><td class="num">${b==null?"–":n(b,d)+u}</td><td class="num d ${cls}" data-no-i18n>${diff==null?"–":(diff>0?"+":"")+n(diff,d)+du}</td></tr>`;
+    };
+    const NS=ss.network, NR=rs.network;
+    $("cmpOut").innerHTML=`
+      <div class="cmp-note" data-no-i18n><b>${esc(SIMT)}:</b> ${esc(c.label)}${c.note?`<br>${esc(c.note)}`:""}<br><b>${esc(REALT)}:</b> ${esc(fmtDayW(j.day))} · ${n(R.polls)} ${esc(T("sondeos"))} · ${n(R.trips)} ${esc(T("trenes observados"))}${gapText(R.run)}</div>
+      <h3 class="rd-h">Resumen</h3>
+      <p class="hlp" style="margin:0">Diferencia = simulación − real. En <span style="color:#1f9d55;font-weight:700">verde</span> si la simulación sale mejor que la realidad (más optimista), en <span style="color:#dc2626;font-weight:700">rojo</span> si sale peor.</p>
+      <div class="tbl-wrap"><table class="tbl cmp-tbl"><thead><tr><th></th><th class="num"><span class="cmp-sw" style="color:${SIM_COL}"></span>${esc(SIMT)}</th><th class="num"><span class="cmp-sw" style="color:${REAL_COL}"></span>${esc(REALT)}</th><th class="num">${esc(T("Diferencia"))}</th></tr></thead><tbody>
+        ${row("Trenes con llegadas registradas",NS.trains,NR.trains,0,"",false)}
+        ${row("Puntualidad (llegadas con < 3 min)",NS.punct_pct,NR.punct_pct,1," %",false)}
+        ${row("Retraso medio al llegar",NS.mean_min,NR.mean_min,2," min",true)}
+        ${row("Retraso mediano al llegar",NS.p50_min,NR.p50_min,2," min",true)}
+        ${row("Percentil 90",NS.p90_min,NR.p90_min,1," min",true)}
+        ${row("Llegadas con ≥ 5 min",NS.over5_pct,NR.over5_pct,1," %",true)}
+        ${row("Llegadas con ≥ 15 min",NS.over15_pct,NR.over15_pct,1," %",true)}
+        ${row("Retraso máximo",NS.max_min,NR.max_min,0," min",true)}
+        ${row("Retraso medio en la última parada",NS.final_mean_min,NR.final_mean_min,2," min",true)}
+        ${row("Pico del retraso medio por tren",kS.peak,kR.peak,2," min",true)}
+        ${row("Media del día del retraso medio por tren",kS.mean,kR.mean,2," min",true)}
+        ${row("Episodios de retraso destacables",kS.episodes,kR.episodes,0,"",true)}
+        ${row("τ mediano de recuperación (exponencial)",kS.tau,kR.tau,1," min",true)}
+      </tbody></table></div>
+      <div class="dr-btns"><button class="btn" id="cmpTrS" data-no-i18n>${esc(T("Seguimiento de retrasos"))} · ${esc(SIMT)}</button><button class="btn" id="cmpTrR" data-no-i18n>${esc(T("Seguimiento de retrasos"))} · ${esc(REALT)}</button><button class="btn ghost" id="cmpIncS">Incidencias simuladas</button><button class="btn ghost" id="cmpIncR">Avisos del día real</button></div>
+
+      <h3 class="rd-h">Retraso de la red, superpuesto</h3>
+      <div class="dr-btns" style="margin:0"><select class="dr-sel" id="cmpSerie"><option value="mean">Retraso medio por tren</option><option value="total">Retraso acumulado de la red</option></select></div>
+      <div id="cmpNet"></div>
+
+      <h3 class="rd-h">Por línea, superpuesto</h3>
+      <p class="hlp" style="margin:0">Línea continua = real, discontinua = simulación, con el color de la línea.</p>
+      <div class="dr-btns" style="margin:4px 0 0"><select class="dr-sel" id="cmpLine" data-no-i18n></select><select class="dr-sel" id="cmpLSerie"><option value="mean">Retraso medio por tren</option><option value="total">Retraso acumulado</option></select></div>
+      <div id="cmpLineCh"></div>
+      ${lineTable([{t:"Sim.",st:ss},{t:"Real",st:rs}])}
+
+      <h3 class="rd-h">Puntualidad por hora</h3><div id="cmpHour"></div>
+
+      <h3 class="rd-h">Tramos donde más retraso se genera</h3>
+      <p class="hlp" style="margin:0">Misma medida a los dos lados (subida del retraso entre llegadas consecutivas). Con borde de color, los tramos que están en las dos listas.</p>
+      <div class="rd-two"><div><h4 style="margin:8px 0 0">${esc(SIMT)}</h4><div id="cmpSegS"></div></div><div><h4 style="margin:8px 0 0">${esc(REALT)}</h4><div id="cmpSegR"></div></div></div>
+      ${S.hotspots&&S.hotspots.length?`<details style="margin-top:10px"><summary class="hlp" style="cursor:pointer" data-no-i18n>${esc(T("Simulación: tramos que más han retenido trenes ante su señal"))} (${n(S.held_total_min)} min · ${n(S.held_total_events)} ${esc(T("retenciones"))})</summary><ol class="rd-seg" data-no-i18n>${S.hotspots.slice(0,10).map((h,i)=>`<li><span class="rk">${i+1}</span><span class="nm">${esc(h.from_name)} → ${esc(h.to_name)}</span><span class="tot">${n(h.held_s/60,0)} min</span><span class="meta"><span>${n(h.events)} ${esc(T("retenciones"))}</span><span>${esc(T("máx."))} ${n(h.max_s/60,1)} min</span></span></li>`).join("")}</ol></details>`:""}
+
+      <h3 class="rd-h">Tren a tren</h3>
+      <p class="hlp" style="margin:0">Trenes emparejados por número y línea (el mismo tren en el horario simulado y en el día real). La correlación dice si se retrasan <b>los mismos</b> trenes (1 = exactamente los mismos; 0 = nada que ver).</p>
+      <div class="rd-kpis">
+        ${kpi("Trenes emparejados",`${n(M.matched)} <span class="hlp">/ ${n(M.sim_trains)} sim. · ${n(M.real_trains)} real</span>`)}
+        ${kpi("Diferencia media por tren (sim. − real)",(M.bias_min>0?"+":"")+n(M.bias_min,2)+" min")}
+        ${kpi("Error medio absoluto por tren",n(M.mae_min,2)+" min")}
+        ${kpi("Correlación del retraso por tren",M.corr==null?"–":n(M.corr,2))}
+      </div>
+      ${M.worst.length?`<details><summary class="hlp" style="cursor:pointer" data-no-i18n>${esc(T("Los trenes que más se apartan de la realidad"))} (${n(M.worst.length)})</summary><div class="tbl-wrap"><table class="tbl cmp-tbl"><thead><tr><th>${esc(T("Tren"))}</th><th>${esc(T("Línea"))}</th><th class="num">${esc(T("Retraso medio"))}<br><span class="hlp">${esc(T("Sim."))}</span></th><th class="num">${esc(T("Retraso medio"))}<br><span class="hlp">${esc(T("Real"))}</span></th><th class="num">${esc(T("En destino"))}<br><span class="hlp">${esc(T("Sim."))}</span></th><th class="num">${esc(T("En destino"))}<br><span class="hlp">${esc(T("Real"))}</span></th></tr></thead><tbody>
+        ${M.worst.map(p=>`<tr><td data-no-i18n>${esc(p.key)}</td><td>${chip(p.line,colorOf(rs)(p.line))}</td><td class="num">${n(p.sim_mean_min,1)} min</td><td class="num">${n(p.real_mean_min,1)} min</td><td class="num">${n(p.sim_final_min,1)} min</td><td class="num">${n(p.real_final_min,1)} min</td></tr>`).join("")}</tbody></table></div></details>`:""}`;
+    const titS=SIMT+" · "+c.label, titR=REALT+" · "+fmtDayW(j.day);
+    $("cmpTrS").onclick=()=>DT().open(S.run,{title:titS});
+    $("cmpTrR").onclick=()=>DT().open(R.run,{title:titR});
+    $("cmpIncS").onclick=()=>DT().openIncidents(S.run,{title:titS});
+    $("cmpIncR").onclick=()=>DT().openIncidents(R.run,{title:titR});
+    DT().injectCss();
+    const gapB=(R.run.gaps||[]).map(([a,b])=>({x0:a,x1:b,fill:"rgba(128,128,128,.2)",label:b-a>=1200?T("sin datos"):null}));
+    const drawNet=()=>{
+      const key=$("cmpSerie").value, al=align(S.run,R.run,tr=>tr[key]);
+      DT().lineChart($("cmpNet"),{xs:al.xs,height:260,ydec:key==="mean"?2:0,yunitShort:"min",xfmt:DT().timeM,xticks:DT().hourTicks,bands:gapB,label:T("Retraso de la red"),
+        series:[{name:SIMT,ys:al.ya,color:SIM_COL,width:2},{name:REALT,ys:al.yb,color:REAL_COL,width:2}]});
+    };
+    $("cmpSerie").onchange=drawNet; drawNet();
+    // Por línea: las que existen en los dos lados, la de más retraso real primero.
+    const linesOf=run=>new Map(((run.track&&run.track.lines)||[]).map(l=>[l.line,l]));
+    const LS=linesOf(S.run), LR=linesOf(R.run);
+    const common=[...LR.keys()].filter(l=>LS.has(l)).sort((a,b)=>LR.get(b).total.reduce((s,v)=>s+v,0)-LR.get(a).total.reduce((s,v)=>s+v,0));
+    $("cmpLine").innerHTML=common.map(l=>`<option value="${esc(l)}">${esc(l)}</option>`).join("");
+    const drawLine=()=>{
+      const l=$("cmpLine").value; if(!l){ $("cmpLineCh").innerHTML=`<p class="hlp">–</p>`; return; }
+      const key=$("cmpLSerie").value, a=LS.get(l), b=LR.get(l);
+      const al=align({track:{...S.run.track,mean:a.mean,total:a.total}},{track:{...R.run.track,mean:b.mean,total:b.total}},tr=>tr[key]);
+      DT().lineChart($("cmpLineCh"),{xs:al.xs,height:240,ydec:key==="mean"?2:1,yunitShort:"min",xfmt:DT().timeM,xticks:DT().hourTicks,bands:gapB,label:l,
+        series:[{name:SIMT+" · "+l,ys:al.ya,color:b.color,dash:"6 4",width:2},{name:REALT+" · "+l,ys:al.yb,color:b.color,width:2.2}]});
+    };
+    $("cmpLine").onchange=drawLine; $("cmpLSerie").onchange=drawLine; drawLine();
+    hourChart($("cmpHour"),[{t:"Simulación",st:ss,color:SIM_COL},{t:"Real",st:rs,color:REAL_COL}]);
+    const both=new Set(ss.segments.map(g=>g.from+">"+g.to).filter(k=>rs.segments.some(g=>g.from+">"+g.to===k)));
+    $("cmpSegS").innerHTML=segList(ss,10,both);
+    $("cmpSegR").innerHTML=segList(rs,10,both);
+  }
+
   loadDays();
   setInterval(loadDays,5*60*1000);   // los días crecen mientras se graba (la cobertura de hoy sube)
   setInterval(()=>{ if($("incDay").value===todayStr()) loadIncidents(); },5*60*1000);   // la nube captura cada 5 min

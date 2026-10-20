@@ -20,7 +20,9 @@ mod gtfs_loader;
 mod gtfs_update;
 mod map;
 mod optimizer;
+mod realday;
 mod realism;
+mod realtrace;
 mod recovery;
 mod report;
 mod runs_export;
@@ -100,7 +102,7 @@ async fn main() {
         if let Some(id) = std::env::args().skip_while(|a| a != "diag").nth(1) {
             run_train_diag(&net, &id);
         } else {
-            eprintln!("Ús: diag <train_id>");
+            eprintln!("Ús: diag <train_id> [llavor] [v]");
         }
         return;
     }
@@ -462,12 +464,17 @@ fn run_engine_demo(net: &Network) {
 /// (marcha más lenta que el GTFS) o de RETENCIONES (señales/cruces).
 fn run_train_diag(net: &Network, id: &str) {
     use engine::{Engine, EngineCfg};
-    let cfg = EngineCfg::day();
+    let mut cfg = EngineCfg::day();
+    // Semilla opcional (`diag <tren> <semilla>`): la variabilidad del maquinista y de los viajeros
+    // depende de ella, así que para reproducir lo que da `simulate <semilla>` hay que pasar la misma.
+    if let Some(seed) = std::env::args().skip_while(|a| a != "diag").nth(2).and_then(|s| s.parse().ok()) {
+        cfg.seed = seed;
+    }
     let adif = calculator::infrastructure::AdifNet::load_default();
     let ltv = calculator::ltv::load_default();
     let mut eng = Engine::new(net, cfg, adif.as_ref(), ltv.as_ref(), &[], None, None);
 
-    println!("┌─ DIAGNÒSTIC DEL TREN {} (jornada SENSE incidències) ─┐", id);
+    println!("┌─ DIAGNÒSTIC DEL TREN {} (jornada SENSE incidències · llavor {}) ─┐", id, cfg.seed);
     println!("  {:<8} {:<7} {:<32} {:>7} {:>7}", "hora", "fase", "ubicació", "retard", "Δ");
 
     let mut prev_phase = 3u8;
@@ -475,6 +482,7 @@ fn run_train_diag(net: &Network, id: &str) {
     let mut prev_delay = 0.0f64;
     let mut held_since: Option<(f64, String, String)> = None;
     let mut found_any = false;
+    let verbose = std::env::args().skip_while(|a| a != "diag").nth(3).is_some_and(|a| a == "v");
 
     let end = 24.0 * 3600.0;
     while eng.clock() < end {
@@ -485,6 +493,23 @@ fn run_train_diag(net: &Network, id: &str) {
             println!("  (línia {} · {:.0} km/h màx)", d.line, d.speed_kmh);
         }
         found_any = true;
+        // `diag <tren> <llavor> v`: a més, la velocitat i el cantó cada minut en marxa (per veure si
+        // el retard ve de la física —Vmax de via, ASFA— o de retencions).
+        if verbose && d.phase == 1 && (now as u32) % 60 < cfg.dt_sec as u32 {
+            println!(
+                "  {:<8} marxa   {:<32} {:>5.0}m  {:>4.0} km/h{}",
+                fmt_hms(now as u32),
+                trunc(&format!("{} → {}", net.stop_name(&d.from_id), net.stop_name(&d.to_id)), 32),
+                d.delay_s / 60.0,
+                d.speed_kmh,
+                format!(
+                    "{}{}{}",
+                    if d.waiting { "  (retingut)" } else { "" },
+                    if d.asfa { "  [ASFA]" } else { "" },
+                    if d.ahead.is_empty() { String::new() } else { format!("  davant: {}", d.ahead.join(",")) }
+                )
+            );
+        }
 
         // Inicio/fin de una retención por señal.
         match (&held_since, d.waiting) {
@@ -520,6 +545,10 @@ fn run_train_diag(net: &Network, id: &str) {
     }
     if !found_any {
         println!("  (el tren {} no apareix a la jornada — comprova l'id)", id);
+    }
+    // Llegades tard que ha registrat el motor per a aquest tren (les mateixes que llista `simulate`).
+    for a in eng.late_arrivals().iter().filter(|a| a.train == id) {
+        println!("  llegada tard registrada: {} +{} min @ {}", trunc(net.stop_name(&a.stop), 32), a.delay / 60, fmt_hms(a.t));
     }
     println!("└──────────────────────────────────────────────────────────────┘");
 }

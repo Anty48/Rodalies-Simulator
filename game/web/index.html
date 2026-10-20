@@ -310,6 +310,7 @@
         <h2>Antes de empezar la jornada</h2>
         <p class="hint">Elige incidencias, semilla, horarios y desde qué hora quieres verla. Para ir rápido, pulsa <b>Confirmar</b> sin tocar nada.</p>
         <div class="pre-from" id="preFrom" hidden></div>
+        <a class="pre-menu" href="/">← Menú</a>
         <button class="pre-hist" id="preHist" type="button" hidden>Historial de runs visuales</button>
       </div>
       <img class="preday-renfe" src="/game/lines/renfe_logo.png" alt="Renfe">
@@ -317,9 +318,10 @@
 
     <div class="preday-grid">
       <!-- Columna izquierda: incidencias probabilísticas -->
-      <section class="card preday-col">
+      <section class="card preday-col pre-lockable" id="preIncCard">
         <div class="card-title"><span class="dot rojo"></span> Incidencias del día <span class="ct-note">probabilísticas</span></div>
-        <p class="hint mini">Marca las que entran en juego en <b>esta</b> jornada (la selección del modo visual es independiente de la de <i>Varias runs</i>; las plantillas son compartidas). Antes del día el motor trocea la jornada en secciones de <b>X horas</b> y tira los dados en cada una: las ubica (nudos/Barcelona, estaciones grandes, tramos frecuentados, terminales) y las fecha (más en hora punta).</p>
+        <p class="hint mini pre-lock-note" hidden>No aplica a un día real: es la reproducción de lo que pasó.</p>
+        <p class="hint mini">Marca las que entran en juego en <b>esta</b> jornada (la selección del modo visual es independiente de la de <i>Simulaciones encadenadas rápidas</i>; las plantillas son compartidas). Antes del día el motor trocea la jornada en secciones de <b>X horas</b> y tira los dados en cada una: las ubica (nudos/Barcelona, estaciones grandes, tramos frecuentados, terminales) y las fecha (más en hora punta).</p>
         <label class="all-toggle"><input type="checkbox" id="tplAll"><span>Todas / ninguna</span></label>
         <ul class="inc tpl-list" id="tplList"><li class="empty">Cargando plantillas…</li></ul>
         <a class="btn ghost block tpl-manage" href="/incidencias">Crear o editar plantillas (menú · Incidencias) →</a>
@@ -330,14 +332,15 @@
         <section class="card">
           <div class="card-title"><span class="dot naranja"></span> Jornada</div>
           <div class="field-row">
-            <div class="field"><label for="preSeed">Semilla del día</label><input id="preSeed" type="number" min="0" value="0"></div>
+            <div class="field pre-lockable"><label for="preSeed">Semilla del día</label><input id="preSeed" type="number" min="0" value="0"></div>
             <div class="field"><label for="preStart">Empezar a ver desde</label><input id="preStart" type="time" value="05:00" step="60"></div>
           </div>
           <p class="hint mini">La jornada se simula entera de golpe (es una grabación del motor); la hora solo decide desde dónde empieza la reproducción.</p>
         </section>
 
-        <section class="card">
+        <section class="card pre-lockable" id="preVvarCard">
           <div class="card-title"><span class="dot verde"></span> Conducción</div>
+          <p class="hint mini pre-lock-note" hidden>No aplica a un día real: es la reproducción de lo que pasó.</p>
           <label class="switch big">
             <input type="checkbox" id="preVvarOn">
             <span class="track"></span>
@@ -350,8 +353,9 @@
           <p class="hint mini" id="preVvarHint" hidden></p>
         </section>
 
-        <section class="card">
+        <section class="card pre-lockable" id="preFrtCard">
           <div class="card-title"><span class="dot rojo"></span> Mercancías</div>
+          <p class="hint mini pre-lock-note" hidden>No aplica a un día real: es la reproducción de lo que pasó.</p>
           <div class="field">
             <label for="preFrt">Escenario de mercancías</label>
             <select id="preFrt"><option value="none">Sin mercancías</option></select>
@@ -381,6 +385,12 @@
             <label class="sched-opt sched-free"><input type="radio" name="sched" value="free">
               <span><b>Sin horarios <span class="chaos-tag">modo caos</span></b>
                 <small>Solo la salida de cabecera; después, parada mínima y señales</small></span></label>
+            <!-- Día REAL grabado (GTFS-RT): los trenes siguen sus posiciones reales; los semáforos del
+                 visor solo indican si un tren parado tiene un tren delante (no los obedece nadie). -->
+            <label class="sched-opt sched-real"><input type="radio" name="sched" value="real">
+              <span><b>Día real grabado <span class="real-tag">datos reales</span></b>
+                <small id="preRealInfo">Reproduce un día grabado de Renfe: cada tren va donde fue de verdad (GPS). Los semáforos son solo visuales: muestran si un tren parado tiene un tren delante.</small>
+                <select id="preRealDay" class="real-day" aria-label="Día real" data-no-i18n></select></span></label>
           </div>
           <a class="sched-make" href="/horarios">Crear horarios cadenciados →</a>
           <label class="file-label" id="gtfsFileWrap" hidden>

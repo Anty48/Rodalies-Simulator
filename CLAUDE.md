@@ -92,6 +92,19 @@ Realism data (all optional; the engine falls back to estimates if missing):
   that day (`before_day` = carried over; Renfe leaves stale alerts, e.g. 6-7/10/2026, active for weeks).
   X/Twitter and WhatsApp are NOT readable for free (X API is paid; the public syndication endpoint
   returns random old tweets; WhatsApp channels have no API). `cloud::sync` pulls `/incidents` (`last_inc`).
+- Día real con las herramientas del simulador (`/datos`): `scripts/gtfsrt_track.py --day D` reduce el GTFS-RT
+  grabado a series por minuto (retraso vivo de la red y por línea, huecos sin datos), llegadas por tren y parada
+  y avisos del día → `processed/gtfsrt/track_<D>.json` (caché). `src/realday.rs` lo convierte en una run con el
+  MISMO formato que el motor (`track`+`lines`, `analysis` de `recovery.rs`) y calcula estadísticas comunes
+  (puntualidad < 3 min, por línea y por hora, tramos donde se genera el retraso, tren a tren por nº de tren+línea).
+  `POST /api/gtfsrt/track?day=D`; `GET /api/compare/day?day=D&seed=N&sel=…&vvar=…&frt=…&cad=…&free=1` simula con
+  esa configuración y compara. El historial del visor guarda la consulta exacta (`q`, `cad_local`) para repetirla.
+- Día real en el visor (pantalla previa → «Día real grabado»): `gtfsrt_track.py` escribe también
+  `processed/gtfsrt/pos_<D>.json` (posiciones GPS); `src/realtrace.rs` las proyecta sobre el recorrido GTFS de cada
+  tren (nº de tren + línea) y genera un trace con el formato del motor → `GET /api/game/realtrace?day=D`. Los
+  semáforos son solo visuales; un tren parado sin tren delante se marca «causa externa».
+- Prioridad de regionales (`RealismCfg` commuter_*/fast_*): cercanías esperan en cabecera a un regional rápido
+  (`seguidores_rapidos`, `regional_rapido_llega`) y se apartan si les sigue uno frenado (`decidir_apartado_cercanias`).
 - LTV: `/configuracion` → "Buscar y actualizar LTV" runs `scripts/fetch_adif_ltv.py` and reloads.
 
 UI languages (es/ca/en): `game/web/i18n.js` translates the rendered DOM using

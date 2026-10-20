@@ -27,7 +27,13 @@ use crate::gtfs_loader::Network;
 pub fn approach_main_tracks(stop_id: &str) -> u32 {
     APPROACH_MAIN_TRACKS.iter().find(|(id, _)| *id == stop_id).map_or(1, |(_, n)| *n)
 }
-const APPROACH_MAIN_TRACKS: &[(&str, u32)] = &[("71801", 2)]; // Barcelona-Sants
+const APPROACH_MAIN_TRACKS: &[(&str, u32)] = &[
+    ("71801", 2), // Barcelona-Sants
+    // Tortosa: final en fondo de saco del ramal desde L'Aldea, con vía principal + 3 vías de 241-428 m
+    // (OSM, raw/osm_rail.json). Los regionales que invierten allí tienen 15-35 min de margen en el
+    // andén; con una sola vía el R16 que llega detrás esperaba en Camp-redó a que se fueran.
+    ("65400", 2),
+];
 
 pub fn platform_tracks(stop_name: &str) -> u32 {
     for (name, tracks) in PLATFORM_TRACKS {
@@ -80,7 +86,7 @@ const PLATFORM_TRACKS: &[(&str, u32)] = &[
     ("El Vendrell", 4),
     ("Els Monjos", 2),
     ("Figaró", 2),
-    ("Garraf", 2),
+    ("Garraf", 5), // usuario 2026-10-20: 5 vías (la referencia Godot daba 2); permite apartarse en el Garraf
     ("Gavà", 4),
     ("Gelida", 2),
     ("Granollers Centre", 9),

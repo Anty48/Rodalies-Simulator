@@ -265,12 +265,20 @@ const CELL: f64 = 0.01; // ~1,1 km por celda de la rejilla espacial
 /// Red ADIF: segmentos de vía con su velocidad de diseño + índice de rejilla.
 pub struct AdifNet {
     /// (a[lat,lon], b[lat,lon], vmax_km/h) de cada segmento elemental de vía.
-    segs: Vec<([f64; 2], [f64; 2], f64)>,
+    segs: Vec<Seg>,
     grid: std::collections::HashMap<(i32, i32), Vec<u32>>,
 }
 
+/// Segmento elemental de vía: extremos `[lat, lon]` y Vmax (km/h).
+type Seg = ([f64; 2], [f64; 2], f64);
+
 fn cell_key(lat: f64, lon: f64) -> (i32, i32) {
     ((lat / CELL).floor() as i32, (lon / CELL).floor() as i32)
+}
+
+/// Celda de la rejilla de un segmento (la de su punto medio).
+fn seg_cell(s: &Seg) -> (i32, i32) {
+    cell_key((s.0[0] + s.1[0]) / 2.0, (s.0[1] + s.1[1]) / 2.0)
 }
 
 /// Distancia (m) punto→segmento en un marco local equirectangular, y punto proyectado.
@@ -295,19 +303,36 @@ fn pt_seg_dist_m(lat: f64, lon: f64, a: [f64; 2], b: [f64; 2], coslat: f64) -> (
 const OSM_SPEED_FLOOR_KMH: f64 = 30.0;
 
 impl AdifNet {
-    /// Carga las velocidades de vía preferentes: primero OSM/OpenRailwayMap (mejor calidad y sin la
-    /// alta velocidad que contamina la CVM), y si no, la CVM de ADIF. `None` si no hay ninguna.
+    /// Carga las velocidades de vía: OSM/OpenRailwayMap donde lo hay (mejor calidad y sin la alta
+    /// velocidad que contamina la CVM) y la CVM de ADIF SOLO en las celdas de la rejilla sin ningún
+    /// dato OSM. El extracto OSM se descargó para Cataluña: el tramo aragonés de la R15 (Quinto –
+    /// Caspe – Nonaspe) y la variante de Vandellòs de la R16 se quedaban sin Vmax de vía, y
+    /// `engine::fill_zone_gaps` les estiraba la única zona conocida (una LTV de 30 km/h de 250 m →
+    /// 12 km a 30 km/h entre Quinto y La Zaida) o les ponía la velocidad por defecto (100 km/h, por
+    /// debajo de la media que exige el horario de la R16 entre Ulldecona y L'Aldea). `None` si no hay
+    /// ninguna de las dos fuentes.
     pub fn load_default() -> Option<AdifNet> {
-        AdifNet::load(Path::new("processed/adif/osm_speed.json"))
-            .or_else(|| AdifNet::load(Path::new("processed/adif/rfig_speed.json")))
+        let osm = AdifNet::load_segs(Path::new("processed/adif/osm_speed.json"));
+        let cvm = AdifNet::load_segs(Path::new("processed/adif/rfig_speed.json"));
+        let segs = match (osm, cvm) {
+            (Some(mut o), Some(c)) => {
+                let con_osm: std::collections::HashSet<(i32, i32)> = o.iter().map(seg_cell).collect();
+                o.extend(c.into_iter().filter(|s| !con_osm.contains(&seg_cell(s))));
+                o
+            }
+            (Some(s), None) | (None, Some(s)) => s,
+            (None, None) => return None,
+        };
+        Some(AdifNet::from_segs(segs))
     }
 
-    /// Carga el JSON procesado. Devuelve `None` si falta o está corrupto (→ fallback).
-    pub fn load(path: &Path) -> Option<AdifNet> {
+    /// Segmentos elementales `(a, b, km/h)` de un JSON de velocidades (`None` si falta, está corrupto
+    /// o vacío → fallback).
+    fn load_segs(path: &Path) -> Option<Vec<Seg>> {
         let txt = std::fs::read_to_string(path).ok()?;
         let v: serde_json::Value = serde_json::from_str(&txt).ok()?;
         let arr = v.as_array()?;
-        let mut segs: Vec<([f64; 2], [f64; 2], f64)> = Vec::new();
+        let mut segs: Vec<Seg> = Vec::new();
         for f in arr {
             let mut sp = f.get("speed_kmh").and_then(|x| x.as_f64()).unwrap_or(0.0);
             if sp <= 0.0 {
@@ -336,12 +361,15 @@ impl AdifNet {
         if segs.is_empty() {
             return None;
         }
+        Some(segs)
+    }
+
+    fn from_segs(segs: Vec<Seg>) -> AdifNet {
         let mut grid: std::collections::HashMap<(i32, i32), Vec<u32>> = std::collections::HashMap::new();
-        for (i, (a, b, _)) in segs.iter().enumerate() {
-            let (mlat, mlon) = ((a[0] + b[0]) / 2.0, (a[1] + b[1]) / 2.0);
-            grid.entry(cell_key(mlat, mlon)).or_default().push(i as u32);
+        for (i, s) in segs.iter().enumerate() {
+            grid.entry(seg_cell(s)).or_default().push(i as u32);
         }
-        Some(AdifNet { segs, grid })
+        AdifNet { segs, grid }
     }
 
     pub fn n_segments(&self) -> usize {

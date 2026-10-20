@@ -230,6 +230,12 @@ async function cargarRed() {
   // Estaciones.
   stationLayer.clearLayers();
   for (const s of S.stationById.values()) {
+    // Apartadero de cruce de vía única (sin viajeros): punto hueco, sin panel de estación.
+    if (s.passing_loop) {
+      L.circleMarker([s.lat, s.lon], { radius: 2.5, color: "#8a8d96", weight: 1.5, fillOpacity: 0 })
+        .bindTooltip(`${s.name} · ${s.tracks} vías · ${s.lines.join(",")}`).addTo(stationLayer);
+      continue;
+    }
     if (s.junction) continue;   // bifurcación fuera de estación (aguja): no es una parada
     const kv = s.tracks >= 4;
     const m = L.circleMarker([s.lat, s.lon], { radius: kv ? 5 : 3, color: "#fff", weight: 1, fillColor: kv ? "#830065" : "#26272d", fillOpacity: .95 });
@@ -781,12 +787,12 @@ function bearing(a, b) {
 // velocidad de cada tren muestreadas en el tiempo). Así "lo que ves = lo que se simula en masa":
 // los trenes aceleran/frenan de verdad (Vmax de vía + LTV + física del material). Si el trace no
 // carga (binario antiguo), se cae al motor JS de bloques (`paso`).
-async function cargarTrace(seed, selQ) {
+async function cargarTrace(seed, selQ, url) {
   S.traceSeed = seed || 0;
   // Selección de plantillas del MODO VISUAL (`&sel=…`, independiente de /numeros). Se guarda para
   // que "lanzar incidencia ahora" re-simule exactamente el mismo día (mismas incidencias rodadas).
   S.traceSel = selQ || "";
-  const tr = await (await fetch("/api/game/trace?seed=" + S.traceSeed + S.traceSel)).json();
+  const tr = await (await fetch(url || "/api/game/trace?seed=" + S.traceSeed + S.traceSel)).json();
   if (tr && tr.error) throw new Error(tr.error);
   if (!tr || !tr.trains) throw new Error("trace vacío");
   tr.byId = new Map();
@@ -803,7 +809,7 @@ async function cargarTrace(seed, selQ) {
   // Rótulo de la jornada: el motor DERIVA el inicio de la 1ª salida por horario (no un 05:00 fijo),
   // así que reflejamos el rango real del trace en el subtítulo del reloj.
   const sub = document.querySelector(".clock-sub");
-  if (sub) sub.textContent = `Jornada · ${hhmm(tr.start)} → ${hhmm(tr.end)}`;
+  if (sub) sub.textContent = tr.real ? `Día real ${tr.real.day} · ${hhmm(tr.start)} → ${hhmm(tr.end)}` : `Jornada · ${hhmm(tr.start)} → ${hhmm(tr.end)}`;
   // Llegadas tarde a estación (registro de CTC + contador de minutos de retraso). Reinicia el
   // contador: el bucle de reproducción lo va sumando conforme el reloj pasa por cada llegada.
   S.arrivals = tr.arrivals || []; S.arrPtr = 0; S.kpi = 0;
@@ -979,6 +985,18 @@ function pasoRepro(dtGame) {
     if (t.reproHeld) { t.esperaDesde = a; t.esperaHacia = b; t.esperaMotivo = "semaforo"; }
     else { t.esperaDesde = t.esperaHacia = t.esperaMotivo = null; }
   }
+  // Día REAL: nadie obedece a nuestros semáforos. Un tren parado en plena vía se marca «bloque
+  // ocupado» solo si el bloque siguiente (según los trenes reales) tiene un tren; si no, la causa es
+  // externa a nuestro modelo (señal real, avería, viajeros…).
+  if (tr.real) for (const t of S.trains) {
+    if (!t.reproHeld || !t.repro) continue;
+    const { a, b, frac } = t.repro, m = subM(a, b), sb = Math.max(0, Math.min(Math.floor(frac * m), m - 1));
+    let rk = null;
+    if (sb + 1 < m) rk = sbRes(a, b, sb + 1);
+    else { const i = t.pts.findIndex((p) => p.id === b); if (i >= 0 && i + 1 < t.pts.length) rk = sbRes(b, t.pts[i + 1].id, 0); }
+    const delante = rk && (S.occ.get(rk) || []).some((id) => id !== t.id);
+    t.esperaMotivo = delante ? "semaforo" : "externo";
+  }
   S.activos = activos;
   S.delayNow = liveDelay; // retraso VIVO de la red (min sumados de los trenes en marcha) → alerta
   // Contador de minutos de retraso: suma la tardanza (min) de cada llegada tarde a estación cuyo
@@ -1073,7 +1091,7 @@ function trenesEsperandoEn(a, b) {
   }
   return out;
 }
-const MOTIVO_LABEL = { semaforo: "bloque ocupado", interno: "semáforo interno", corredor: "corredor lleno", destino: "vía destino ocupada", catenaria: "catenaria (velocidad reducida)" };
+const MOTIVO_LABEL = { externo: "sin tren delante (causa externa o señal real)", semaforo: "bloque ocupado", interno: "semáforo interno", corredor: "corredor lleno", destino: "vía destino ocupada", catenaria: "catenaria (velocidad reducida)" };
 
 // Crea el MARKER de una señal de bloque (triángulo) que guarda el sub-bloque `sb` (de `m`) del
 // sentido from→to, y lo registra en `S.sigMarkers`. El COLOR (aspecto) NO se fija aquí: lo
@@ -1496,7 +1514,7 @@ function finDelDia() {
     <div class="stat"><span>Horarios</span><b>${escHtml(r.sched)}</b></div>`;
   $("finDia").hidden = false;
   $("finReopen").hidden = true;
-  guardarEnHistorial(r);
+  if (!(S.trace && S.trace.real)) guardarEnHistorial(r);
 }
 // Resultados finales de la jornada (fin del día + historial de runs).
 function resumenJornada() {
@@ -1510,8 +1528,12 @@ function resumenJornada() {
   }
   return {
     t: Date.now(), seed: S.traceSeed || 0,
-    sched: S.cadId ? "Cadenciado · " + (S.cadName || "") : tr.free_run ? "Sin horarios (modo caos)" : "GTFS",
-    vvar: (/[?&]vvar=([\d.]+)/.exec(S.traceSel || "") || [])[1] || null,
+    sched: tr.real ? "Día real " + tr.real.day : S.cadId ? "Cadenciado · " + (S.cadName || "") : tr.free_run ? "Sin horarios (modo caos)" : "GTFS",
+    vvar: +((/[?&]vvar=([\d.]+)/.exec(S.traceSel || "") || [])[1] || 0) || null,
+    // Configuración EXACTA de la run (plantillas, variabilidad, mercancías, horario) para poder repetirla
+    // (comparación con un día real en /datos). El cadenciado se guarda por su id local: el del servidor
+    // caduca al reiniciarlo y se regenera desde el navegador.
+    q: S.traceSel || "", cad_local: S.cadLocal || null,
     kpi_min: S.kpi, late_trains: new Set(S.arrivals.map((a) => a.train)).size,
     peak_live: S.delayTL ? Math.round(S.delayTL.max) : 0,
     held_min: (tr.held_total_s || 0) / 60, held_events: tr.held_total_events || 0, stuck,
@@ -1680,7 +1702,7 @@ $("finRepetir").addEventListener("click", () => location.reload());
 $("finSeguimiento").addEventListener("click", () => {
   const tr = S.trace; if (!tr || !window.DelayTrack) return;
   DelayTrack.open({ track: tr.track, analysis: tr.analysis, incidents: S.dayIncidents || [] },
-    { title: "Simulación visual · semilla " + (S.traceSeed || 0) });
+    { title: tr.real ? "Día real · " + tr.real.day : "Simulación visual · semilla " + (S.traceSeed || 0) });
 });
 
 // Cajón de incidencias del día.
@@ -1698,7 +1720,18 @@ $("schedOpts").addEventListener("change", async () => {
   }
   schedPrev = schedMode();
   $("gtfsFileWrap").hidden = schedMode() !== "import"; $("gtfsStatus").textContent = "";
+  aplicarModoReal();
 });
+// Día REAL grabado: incidencias, semilla, variabilidad de velocidad y mercancías no aplican (los trenes
+// van donde fueron): se apagan y se desactivan sus controles.
+function aplicarModoReal() {
+  const real = schedMode() === "real";
+  document.querySelectorAll(".pre-lockable").forEach((el) => {
+    el.classList.toggle("pre-locked", real);
+    el.querySelectorAll("input, select, button").forEach((i) => { i.disabled = real; });
+    const n = el.querySelector(".pre-lock-note"); if (n) n.hidden = !real;
+  });
+}
 function confirmarCaos() {
   return confirmar({
     kicker: '<span class="chaos-tag">modo caos</span> Experimento',
@@ -1781,38 +1814,37 @@ $("preStart").addEventListener("input", () => { $("preStart").dataset.touched = 
 
 // ── Variabilidad de velocidad (conducción real): interruptor + factor p (%). El motor hace circular
 // cada tren, en cada tramo entre señales, a Vmax × f con f gaussiana de media 1−p truncada a [1−2p, 1]
-// (p definido a 120 km/h; el motor lo escala con la Vmax del punto). Se guarda
-// por visor (localStorage); un enlace "Ver en simulador" de /numeros (`&vvar=`) manda en esa visita.
-const VVAR_KEY = "rod-vvar-visual";
+// (p definido a 120 km/h; el motor lo escala con la Vmax del punto). Empieza con el valor de
+// «Configuración del modelo» (activada al 2 % por defecto); un enlace "Ver en simulador" de las
+// simulaciones encadenadas (`&vvar=`) manda en esa visita.
 function vvarPct() {
   const p = parseFloat($("preVvar").value);
   return Number.isFinite(p) ? Math.min(25, Math.max(0.5, p)) : 3;
 }
-// Parámetro de query para el motor (vacío = apagado → todos a Vmax).
-function vvarQuery() { return $("preVvarOn").checked ? "&vvar=" + vvarPct() : ""; }
+// Parámetro de query para el motor (`vvar=0` = apagado → todos a Vmax; sin él mandaría el del modelo).
+function vvarQuery() { return "&vvar=" + ($("preVvarOn").checked ? vvarPct() : 0); }
 function pintarVvar() {
   const on = $("preVvarOn").checked, p = vvarPct();
   const fmt = (x) => x.toLocaleString(window.LOCALE ? LOCALE() : "es-ES", { maximumFractionDigits: 2 });
   $("preVvarRow").hidden = !on; $("preVvarHint").hidden = !on;
   if (on) $("preVvarHint").textContent = `A 120 km/h: media Vmax − ${fmt(p)} % · entre Vmax − ${fmt(2 * p)} % y Vmax. Escala con la Vmax (a 60 km/h, la mitad) y se sortea en cada tramo entre señales. Súbelo en días de lluvia.`;
 }
-function guardarVvar() {
-  try { localStorage.setItem(VVAR_KEY, JSON.stringify({ on: $("preVvarOn").checked, p: vvarPct() })); } catch (e) { /* sin storage */ }
-}
-(function iniciarVvar() {
-  try {
-    const v = JSON.parse(localStorage.getItem(VVAR_KEY));
-    if (v) { $("preVvarOn").checked = !!v.on; if (Number.isFinite(v.p)) $("preVvar").value = v.p; }
-  } catch (e) { /* sin storage */ }
+(async function iniciarVvar() {
+  $("preVvarOn").addEventListener("change", pintarVvar);
+  $("preVvar").addEventListener("input", pintarVvar);
   const q = new URLSearchParams(location.search);
   if (q.get("from") === "numeros") {
     const p = parseFloat(q.get("vvar"));
     $("preVvarOn").checked = Number.isFinite(p) && p > 0;
     if ($("preVvarOn").checked) $("preVvar").value = p;
+  } else {
+    try {
+      const c = (await (await fetch("/api/realism")).json()).current || {};
+      $("preVvarOn").checked = c.speed_var_enabled !== false;
+      if (Number.isFinite(c.speed_var_pct)) $("preVvar").value = c.speed_var_pct;
+    } catch (e) { /* sin servidor: valores del HTML */ }
   }
   pintarVvar();
-  $("preVvarOn").addEventListener("change", () => { pintarVvar(); guardarVvar(); });
-  $("preVvar").addEventListener("input", () => { pintarVvar(); guardarVvar(); });
 })();
 
 // ── Escenario de mercancías de la run (`&frt=<id>`): lista de /api/freight/scenarios, recordado por
@@ -1861,6 +1893,18 @@ $("preConfirm").addEventListener("click", async () => {
       st.textContent = "Importando " + f.name + "…";
       if (!(await ejecutarJobGtfs(() => fetch("/api/gtfs/upload", { method: "POST", body: f })))) { st.textContent = "No se pudo importar el GTFS (ver arriba)."; return; }
     }
+    // Día REAL grabado: horario GTFS (los recorridos de los trenes) + trace de posiciones reales.
+    if (mode === "real") {
+      const day = $("preRealDay").value;
+      if (!day) { st.textContent = "Aún no hay días reales grabados (ver Datos reales de Renfe)."; return; }
+      if (S.cadId) { S.cadId = null; S.cadName = ""; await cargarHorarios(); construirSemaforos(); fijarHoraInicioDefecto(); }
+      S.cadLocal = null;
+      st.textContent = "Preparando el día real (la primera vez tarda unos segundos)…";
+      if (!(await generarDiaReal(day, horaInicioSeg()))) { st.textContent = "No se pudo cargar el día real (ver Estado de la red)."; return; }
+      $("preDay").classList.add("hidden");
+      st.textContent = "";
+      return;
+    }
     // Horario cadenciado: se genera en el servidor y se recargan los horarios del visor (los ids de
     // tren del trace deben coincidir). Volver a GTFS tras uno cadenciado también recarga.
     let cad = null;
@@ -1868,6 +1912,7 @@ $("preConfirm").addEventListener("click", async () => {
       st.textContent = "Generando el horario cadenciado…";
       try { cad = await cargarCadencia(mode.slice(4)); } catch (e) { st.textContent = String(e.message || e); return; }
     }
+    S.cadLocal = cad ? mode.slice(4) : null;
     if ((cad ? cad.id : null) !== (S.cadId || null)) {
       S.cadId = cad ? cad.id : null; S.cadName = cad ? cad.name : "";
       await cargarHorarios(); construirSemaforos(); fijarHoraInicioDefecto();
@@ -1950,6 +1995,37 @@ async function generarDia(seed, selQ, startSec) {
     rodLoad(false);
   }
 }
+// Reproduce un día REAL grabado: mismo reproductor, trace hecho con las posiciones GPS de Renfe.
+async function generarDiaReal(day, startSec) {
+  rodLoad(true, "Cargando el día real", "pantografo");
+  try {
+    await cargarTrace(0, "", "/api/game/realtrace?day=" + encodeURIComponent(day));
+    if (startSec > S.trace.start) S.simT = Math.min(startSec, S.trace.end - 60);
+    pasoRepro(0);
+    pintarIncidenciasDia();
+    $("btnFinDia").disabled = false;
+    const r = S.trace.real;
+    $("netInfo").textContent = $("netInfo").textContent.replace(/ · .*$/, "") + ` · Día real ${r.day}: ${r.matched} trenes con posición GPS (los semáforos son solo visuales).`;
+    return true;
+  } catch (e) {
+    $("netInfo").textContent = "No se pudo cargar el día real: " + e;
+    return false;
+  } finally {
+    rodLoad(false);
+  }
+}
+// Días grabados para la opción «Día real grabado» (el más reciente con el día casi entero, primero).
+(async function iniciarDiasReales() {
+  const sel = $("preRealDay"); if (!sel) return;
+  try {
+    const j = await (await fetch("/api/gtfsrt/days")).json();
+    const ds = (j.days || []).filter((d) => d.polls > 0).reverse();
+    sel.innerHTML = ds.map((d) => `<option value="${d.day}">${d.day} · ${Math.round(d.coverage)} % grabado${d.verdict ? " · " + d.verdict : ""}</option>`).join("");
+    const full = ds.find((d) => d.coverage >= 50); if (full) sel.value = full.day;
+    if (!ds.length) { sel.hidden = true; $("preRealInfo").textContent = "Aún no hay días grabados: actívalo en Datos reales de Renfe."; }
+  } catch (e) { sel.hidden = true; }
+  sel.addEventListener("change", () => { const r = document.querySelector('input[name="sched"][value="real"]'); if (r) { r.checked = true; schedPrev = "real"; } });
+})();
 iniciar();
 
 // ══════════════════════════════════════════════════════════════════════════
@@ -2138,7 +2214,7 @@ iniciar();
     sel = new Set(want.filter((id) => known.has(id)));
     const lost = want.length - sel.size;
     const box = $("preFrom"); if (!box) return;
-    box.innerHTML = `Parámetros de <b>Varias runs</b>: semilla <b>${+q.get("seed") || 0}</b> · <b>${sel.size}</b> plantilla${sel.size === 1 ? "" : "s"} de incidencia. Pulsa <b>Confirmar y generar el día</b> para ver exactamente esa jornada.` +
+    box.innerHTML = `Parámetros de <b>Simulaciones encadenadas rápidas</b>: semilla <b>${+q.get("seed") || 0}</b> · <b>${sel.size}</b> plantilla${sel.size === 1 ? "" : "s"} de incidencia. Pulsa <b>Confirmar y generar el día</b> para ver exactamente esa jornada.` +
       (+q.get("vvar") > 0 ? ` Variabilidad de velocidad: <b>${+q.get("vvar")} %</b>.` : "") +
       (lost ? `<span class="warn">${lost} plantilla${lost === 1 ? " ya no existe" : "s ya no existen"} (se borraron después de la run): el día puede diferir.</span>` : "");
     box.hidden = false;
@@ -2198,6 +2274,7 @@ iniciar();
   if (launchBtn) launchBtn.onclick = async () => {
     const ti = +$("liveTpl").value, tpl = tpls[ti];
     const txt = $("liveTramo").value.trim(), st = $("liveStatus");
+    if (S.trace && S.trace.real) { st.textContent = "En un día real no se pueden lanzar incidencias: los trenes siguen sus posiciones reales."; return; }
     // El input acepta el texto visible del tramo; se resuelve a "from>to" con el mapa del datalist.
     const tramo = tramoMap.get(txt);
     if (!tpl || !tramo) { st.textContent = "Escribe/elige un tramo válido de la lista (nombre exacto)."; return; }

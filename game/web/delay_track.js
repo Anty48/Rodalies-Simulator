@@ -120,6 +120,14 @@
 .dtk-inc .imp{font-size:.78rem;color:var(--dt-mu)}
 .dtk-inc .bar{height:6px;border-radius:3px;background:var(--dt-bd);margin-top:5px;overflow:hidden}
 .dtk-inc .bar i{display:block;height:100%;border-radius:3px;background:rgb(var(--dt-inc))}
+.dtk-chips{display:flex;flex-wrap:wrap;gap:6px;margin:8px 0 6px;align-items:center}
+.dtk-chip{display:inline-flex;align-items:center;gap:6px;font:700 .76rem var(--sans,inherit);padding:4px 10px;border-radius:999px;border:1.5px solid var(--lc);background:none;color:var(--dt-tx);cursor:pointer;opacity:.45}
+.dtk-chip i{width:9px;height:9px;border-radius:50%;background:var(--lc)}
+.dtk-chip.on{opacity:1;background:color-mix(in srgb,var(--lc) 16%,transparent)}
+.dtk-mini{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:10px;margin-top:6px}
+.dtk-mini>div{border:1px solid var(--dt-bd);border-left:4px solid var(--lc);border-radius:10px;padding:8px 10px 4px;background:var(--dt-bg);min-width:0}
+.dtk-mini h4{margin:0 0 2px;font-size:.88rem;display:flex;gap:8px;align-items:baseline;flex-wrap:wrap}
+.dtk-mini h4 small{font-weight:500;color:var(--dt-mu);font-size:.74rem}
 `;
   let cssDone = false;
   function injectCss() {
@@ -130,7 +138,7 @@
     cssDone = true;
   }
 
-  const EFF = { red_one: "señal roja (1 sentido)", red_both: "señal roja (2 sentidos)", single: "vía única" };
+  const EFF = { red_one: "señal roja (1 sentido)", red_both: "señal roja (2 sentidos)", single: "vía única", aviso: "aviso publicado (día real)" };
   // Peso NOMINAL del efecto (solo desempate de gravedad cuando el impacto medido coincide): cortar
   // los dos sentidos es peor que dejar vía única, y esta peor que un rojo en un sentido.
   const EFF_W = { red_both: 3, single: 2, red_one: 1 };
@@ -226,7 +234,7 @@
         g += `<line class="${k ? "gr" : "base"}" x1="${padL}" x2="${W - padR}" y1="${y}" y2="${y}"/>`;
         g += `<text class="ax" x="${padL - 6}" y="${+y + 4}" text-anchor="end">${fmt(v, ydec)}</text>`;
       }
-      for (const t of cfg.xticks ? cfg.xticks(x0, x1) : []) {
+      for (const t of cfg.xticks ? cfg.xticks(x0, x1, iw) : []) {
         const x = X(t.x).toFixed(1);
         g += `<line class="gr" x1="${x}" x2="${x}" y1="${padT}" y2="${padT + ih}"/><text class="ax" x="${x}" y="${H - 7}" text-anchor="middle">${esc(t.label)}</text>`;
       }
@@ -299,9 +307,12 @@
     }
   }
 
-  // Ticks de hora (cada 1/2/3 h según el ancho del rango) para ejes de jornada en segundos.
-  const hourTicks = (x0, x1) => {
-    const span = (x1 - x0) / 3600, stepH = span > 12 ? 2 : span > 5 ? 1 : 0.5;
+  // Ticks de hora para ejes de jornada en segundos: el paso (½, 1, 2, 3, 4, 6 h) se elige para que
+  // quepan las etiquetas en el ANCHO del gráfico (≥ ~48 px entre ellas; en los gráficos pequeños «Por
+  // separado» se pisaban).
+  const hourTicks = (x0, x1, iw = 900) => {
+    const span = (x1 - x0) / 3600, maxTicks = Math.max(2, Math.floor(iw / 48));
+    const stepH = [0.5, 1, 2, 3, 4, 6, 12].find((h) => span / h <= maxTicks) || 12;
     const out = [];
     for (let h = Math.ceil(x0 / 3600 / stepH) * stepH; h * 3600 <= x1; h += stepH) out.push({ x: h * 3600, label: hhmm(h * 3600) });
     return out;
@@ -337,6 +348,9 @@
       };
     });
   }
+  // Huecos sin datos de un día REAL (recolector parado o feed caído): la serie vale 0 ahí. Solo se
+  // rotulan los de ≥ 20 min (dos huecos cortos seguidos pisaban sus etiquetas).
+  const gapBands = (run, shift = 0, scale = 1) => (run.gaps || []).map(([a, b]) => ({ x0: (a - shift) / scale, x1: (b - shift) / scale, fill: "rgba(128,128,128,.2)", label: b - a >= 1200 ? "sin datos" : null }));
   const incTip = (incs, meta, toAbs = (x) => x) => (x) => {
     const xa = toAbs(x), act = (incs || []).filter((i) => xa >= i.t0 && xa <= i.t1);
     return act.length ? `<div class="inc">${act.map((i) => {
@@ -389,12 +403,12 @@
       const i = Math.round((x - tr.t0) / tr.dt);
       return `<div class="row" style="color:var(--dt-mu)">Trenes en servicio<b>${num(tr.active[i] ?? NaN, 0)}</b></div>` + incTip(incs, meta)(x);
     };
-    return { xs, xfmt: timeM, xticks: hourTicks, ydec: 2, yunitShort: "min", label: "Retraso medio por tren", bands: incidentBands(incs, meta), tipExtra: tipTrains,
+    return { xs, xfmt: timeM, xticks: hourTicks, ydec: 2, yunitShort: "min", label: "Retraso medio por tren", bands: gapBands(run).concat(incidentBands(incs, meta)), tipExtra: tipTrains,
       series: [{ name: "Retraso medio", ys: tr.mean, color: "var(--dt-ac)", area: true }], ...extra };
   }
   function cfgTotal(run, meta, extra) {
     const tr = run.track, xs = tr.total.map((_, i) => tr.t0 + i * tr.dt), incs = run.incidents || [];
-    return { xs, xfmt: timeM, xticks: hourTicks, ydec: 1, yunitShort: "min", label: "Retraso acumulado de la red", bands: incidentBands(incs, meta), tipExtra: incTip(incs, meta),
+    return { xs, xfmt: timeM, xticks: hourTicks, ydec: 1, yunitShort: "min", label: "Retraso acumulado de la red", bands: gapBands(run).concat(incidentBands(incs, meta)), tipExtra: incTip(incs, meta),
       series: [{ name: "Retraso acumulado", ys: tr.total, color: "var(--dt-ac)", area: true }], ...extra };
   }
   function cfgOverview(run, meta, peaks, serie, extra) {
@@ -474,7 +488,7 @@
     const iM = servicePeak(tr, tr.mean).i, iT = servicePeak(tr, tr.total).i;
     const avg = (a) => a.reduce((s, v) => s + v, 0) / a.length;
     body.innerHTML = `
-      <div class="dtk-legend"><span><i class="dtk-sw band" style="background:rgba(var(--dt-inc),.12)"></i>Incidencia</span><span><i class="dtk-sw band" style="background:rgba(var(--dt-inc),.4);border-top:3px solid rgb(var(--dt-inc))"></i>Incidencia grave (#n = puesto por gravedad${nBig ? "" : "; hoy ninguna"})</span><span>Pasa el cursor por el gráfico para leer cada minuto</span></div>
+      <div class="dtk-legend"><span><i class="dtk-sw band" style="background:rgba(var(--dt-inc),.12)"></i>Incidencia</span><span><i class="dtk-sw band" style="background:rgba(var(--dt-inc),.4);border-top:3px solid rgb(var(--dt-inc))"></i>Incidencia grave (#n = puesto por gravedad${nBig ? "" : "; hoy ninguna"})</span>${run.gaps && run.gaps.length ? `<span><i class="dtk-sw band" style="background:rgba(128,128,128,.35)"></i>Sin datos (recolector parado o feed caído)</span>` : ""}<span>Pasa el cursor por el gráfico para leer cada minuto</span></div>
       <section class="dtk-card"><h3>Retraso medio por tren en servicio</h3>
         <p class="dtk-note">Σ retrasos vivos ÷ trenes circulando en ese minuto (los que aún esperan su hora en cabecera no cuentan).</p>
         <div class="dtk-kpis"><span>Pico en horas de servicio ${num(tr.mean[iM], 2, "min")} a las ${timeM(xs[iM])}</span><span>Media del día ${num(avg(tr.mean), 2, "min")}</span></div>
@@ -483,12 +497,18 @@
         <p class="dtk-note">Suma de los retrasos vivos de todos los trenes en cada minuto: ${M("<mi>D</mi><mo stretchy='false'>(</mo><mi>t</mi><mo stretchy='false'>)</mo><mo>=</mo><mi>N</mi><mo stretchy='false'>(</mo><mi>t</mi><mo stretchy='false'>)</mo><mo>·</mo><mover><mi>d</mi><mo>‾</mo></mover><mo stretchy='false'>(</mo><mi>t</mi><mo stretchy='false'>)</mo>")} (trenes × retraso medio). Sube y baja: no es un contador.</p>
         <div class="dtk-kpis"><span>Pico en horas de servicio ${num(tr.total[iT], 0, "min")} a las ${timeM(xs[iT])}</span><span>Media del día ${num(avg(tr.total), 1, "min")}</span></div>
         <div id="dtkTotal"></div></section>
+      ${tr.lines && tr.lines.length ? `<section class="dtk-card"><h3>Por línea</h3>
+        <p class="dtk-note">El mismo seguimiento separado por línea, con su color. <b>Superpuestas</b> pone las líneas elegidas en un solo gráfico para ver cómo se contagian (cuándo sube una y después otra); <b>Por separado</b> da un gráfico por línea, todos a la misma escala. Pulsa una línea para mostrarla u ocultarla.</p>
+        <div class="dtk-modes"><div class="dtk-seg" id="dtkLSerie"><button data-s="mean">Retraso medio por tren</button><button data-s="total">Retraso acumulado</button></div>
+          <div class="dtk-seg" id="dtkLMode"><button data-m="over">Superpuestas</button><button data-m="sep">Por separado</button></div></div>
+        <div class="dtk-chips" id="dtkLChips"></div><div id="dtkLines"></div></section>` : ""}
       <div class="dtk-actions"><button class="dtk-btn" id="dtkAn" data-m="auto"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><path d="M6 15c3-9 5-9 7-4s4 4 8-6"/></svg>Analizar automáticamente</button>
         <button class="dtk-btn alt" id="dtkMan" data-m="manual"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4v16"/><path d="M20 4v16"/><path d="M4 12h16"/><path d="m8 9-4 3 4 3"/><path d="m16 9 4 3-4 3"/></svg>Seleccionar tramo a mano</button></div>
       <section id="dtkAnBox" hidden></section>`;
     const $ = (id) => body.querySelector("#" + id);
     lineChart($("dtkMean"), cfgMean(run, meta));
     lineChart($("dtkTotal"), cfgTotal(run, meta));
+    if (tr.lines && tr.lines.length) renderLines(body, run, meta);
     const goAnalysis = (ev) => {
       const box = $("dtkAnBox");
       box.hidden = false;
@@ -498,6 +518,52 @@
     };
     $("dtkAn").onclick = goAnalysis;
     $("dtkMan").onclick = goAnalysis;
+  }
+
+  // ---- Por línea: superpuestas o por separado ----------------------------------------------
+  // Solo las líneas que llegan a tener retraso (las demás solo ensucian el gráfico); de entrada se
+  // muestran las 6 con más retraso acumulado en el día.
+  const lineSum = (l) => l.total.reduce((s, v) => s + v, 0);
+  function cfgLines(run, meta, lines, serie, extra) {
+    const tr = run.track, xs = tr.mean.map((_, i) => tr.t0 + i * tr.dt), incs = run.incidents || [];
+    return { xs, xfmt: timeM, xticks: hourTicks, ydec: serie === "mean" ? 2 : 1, yunitShort: "min",
+      label: serie === "mean" ? "Retraso medio por tren de cada línea" : "Retraso acumulado de cada línea",
+      bands: gapBands(run).concat(incidentBands(incs, meta)), tipExtra: incTip(incs, meta),
+      series: lines.map((l) => ({ name: l.line, ys: l[serie], color: l.color, width: 1.8 })), ...extra };
+  }
+  function renderLines(body, run, meta) {
+    const tr = run.track, $ = (id) => body.querySelector("#" + id);
+    const all = tr.lines.filter((l) => lineSum(l) > 0).sort((a, b) => lineSum(b) - lineSum(a));
+    if (!all.length) { $("dtkLines").innerHTML = `<div class="dtk-empty">Ninguna línea ha tenido retraso en esta jornada.</div>`; return; }
+    run._lineSel = run._lineSel || new Set(all.slice(0, 6).map((l) => l.line));
+    let serie = run._lineSerie || "mean", mode = run._lineMode || "over";
+    const draw = () => {
+      run._lineSerie = serie; run._lineMode = mode;
+      body.querySelectorAll("#dtkLSerie button").forEach((b) => b.classList.toggle("on", b.dataset.s === serie));
+      body.querySelectorAll("#dtkLMode button").forEach((b) => b.classList.toggle("on", b.dataset.m === mode));
+      $("dtkLChips").innerHTML = all.map((l) => `<button class="dtk-chip${run._lineSel.has(l.line) ? " on" : ""}" data-l="${esc(l.line)}" style="--lc:${l.color}" data-no-i18n><i></i>${esc(l.line)}</button>`).join("")
+        + `<button class="dtk-lnk" data-all="1">Todas</button><button class="dtk-lnk" data-all="0" style="margin-left:0">Ninguna</button>`;
+      $("dtkLChips").querySelectorAll("[data-l]").forEach((b) => (b.onclick = () => { const k = b.dataset.l; run._lineSel.has(k) ? run._lineSel.delete(k) : run._lineSel.add(k); draw(); }));
+      $("dtkLChips").querySelectorAll("[data-all]").forEach((b) => (b.onclick = () => { run._lineSel = new Set(b.dataset.all === "1" ? all.map((l) => l.line) : []); draw(); }));
+      const sel = all.filter((l) => run._lineSel.has(l.line)), box = $("dtkLines");
+      if (!sel.length) { box.innerHTML = `<div class="dtk-empty">Elige al menos una línea.</div>`; return; }
+      if (mode === "over") { box.innerHTML = ""; lineChart(box, cfgLines(run, meta, sel, serie, { height: 280 })); return; }
+      // Por separado: misma escala vertical en todos (una línea invisible al máximo común).
+      const ymax = Math.max(...sel.map((l) => Math.max(...l[serie])));
+      box.innerHTML = `<div class="dtk-mini">${sel.map((l, k) => {
+        const pk = servicePeak({ active: l.active }, l[serie]);
+        return `<div style="--lc:${l.color}"><h4><span data-no-i18n>${esc(l.line)}</span> <small><span>pico</span> ${num(pk.v ?? 0, serie === "mean" ? 2 : 0, "min")} <span>a las</span> ${timeM(tr.t0 + pk.i * tr.dt)} · <span>media del día</span> ${num(l[serie].reduce((s, v) => s + v, 0) / l[serie].length, serie === "mean" ? 2 : 1, "min")}</small></h4><div id="dtkL${k}"></div></div>`;
+      }).join("")}</div>`;
+      // En los gráficos pequeños, bandas de incidencia y huecos SIN rótulo (se pisarían con el eje).
+      sel.forEach((l, k) => {
+        const cfg = cfgLines(run, meta, [l], serie, { height: 150, hlines: [{ y: ymax, color: "transparent" }] });
+        cfg.bands = cfg.bands.map((b) => ({ ...b, label: null }));
+        lineChart($("dtkL" + k), cfg);
+      });
+    };
+    body.querySelectorAll("#dtkLSerie button").forEach((b) => (b.onclick = () => { serie = b.dataset.s; draw(); }));
+    body.querySelectorAll("#dtkLMode button").forEach((b) => (b.onclick = () => { mode = b.dataset.m; draw(); }));
+    draw();
   }
 
   // ---- Análisis de recuperación -----------------------------------------------------------
@@ -672,8 +738,8 @@
       <ul class="dtk-inc">${list.map((i, k) => {
         const d = Math.round((i.t1 - i.t0) / 60), big = (meta.get(i) || {}).big;
         return `<li${big ? ' style="border-color:rgb(var(--dt-inc))"' : ""}><div class="rk">${M(`<mo>#</mo><mn>${k + 1}</mn>`)}</div>
-          <div><div class="mt">${esc(i.motivo)}<small>${EFF[i.effect] || esc(i.effect)} · ${num(d, 0, "min")}</small></div>
-          <div class="wh">${esc(i.from_name || i.from)} → ${esc(i.to_name || i.to)} · ${timeM(i.t0)}–${timeM(i.t1)}</div></div>
+          <div><div class="mt"><span data-no-i18n>${esc(i.motivo)}</span><small>${EFF[i.effect] || esc(i.effect)} · ${num(d, 0, "min")}</small></div>
+          <div class="wh" data-no-i18n>${esc(i.from_name || i.from)} → ${esc(i.to_name || i.to)} · ${timeM(i.t0)}–${timeM(i.t1)}</div></div>
           <div class="imp">Impacto en la red ${signed(i.impact_min || 0, 1, "min")}<div class="bar"><i style="width:${(100 * (i.impact_min || 0) / max).toFixed(1)}%"></i></div></div></li>`;
       }).join("")}</ul>`;
   }
@@ -798,6 +864,11 @@
           csvNum(f.area, 1), csvNum(p.area_data, 1), csvNum(100 * (f.area - p.area_data) / Math.max(1e-9, p.area_data), 3), csvNum(p.area_excess, 1)]);
       }
       files.push({ name: "analisis_picos.csv", data: csv(rows) });
+      if (tr.lines && tr.lines.length) {
+        const ls = tr.lines;
+        files.push({ name: "serie_por_linea.csv", data: csv([["hora", "t_s"].concat(...ls.map((l) => [l.line + "_retraso_medio_min", l.line + "_retraso_acumulado_min", l.line + "_trenes"]))]
+          .concat(tr.mean.map((_, i) => { const x = tr.t0 + i * tr.dt; return [hhmm(x), x].concat(...ls.map((l) => [csvNum(l.mean[i], 2), csvNum(l.total[i], 2), l.active[i]])); }))) });
+      }
       files.push({ name: "incidencias_por_gravedad.csv", data: csv([["puesto", "grave", "motivo", "efecto", "desde", "hasta", "inicio", "fin", "duracion_min", "impacto_red_min"]]
         .concat(byGravity(incs).map((i, k) => [k + 1, (meta.get(i) || {}).big ? "sí" : "", csvTxt(i.motivo), csvTxt(EFF[i.effect] || i.effect), csvTxt(i.from_name || i.from), csvTxt(i.to_name || i.to), hhmm(i.t0), hhmm(i.t1), Math.round((i.t1 - i.t0) / 60), csvNum(i.impact_min || 0, 2)]))) });
       files.push({ name: "run.json", data: enc.encode(JSON.stringify(run)) });
@@ -805,6 +876,7 @@
         `Seguimiento de retrasos · ${opts.title || ""}`,
         "",
         "serie_por_minuto.csv       retraso medio por tren en servicio y retraso acumulado de la red (Σ retrasos vivos) cada minuto.",
+        "serie_por_linea.csv        lo mismo separado por línea (retraso medio, acumulado y trenes en servicio de cada línea).",
         "analisis_picos.csv         una fila por pico y modelo. Parámetros: exponencial y = p1 + p2·e^(−t/p3) (p3 = τ = 1/k);",
         "                           parábola y = p1·t² + p2·t + p3; lineal y = p1·t + p2 (t en min desde el pico).",
         "                           Tiempo hasta estabilidad: cuando al modelo le queda el 5 % de su bajada (exp: τ·ln20 ≈ 3τ).",
@@ -829,5 +901,6 @@
     }
   }
 
-  window.DelayTrack = { open, openIncidents, servicePeak };
+  // `lineChart`, `hourTicks` y `timeM` se exportan para la comparación simulación ↔ realidad de /datos.
+  window.DelayTrack = { open, openIncidents, servicePeak, lineChart, hourTicks, timeM, injectCss };
 })();

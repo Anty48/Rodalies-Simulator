@@ -198,6 +198,7 @@ async fn handle(mut stream: TcpStream, state: Arc<ServerState>) -> std::io::Resu
         "/api/simulate" => ("200 OK", "application/json", simulate_json(&state, query).into_bytes()),
         // Trace de la jornada (posición/velocidad por tren) para el REPRODUCTOR visual.
         "/api/game/trace" => ("200 OK", "application/json", trace_json(&state, query).into_bytes()),
+        "/api/game/realtrace" => ("200 OK", "application/json", real_trace_json(&state, day_param(query)).into_bytes()),
         "/api/gtfs/update" => ("200 OK", "application/json", start_gtfs_update(&state).into_bytes()),
         "/api/gtfs/status" => {
             let j = state.gtfs_job.lock().unwrap().clone();
@@ -253,6 +254,8 @@ async fn handle(mut stream: TcpStream, state: Arc<ServerState>) -> std::io::Resu
         "/api/gtfsrt/stop" if is_post => ("200 OK", "application/json", gtfsrt_stop().into_bytes()),
         "/api/gtfsrt/days" => ("200 OK", "application/json", gtfsrt_days().into_bytes()),
         "/api/gtfsrt/analyze" if is_post => ("200 OK", "application/json", gtfsrt_analyze(day_param(query)).into_bytes()),
+        "/api/gtfsrt/track" if is_post => ("200 OK", "application/json", gtfsrt_track_json(&state, day_param(query)).into_bytes()),
+        "/api/compare/day" => ("200 OK", "application/json", compare_day_json(&state, query).into_bytes()),
         // Incidencias publicadas (RSS de la Generalitat + avisos de Renfe) asociadas a cada día.
         "/api/incidents" => ("200 OK", "application/json", incidents_list(day_param(query)).into_bytes()),
         "/api/incidents/capture" if is_post => ("200 OK", "application/json", incidents_capture().into_bytes()),
@@ -506,10 +509,17 @@ fn active_templates(q: &HashMap<String, String>) -> Vec<crate::engine::IncidentT
         .collect()
 }
 
-/// Variabilidad de velocidad de la run: `vvar=<p en %>` (p. ej. `vvar=3`). Ausente o ≤ 0 = apagada
-/// (todos a Vmax). Se acota a `SPEED_VAR_MAX` en el motor. Lo comparten el modo visual y /numeros.
+/// Variabilidad de velocidad de la run: `vvar=<p en %>` (p. ej. `vvar=3`); `vvar=0` = apagada (todos a
+/// Vmax); sin parámetro, la del modelo. Se acota a `SPEED_VAR_MAX` en el motor.
 fn speed_var_param(q: &HashMap<String, String>) -> Option<f64> {
-    q.get("vvar").and_then(|s| s.parse::<f64>().ok()).filter(|p| p.is_finite() && *p > 0.0).map(|p| p / 100.0)
+    match q.get("vvar") {
+        Some(s) => s.parse::<f64>().ok().filter(|p| p.is_finite() && *p > 0.0).map(|p| p / 100.0),
+        // Sin parámetro: la de «Configuración del modelo» (activada al 2 % por defecto).
+        None => {
+            let rc = crate::realism::RealismCfg::load();
+            rc.speed_var_enabled.then_some(rc.speed_var_pct / 100.0)
+        }
+    }
 }
 
 /// Modo SIN HORARIOS (`free=1`, solo el visual): los trenes conservan solo la salida de cabecera.
@@ -684,31 +694,8 @@ fn simulate_json(state: &ServerState, query: &str) -> String {
         Err(e) => return serde_json::json!({ "error": e }).to_string(),
     };
     let m = eng.run();
-    let hm = |s: f64| {
-        let t = s.max(0.0) as u32;
-        format!("{:02}:{:02}", t / 3600, (t % 3600) / 60)
-    };
-    let incidents: Vec<_> = eng
-        .incidents()
-        .iter()
-        .map(|i| {
-            serde_json::json!({
-                "motivo": i.motivo,
-                "effect": effect_str(i.effect),
-                "from": i.from,
-                "to": i.to,
-                // Nombres de estación legibles + horas HH:MM (para el log de /numeros: dónde y cuándo).
-                "from_name": net_guard.stop_name(&i.from),
-                "to_name": net_guard.stop_name(&i.to),
-                "t0": i.t0,
-                "t1": i.t1,
-                "t0_hm": hm(i.t0),
-                "t1_hm": hm(i.t1),
-                "impact_min": crate::recovery::incident_impact_min(eng.timeline(), i.t0, i.t1),
-            })
-        })
-        .collect();
-    let (track, analysis) = delay_track_json(&eng);
+    let incidents = sim_incidents_json(&net_guard, &eng);
+    let (track, analysis) = delay_track_json(&net_guard, &eng);
     serde_json::json!({
         "seed": seed,
         "speed_var_pct": cfg.speed_var.map(|p| p * 100.0),
@@ -749,15 +736,69 @@ fn recovery_fit_json(body: &[u8]) -> String {
     }
 }
 
+/// Incidencias de una jornada ya corrida (tirada + manuales) con nombres de estación, horas HH:MM y su
+/// impacto medido sobre el retraso acumulado de la red (gravedad real).
+fn sim_incidents_json(net: &Network, eng: &crate::engine::Engine) -> Vec<serde_json::Value> {
+    let hm = |s: f64| {
+        let t = s.max(0.0) as u32;
+        format!("{:02}:{:02}", t / 3600, (t % 3600) / 60)
+    };
+    eng.incidents()
+        .iter()
+        .map(|i| {
+            serde_json::json!({
+                "motivo": i.motivo,
+                "effect": effect_str(i.effect),
+                "from": i.from,
+                "to": i.to,
+                "from_name": net.stop_name(&i.from),
+                "to_name": net.stop_name(&i.to),
+                "t0": i.t0,
+                "t1": i.t1,
+                "t0_hm": hm(i.t0),
+                "t1_hm": hm(i.t1),
+                "impact_min": crate::recovery::incident_impact_min(eng.timeline(), i.t0, i.t1),
+            })
+        })
+        .collect()
+}
+
+/// Ranking de los tramos que más tiempo han retenido trenes ante su señal de entrada (solo si la run
+/// los registró: visual o comparación).
+fn hotspots_json(net: &Network, eng: &crate::engine::Engine) -> Vec<serde_json::Value> {
+    eng.hold_ranking(HOTSPOTS_TOP)
+        .into_iter()
+        .map(|h| {
+            serde_json::json!({
+                "from": h.from,
+                "to": h.to,
+                "from_name": net.stop_name(&h.from),
+                "to_name": net.stop_name(&h.to),
+                "held_s": h.held_s.round(),
+                "events": h.events,
+                "max_s": h.max_s.round(),
+                "lines": h.lines.iter().map(|(l, s)| serde_json::json!([l, s.round()])).collect::<Vec<_>>(),
+            })
+        })
+        .collect()
+}
+
 /// Seguimiento de retrasos de una jornada ya corrida: series por minuto (retraso medio por tren y
 /// acumulado de la red) + análisis de recuperación de los picos de cada serie (recovery.rs).
-fn delay_track_json(eng: &crate::engine::Engine) -> (serde_json::Value, serde_json::Value) {
+fn delay_track_json(net: &Network, eng: &crate::engine::Engine) -> (serde_json::Value, serde_json::Value) {
     let tr = crate::recovery::delay_track(eng.timeline(), eng.timeline_active());
+    // Por línea (mismo eje temporal), con su color oficial: vista «Por línea» del seguimiento.
+    let lines: Vec<_> = eng
+        .line_timelines()
+        .map(|(l, tot, act)| crate::recovery::line_track(l, crate::game::line_color(net, l), tot, act))
+        .collect();
+    let mut tr = serde_json::to_value(&tr).unwrap_or_default();
+    tr["lines"] = serde_json::to_value(&lines).unwrap_or_default();
     // Se ajusta el retraso MEDIO; el acumulado (= N·medio) se contrasta por integrales en cada pico.
     let analysis = serde_json::json!({
         "mean": crate::recovery::analyze_track(eng.timeline(), eng.timeline_active()),
     });
-    (serde_json::to_value(&tr).unwrap_or_default(), analysis)
+    (tr, analysis)
 }
 
 /// Cuántos tramos guarda el ranking de los más problemáticos de una run visual.
@@ -810,24 +851,9 @@ fn trace_json(state: &ServerState, query: &str) -> String {
             })
         })
         .collect();
-    let (track, analysis) = delay_track_json(&eng);
-    // Ranking de los tramos que más tiempo han retenido trenes (solo el visual lo mide).
-    let hotspots: Vec<_> = eng
-        .hold_ranking(HOTSPOTS_TOP)
-        .into_iter()
-        .map(|h| {
-            serde_json::json!({
-                "from": h.from,
-                "to": h.to,
-                "from_name": net_guard.stop_name(&h.from),
-                "to_name": net_guard.stop_name(&h.to),
-                "held_s": h.held_s.round(),
-                "events": h.events,
-                "max_s": h.max_s.round(),
-                "lines": h.lines.iter().map(|(l, s)| serde_json::json!([l, s.round()])).collect::<Vec<_>>(),
-            })
-        })
-        .collect();
+    let (track, analysis) = delay_track_json(&net_guard, &eng);
+    // Ranking de los tramos que más tiempo han retenido trenes.
+    let hotspots = hotspots_json(&net_guard, &eng);
     let mut v = serde_json::to_value(&trace).unwrap_or_else(|_| serde_json::json!({}));
     if let Some(obj) = v.as_object_mut() {
         obj.insert("hotspots".into(), serde_json::json!(hotspots));
@@ -1345,6 +1371,146 @@ fn gtfsrt_analyze(day: Option<String>) -> String {
             "delays_by_line": o["delays_by_line"],
             "canceled_by_line": o["canceled_by_line"],
         },
+    })
+    .to_string()
+}
+
+/// Un día REAL analizado con las herramientas de la simulación: el script reduce el GTFS-RT grabado
+/// (`scripts/gtfsrt_track.py`, con caché) y `realday` lo convierte en una run del motor + estadísticas.
+/// Devuelve también el `RealDay` para la comparación.
+fn real_day_bundle(state: &ServerState, day: &str) -> Result<(serde_json::Value, crate::realday::RealDay), String> {
+    py_script(&["scripts/gtfsrt_track.py", "--day", day])?;
+    let rd = crate::realday::load(day)?;
+    let net = state.net.read().unwrap();
+    let mut run = rd.run_json(&net);
+    // Avisos de incidencia publicados ese día: marca en el gráfico en su hora de publicación (la
+    // duración real no se publica: ventana nominal de 5 min) y su impacto medido sobre la serie real.
+    let tl = rd.timeline();
+    let notices: Vec<_> = rd
+        .notices
+        .iter()
+        .map(|n| {
+            let (t0, t1) = (n.t, n.t + 300.0);
+            let txt: String = n.text.chars().take(110).collect();
+            serde_json::json!({
+                "motivo": txt,
+                "effect": "aviso",
+                "from_name": if n.source == "gencat" { "Aviso Gencat" } else { "Aviso Renfe" },
+                "to_name": n.lines.join(", "),
+                "t0": t0,
+                "t1": t1,
+                "impact_min": crate::recovery::incident_impact_min(&tl, t0, t1),
+            })
+        })
+        .collect();
+    run["incidents"] = serde_json::json!(notices);
+    let stats = crate::realday::day_stats(&net, &rd.arrivals(), Some(&rd.canceled));
+    let v = serde_json::json!({
+        "day": rd.day,
+        "polls": rd.polls,
+        "trips": rd.trips.len(),
+        "run": run,
+        "stats": stats,
+    });
+    Ok((v, rd))
+}
+
+/// `GET /api/game/realtrace?day=D` — un día REAL para el simulador visual: trace con el formato del
+/// motor hecho con las posiciones GPS grabadas (`realtrace`), más el seguimiento de retrasos y los
+/// avisos del día. Los trenes siguen los datos reales; los semáforos del visor son solo indicativos.
+fn real_trace_json(state: &ServerState, day: Option<String>) -> String {
+    let err = |e: String| serde_json::json!({ "error": e }).to_string();
+    let Some(d) = day else { return err("Falta el día (day=AAAA-MM-DD).".into()) };
+    let (real, _rd) = match real_day_bundle(state, &d) {
+        Ok(x) => x,
+        Err(e) => return err(format!("Datos reales del {d}: {e}")),
+    };
+    let net = state.net.read().unwrap();
+    let gts = crate::game::build_schedule(&net, false, None);
+    let rt = match crate::realtrace::build(&net, &d, &gts) {
+        Ok(t) => t,
+        Err(e) => return err(e),
+    };
+    let mut v = serde_json::to_value(&rt.trace).unwrap_or_else(|_| serde_json::json!({}));
+    if let Some(obj) = v.as_object_mut() {
+        obj.insert("real".into(), serde_json::json!({
+            "day": d, "matched": rt.matched, "unmatched": rt.unmatched,
+            "polls": real["polls"], "gaps": real["run"]["gaps"],
+        }));
+        obj.insert("track".into(), real["run"]["track"].clone());
+        obj.insert("analysis".into(), real["run"]["analysis"].clone());
+        obj.insert("incidents".into(), real["run"]["incidents"].clone());
+        obj.insert("hotspots".into(), serde_json::json!([]));
+        obj.insert("held_total_s".into(), serde_json::json!(0));
+        obj.insert("held_total_events".into(), serde_json::json!(0));
+        obj.insert("free_run".into(), serde_json::json!(false));
+        obj.insert("freight".into(), serde_json::json!([]));
+        obj.insert("freight_errors".into(), serde_json::json!([]));
+    }
+    v.to_string()
+}
+
+/// `POST /api/gtfsrt/track?day=D` — un día real con el seguimiento de retrasos, análisis de picos, por
+/// línea, puntualidad y tramos donde más retraso se genera.
+fn gtfsrt_track_json(state: &ServerState, day: Option<String>) -> String {
+    let Some(d) = day else { return serde_json::json!({ "ok": false, "error": "Falta el día (day=AAAA-MM-DD)." }).to_string() };
+    match real_day_bundle(state, &d) {
+        Ok((mut v, _)) => {
+            v["ok"] = serde_json::json!(true);
+            v.to_string()
+        }
+        Err(e) => serde_json::json!({ "ok": false, "error": e }).to_string(),
+    }
+}
+
+/// `GET /api/compare/day?day=D&seed=N&…` — simula una jornada con la configuración pedida (los mismos
+/// parámetros que el visor: `sel`, `vvar`, `frt`, `cad`, `free`) y la compara con el día real D en todo
+/// lo que se puede medir igual a los dos lados: seguimiento de retrasos (red y por línea), análisis de
+/// picos, puntualidad y retrasos por línea, tramos donde se genera el retraso y tren a tren.
+fn compare_day_json(state: &ServerState, query: &str) -> String {
+    let err = |e: String| serde_json::json!({ "ok": false, "error": e }).to_string();
+    let Some(day) = day_param(query) else { return err("Falta el día (day=AAAA-MM-DD).".into()) };
+    let (real, rd) = match real_day_bundle(state, &day) {
+        Ok(x) => x,
+        Err(e) => return err(format!("Datos reales del {day}: {e}")),
+    };
+    let q = parse_query(query);
+    let seed: u64 = q.get("seed").and_then(|s| s.parse().ok()).unwrap_or(1);
+    let templates: Vec<crate::engine::IncidentTemplate> = active_templates(&q);
+    let net_guard = state.net.read().unwrap();
+    let ltv_guard = state.ltv.read().unwrap();
+    let mut cfg = crate::engine::EngineCfg::day();
+    cfg.seed = seed;
+    cfg.speed_var = speed_var_param(&q);
+    cfg.free_run = free_run_param(&q);
+    let (mut eng, frt) = match engine_for(state, &net_guard, &q, cfg, ltv_guard.as_deref(), &templates) {
+        Ok(e) => e,
+        Err(e) => return err(e),
+    };
+    eng.record_holds();
+    let m = eng.run();
+    let (track, analysis) = delay_track_json(&net_guard, &eng);
+    let sim_arr = crate::realday::from_sim(&eng.stop_records());
+    let sim_stats = crate::realday::day_stats(&net_guard, &sim_arr, None);
+    let matching = crate::realday::match_trains(&sim_arr, &rd.arrivals());
+    let (held_s, held_n) = eng.hold_total();
+    serde_json::json!({
+        "ok": true,
+        "day": day,
+        "seed": seed,
+        "sim": {
+            "run": { "track": track, "analysis": analysis, "incidents": sim_incidents_json(&net_guard, &eng) },
+            "stats": sim_stats,
+            "hotspots": hotspots_json(&net_guard, &eng),
+            "held_total_min": (held_s / 60.0).round(),
+            "held_total_events": held_n,
+            "n_trains": m.n_trains,
+            "max_delay_min": m.max_delay_s / 60.0,
+            "freight": frt.list.len(),
+            "realism": eng.realism_stats(),
+        },
+        "real": real,
+        "matching": matching,
     })
     .to_string()
 }
