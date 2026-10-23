@@ -62,7 +62,8 @@ Realism data (all optional; the engine falls back to estimates if missing):
   ⇒ cannot be billed). `scripts/cloudflare/` = a Durable Object (SQLite) with an alarm every 20 s, ONE
   poll per alarm (free plan = 10 ms CPU per invocation; the feed is chunked and only Rodalies
   entities are parsed, ~2 ms), gzip rows, 45-day retention (<1 GB DO storage), cron every 10 min re-arms
-  the alarm; API with a Bearer token (`/status`, `/data?since=`, `/alerts`, `/incidents?since=`, `/start`, `/stop`). The
+  the alarm; free SQLite = 5 M rows read/day — exceeding it blocks the DB (and recording) until 00:00 UTC,
+  so `/status` reads per-day totals from the small `days` table, never a scan of `polls`; API with a Bearer token (`/status`, `/data?since=`, `/alerts`, `/incidents?since=`, `/start`, `/stop`). The
   simulator deploys it with `npx wrangler@4` (login via browser, `deploy`, `secret put TOKEN`) from a
   work copy in `report/cloudflare-worker/`; config/token in `report/cloudflare.json` (gitignored); HTTP via
   `curl`. Test locally without an account: copy `scripts/cloudflare` somewhere, `.dev.vars` with

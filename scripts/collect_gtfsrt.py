@@ -30,6 +30,7 @@ import socket
 import sys
 import threading
 import time
+import urllib.error
 import urllib.request
 from datetime import datetime
 
@@ -71,6 +72,10 @@ def cloud_recording():
                                      headers={"Authorization": "Bearer " + cfg["token"], "User-Agent": "rod4lia-sim/1.0"})
         with urllib.request.urlopen(req, timeout=15) as r:
             st = json.loads(r.read().decode("utf-8"))
+    except urllib.error.HTTPError:
+        # La nube RESPONDE pero con error (p. ej. el 22/10/2026 agotó el límite diario de filas de su
+        # base de datos y dejó de grabar hasta las 00:00 UTC): no está grabando → relevo del PC.
+        return False
     except Exception:
         return None
     run = st.get("running") or {}

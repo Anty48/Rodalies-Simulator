@@ -10,6 +10,10 @@
 //     las entidades de Rodalies; ~2 ms medidos).
 //   · 100.000 peticiones/día → ~4.300 alarmas + 144 cron + las consultas del simulador.
 //   · 1 GB de SQLite en Durable Objects → ~1,8 KB por lectura comprimida y se borran los >45 días.
+//   · 5 millones de FILAS LEÍDAS/día (y 100.000 escritas) en SQLite: al pasarse, TODA la base falla hasta
+//     las 00:00 UTC y la grabación se corta (pasó el 22/10/2026 a las 18:52: /status contaba los sondeos
+//     con un recorrido de toda la tabla, ~10.000 filas por consulta). Por eso los totales por día viven en
+//     la tabla `days` (se actualiza al guardar) y /status solo lee unas decenas de filas.
 //   Sin tarjeta en la cuenta no hay forma de que Cloudflare cobre: al pasarse, simplemente falla.
 //
 // API (cabecera Authorization: Bearer <TOKEN>):
@@ -106,6 +110,14 @@ export class Collector {
     this.sql.exec(`CREATE TABLE IF NOT EXISTS alerts (seen INTEGER, id TEXT, text TEXT, data TEXT, PRIMARY KEY (id, text))`);
     this.sql.exec(`CREATE TABLE IF NOT EXISTS meta (k TEXT PRIMARY KEY, v TEXT)`);
     this.sql.exec(`CREATE TABLE IF NOT EXISTS incidents (key TEXT PRIMARY KEY, pub INTEGER, day TEXT, seen INTEGER, data TEXT)`);
+    // Totales por día (sondeos y bytes): evita recorrer `polls` en cada /status (límite de filas leídas).
+    this.sql.exec(`CREATE TABLE IF NOT EXISTS days (day TEXT PRIMARY KEY, n INTEGER, b INTEGER)`);
+    if (!this.get("days_ok", false)) {
+      // Una sola vez (tras actualizar el Worker): rellenar desde los sondeos que ya hay.
+      this.sql.exec(`DELETE FROM days`);
+      this.sql.exec(`INSERT INTO days (day, n, b) SELECT day, COUNT(*), SUM(LENGTH(data)) FROM polls GROUP BY day`);
+      this.set("days_ok", true);
+    }
   }
 
   get(k, d = null) {
@@ -144,7 +156,9 @@ export class Collector {
         const day = madridDay.format(new Date(rec.t * 1000));
         const before = this.sql.exec(`SELECT 1 FROM polls WHERE t = ?`, rec.t).toArray().length;
         if (!before) {
-          this.sql.exec(`INSERT OR IGNORE INTO polls (t, day, data) VALUES (?, ?, ?)`, rec.t, day, await gzip(JSON.stringify(rec)));
+          const data = await gzip(JSON.stringify(rec));
+          this.sql.exec(`INSERT OR IGNORE INTO polls (t, day, data) VALUES (?, ?, ?)`, rec.t, day, data);
+          this.sql.exec(`INSERT INTO days (day, n, b) VALUES (?, 1, ?) ON CONFLICT(day) DO UPDATE SET n = n + 1, b = b + excluded.b`, day, data.length);
           this.set("polls", (this.get("polls", 0) || 0) + 1);
           this.set("saved_at", Date.now() / 1000);
           this.set("last", rec.t);
@@ -152,7 +166,9 @@ export class Collector {
       }
       if (n % 180 === 0) {
         // Una vez cada hora: borrar lo de más de 45 días (mantiene la base muy por debajo de 1 GB).
-        this.sql.exec(`DELETE FROM polls WHERE t < ?`, Math.floor(Date.now() / 1000) - RETENTION_DAYS * 86400);
+        const cut = Math.floor(Date.now() / 1000) - RETENTION_DAYS * 86400;
+        this.sql.exec(`DELETE FROM polls WHERE t < ?`, cut);
+        this.sql.exec(`DELETE FROM days WHERE day < ?`, madridDay.format(new Date(cut * 1000)));
         this.sql.exec(`DELETE FROM alerts WHERE seen < ?`, Math.floor(Date.now() / 1000) - RETENTION_DAYS * 86400);
         this.sql.exec(`DELETE FROM incidents WHERE seen < ?`, Math.floor(Date.now() / 1000) - RETENTION_DAYS * 86400);
       }
@@ -206,7 +222,7 @@ export class Collector {
     const path = url.pathname;
     if (path === "/status") {
       await this.ensureAlarm();
-      const days = this.sql.exec(`SELECT day, COUNT(*) AS n, SUM(LENGTH(data)) AS b FROM polls GROUP BY day ORDER BY day`).toArray();
+      const days = this.sql.exec(`SELECT day, n, b FROM days ORDER BY day`).toArray();
       const enabled = this.get("enabled", true);
       return Response.json({
         enabled,
